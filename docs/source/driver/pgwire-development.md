@@ -81,3 +81,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-09: Added immutable PostgreSQL and conservative Redshift capability
   profiles. PostgreSQL vendor identity now comes from the composed profile without
   changing its public value.
+- 2026-09-09: Published the development branch to `vahid110/arrow-adbc`, retained
+  Apache as the `upstream` remote, enabled GitHub Actions, and added a focused C++
+  integration workflow backed by PostgreSQL 18.

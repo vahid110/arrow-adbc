@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire PostgreSQL
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - "c/**"
+      - ".github/workflows/pgwire-postgresql.yml"
+
+concurrency:
+  group: pgwire-postgresql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cpp-postgresql:
+    name: C++ / PostgreSQL 18
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      ADBC_POSTGRESQL_TEST_URI: postgresql://localhost:5432/postgres?user=postgres&password=password
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libpq-dev ninja-build pkg-config
+
+      - name: Configure
+        run: >-
+          cmake -S c -B build/pgwire-ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DADBC_BUILD_TESTS=ON
+          -DADBC_DRIVER_POSTGRESQL=ON
+          -DADBC_DRIVER_MANAGER=OFF
+          -DADBC_DRIVER_SQLITE=OFF
+          -DADBC_DRIVER_FLIGHTSQL=OFF
+          -DADBC_USE_ASAN=OFF
+          -DADBC_USE_UBSAN=OFF
+
+      - name: Build PostgreSQL tests
+        run: >-
+          cmake --build build/pgwire-ci
+          --target adbc-driver-postgresql-test adbc-driver-postgresql-copy-test
+          --parallel 4
+
+      - name: Run PostgreSQL tests
+        run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
