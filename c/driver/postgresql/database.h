@@ -26,6 +26,7 @@
 #include <libpq-fe.h>
 
 #include "driver/framework/status.h"
+#include "driver/pgwire/backend.h"
 #include "postgres_type.h"
 
 namespace adbcpq {
@@ -64,7 +65,7 @@ class PostgresDatabase {
 
   Status InitVersions(PGconn* conn);
   Status RebuildTypeResolver(PGconn* conn);
-  std::string_view VendorName() { return "PostgreSQL"; }
+  std::string_view VendorName() { return backend_profile_.name; }
   const std::array<int, 3>& VendorVersion() { return postgres_server_version_; }
   bool use_copy() const { return use_copy_; }
 
@@ -72,6 +73,8 @@ class PostgresDatabase {
   int32_t open_connections_;
   std::string uri_;
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
+  adbc::driver::pgwire::BackendProfile backend_profile_ =
+      adbc::driver::pgwire::BackendProfile::PostgreSQL();
   std::array<int, 3> postgres_server_version_{};
   bool use_copy_ = true;
 };

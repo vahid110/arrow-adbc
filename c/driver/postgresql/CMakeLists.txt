@@ -83,6 +83,7 @@ if(ADBC_BUILD_TESTS)
                 SOURCES
                 error.cc
                 error_test.cc
+                ../pgwire/backend_test.cc
                 ../pgwire/libpq_raii_test.cc
                 postgres_type_test.cc
                 postgresql_test.cc
