@@ -78,3 +78,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-09: Migrated `PqResultHelper` to the reusable result handle. Both
   PostgreSQL test binaries compile; the focused error, ownership, and type suite
   passes 9/9 tests.
+- 2026-09-09: Added immutable PostgreSQL and conservative Redshift capability
+  profiles. PostgreSQL vendor identity now comes from the composed profile without
+  changing its public value.
