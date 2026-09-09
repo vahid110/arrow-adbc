@@ -84,3 +84,5 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-09: Published the development branch to `vahid110/arrow-adbc`, retained
   Apache as the `upstream` remote, enabled GitHub Actions, and added a focused C++
   integration workflow backed by PostgreSQL 18.
+- 2026-09-09: GitHub Actions run `34384221476` built both PostgreSQL test binaries
+  and passed the complete `driver-postgresql` CTest label against PostgreSQL 18.
