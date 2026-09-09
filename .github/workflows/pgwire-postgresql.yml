@@ -61,7 +61,12 @@ jobs:
           persist-credentials: false
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libpq-dev ninja-build pkg-config
+        run: |
+          # The hosted image carries browser repositories that are unrelated to this
+          # build and occasionally publish out-of-sync metadata.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes libpq-dev ninja-build pkg-config
 
       - name: Configure
         run: >-
