@@ -32,8 +32,6 @@
 
 namespace adbcpq {
 
-PqResultHelper::~PqResultHelper() { ClearResult(); }
-
 Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) const {
   // TODO: make stmtName a unique identifier?
   PGresult* result =
@@ -57,10 +55,10 @@ Status PqResultHelper::Prepare(const std::vector<Oid>& param_oids) const {
 
 Status PqResultHelper::DescribePrepared() {
   ClearResult();
-  result_ = PQdescribePrepared(conn_, /*stmtName=*/"");
-  if (PQresultStatus(result_) != PGRES_COMMAND_OK) {
+  result_.reset(PQdescribePrepared(conn_, /*stmtName=*/""));
+  if (PQresultStatus(result_.get()) != PGRES_COMMAND_OK) {
     Status status = MakeStatus(
-        result_, "[libpq] Failed to describe prepared statement: {}\nQuery was: {}",
+        result_.get(), "[libpq] Failed to describe prepared statement: {}\nQuery was: {}",
         PQerrorMessage(conn_), query_.c_str());
     ClearResult();
     return status;
@@ -73,7 +71,7 @@ Status PqResultHelper::Execute(const std::vector<std::string>& params,
                                PostgresType* param_types) {
   if (params.size() == 0 && param_types == nullptr && output_format_ == Format::kText) {
     ClearResult();
-    result_ = PQexec(conn_, query_.c_str());
+    result_.reset(PQexec(conn_, query_.c_str()));
   } else {
     std::vector<const char*> param_values;
     std::vector<int> param_lengths;
@@ -96,15 +94,16 @@ Status PqResultHelper::Execute(const std::vector<std::string>& params,
     }
 
     ClearResult();
-    result_ = PQexecParams(conn_, query_.c_str(), static_cast<int>(param_values.size()),
-                           param_oids_ptr, param_values.data(), param_lengths.data(),
-                           param_formats.data(), static_cast<int>(output_format_));
+    result_.reset(PQexecParams(conn_, query_.c_str(),
+                               static_cast<int>(param_values.size()), param_oids_ptr,
+                               param_values.data(), param_lengths.data(),
+                               param_formats.data(), static_cast<int>(output_format_)));
   }
 
-  ExecStatusType status = PQresultStatus(result_);
+  ExecStatusType status = PQresultStatus(result_.get());
   if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK) {
-    return MakeStatus(result_, "[libpq] Failed to execute query '{}': {}", query_.c_str(),
-                      PQerrorMessage(conn_));
+    return MakeStatus(result_.get(), "[libpq] Failed to execute query '{}': {}",
+                      query_.c_str(), PQerrorMessage(conn_));
   }
 
   return Status::Ok();
@@ -118,14 +117,14 @@ Status PqResultHelper::ExecuteCopy() {
 
   std::string copy_query = "COPY (" + query_ + ") TO STDOUT (FORMAT binary)";
   ClearResult();
-  result_ = PQexecParams(conn_, copy_query.c_str(), /*nParams=*/0,
-                         /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
-                         /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
-                         static_cast<int>(Format::kBinary));
+  result_.reset(PQexecParams(conn_, copy_query.c_str(), /*nParams=*/0,
+                             /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
+                             /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
+                             static_cast<int>(Format::kBinary)));
 
-  if (PQresultStatus(result_) != PGRES_COPY_OUT) {
+  if (PQresultStatus(result_.get()) != PGRES_COPY_OUT) {
     Status status = MakeStatus(
-        result_,
+        result_.get(),
         "[libpq] Failed to execute query: could not begin COPY: {}\nQuery was: {}",
         PQerrorMessage(conn_), copy_query.c_str());
     ClearResult();
@@ -140,11 +139,11 @@ Status PqResultHelper::ResolveParamTypes(PostgresTypeResolver& type_resolver,
   struct ArrowError na_error;
   ArrowErrorInit(&na_error);
 
-  const int num_params = PQnparams(result_);
+  const int num_params = PQnparams(result_.get());
   PostgresType root_type(PostgresTypeId::kRecord);
 
   for (int i = 0; i < num_params; i++) {
-    const Oid pg_oid = PQparamtype(result_, i);
+    const Oid pg_oid = PQparamtype(result_.get(), i);
     PostgresType pg_type;
     if (pg_oid == 0) {
       // PostgreSQL didn't infer a type (can happen in ambiguous contexts).
@@ -170,11 +169,11 @@ Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
   struct ArrowError na_error;
   ArrowErrorInit(&na_error);
 
-  const int num_fields = PQnfields(result_);
+  const int num_fields = PQnfields(result_.get());
   PostgresType root_type(PostgresTypeId::kRecord);
 
   for (int i = 0; i < num_fields; i++) {
-    const Oid pg_oid = PQftype(result_, i);
+    const Oid pg_oid = PQftype(result_.get(), i);
     PostgresType pg_type;
     if (type_resolver.Find(pg_oid, &pg_type, &na_error) != NANOARROW_OK) {
       // We couldn't look up the OID.
@@ -183,17 +182,11 @@ Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
       pg_type = PostgresType::Unnamed(pg_oid);
     }
 
-    root_type.AppendChild(PQfname(result_, i), pg_type);
+    root_type.AppendChild(PQfname(result_.get(), i), pg_type);
   }
 
   *result_types = root_type;
   return Status::Ok();
-}
-
-PGresult* PqResultHelper::ReleaseResult() {
-  PGresult* out = result_;
-  result_ = nullptr;
-  return out;
 }
 
 int64_t PqResultHelper::AffectedRows() const {
@@ -201,7 +194,7 @@ int64_t PqResultHelper::AffectedRows() const {
     return -1;
   }
 
-  char* first = PQcmdTuples(result_);
+  char* first = PQcmdTuples(result_.get());
   char* last = first + strlen(first);
   if ((last - first) == 0) {
     return -1;
