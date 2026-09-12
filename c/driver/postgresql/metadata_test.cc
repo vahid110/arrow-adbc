@@ -30,8 +30,10 @@ TEST(MetadataQuerySetTest, TableTypesAreBackendOwned) {
   MetadataQuerySet postgresql(adbc::driver::pgwire::BackendProfile::PostgreSQL());
   MetadataQuerySet redshift(adbc::driver::pgwire::BackendProfile::Redshift());
 
-  EXPECT_EQ(postgresql.TableTypeNames().size(), 6);
-  EXPECT_EQ(postgresql.TableTypesArrayLiteral({}), R"({"r", "v", "m", "t", "f", "p"})");
+  EXPECT_EQ(postgresql.TableTypeNames(),
+            (std::vector<std::string>{"partitioned_table", "foreign_table", "toast_table",
+                                      "materialized_view", "view", "table"}));
+  EXPECT_EQ(postgresql.TableTypesArrayLiteral({}), R"({"p", "f", "t", "m", "v", "r"})");
   EXPECT_EQ(redshift.TableTypeNames(), (std::vector<std::string>{"table", "view"}));
   EXPECT_EQ(redshift.TableTypesArrayLiteral({}), R"({"r", "v"})");
   EXPECT_EQ(redshift.TableTypesArrayLiteral({"view", "foreign_table"}), R"({"v"})");

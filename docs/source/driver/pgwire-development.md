@@ -263,3 +263,7 @@ owner/repository IDs plus the development branch.
   `GetInfo` execution. Each backend profile now owns its version prefix, version
   source policy, and public driver name; Redshift consequently identifies the
   driver as `ADBC Redshift Driver` instead of inheriting PostgreSQL's name.
+- 2026-09-12: The broad GLib/Ruby integration gate exposed a PostgreSQL
+  compatibility detail not asserted by the C++ suite: `GetTableTypes` ordering.
+  Restored Apache's historical order in the PostgreSQL profile and added an exact
+  provider test while leaving Redshift's verified `table`, `view` order unchanged.
