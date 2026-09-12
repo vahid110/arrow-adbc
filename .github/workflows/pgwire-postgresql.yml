@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: PgWire PostgreSQL
+name: PgWire Drivers
 
 on:
   workflow_dispatch:
@@ -88,3 +88,84 @@ jobs:
 
       - name: Verify Redshift artifact
         run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
+
+  cpp-redshift:
+    name: C++ / Redshift Serverless
+    needs: cpp-postgresql
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AWS_REGION: eu-central-1
+      REDSHIFT_SECURITY_GROUP_ID: sg-00551344e2efb9c68
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
+
+      - name: Configure
+        run: >-
+          cmake -S c -B build/pgwire-ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DADBC_BUILD_TESTS=ON
+          -DADBC_DRIVER_POSTGRESQL=ON
+          -DADBC_DRIVER_MANAGER=OFF
+          -DADBC_DRIVER_SQLITE=OFF
+          -DADBC_DRIVER_FLIGHTSQL=OFF
+          -DADBC_USE_ASAN=OFF
+          -DADBC_USE_UBSAN=OFF
+
+      - name: Build Redshift tests
+        run: cmake --build build/pgwire-ci --target adbc-driver-postgresql-test --parallel 4
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Resolve runner address
+        id: runner-address
+        run: |
+          runner_ip="$(curl --fail --silent --show-error --retry 3 https://checkip.amazonaws.com | tr -d '[:space:]')"
+          python3 -c 'import ipaddress,sys; address=ipaddress.ip_address(sys.argv[1]); assert address.version == 4' "$runner_ip"
+          echo "::add-mask::$runner_ip"
+          echo "cidr=$runner_ip/32" >> "$GITHUB_OUTPUT"
+
+      - name: Open temporary Redshift ingress
+        id: ingress
+        env:
+          RUNNER_CIDR: ${{ steps.runner-address.outputs.cidr }}
+        run: >-
+          aws ec2 authorize-security-group-ingress
+          --group-id "$REDSHIFT_SECURITY_GROUP_ID"
+          --protocol tcp
+          --port 5439
+          --cidr "$RUNNER_CIDR"
+
+      - name: Run live Redshift tests
+        env:
+          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+        run: >-
+          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
+          --gtest_filter='RedshiftSmokeTest.*'
+
+      - name: Close temporary Redshift ingress
+        if: ${{ always() && steps.ingress.outcome == 'success' }}
+        env:
+          RUNNER_CIDR: ${{ steps.runner-address.outputs.cidr }}
+        run: >-
+          aws ec2 revoke-security-group-ingress
+          --group-id "$REDSHIFT_SECURITY_GROUP_ID"
+          --protocol tcp
+          --port 5439
+          --cidr "$RUNNER_CIDR"
