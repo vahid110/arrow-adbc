@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 namespace adbc::driver::pgwire {
@@ -47,10 +48,35 @@ struct BackendCapabilities {
   bool transactional_ddl = false;
 };
 
+struct TableTypeMapping {
+  std::string_view name;
+  std::string_view relkind;
+};
+
+inline constexpr TableTypeMapping kPostgreSQLTableTypes[] = {
+    {"table", "r"},             {"view", "v"},
+    {"materialized_view", "m"}, {"toast_table", "t"},
+    {"foreign_table", "f"},     {"partitioned_table", "p"},
+};
+
+inline constexpr TableTypeMapping kRedshiftTableTypes[] = {
+    {"table", "r"},
+    {"view", "v"},
+};
+
 struct BackendProfile {
   BackendKind kind;
   std::string_view name;
   BackendCapabilities capabilities;
+  const TableTypeMapping* table_types;
+  std::size_t table_type_count;
+
+  constexpr const TableTypeMapping* FindTableType(std::string_view type_name) const {
+    for (std::size_t i = 0; i < table_type_count; i++) {
+      if (table_types[i].name == type_name) return &table_types[i];
+    }
+    return nullptr;
+  }
 
   static constexpr BackendProfile PostgreSQL() {
     return {
@@ -64,6 +90,8 @@ struct BackendProfile {
          /*metadata_constraints=*/true,
          /*metadata_statistics=*/true,
          /*transactional_ddl=*/true},
+        kPostgreSQLTableTypes,
+        sizeof(kPostgreSQLTableTypes) / sizeof(kPostgreSQLTableTypes[0]),
     };
   }
 
@@ -79,6 +107,8 @@ struct BackendProfile {
          /*metadata_constraints=*/false,
          /*metadata_statistics=*/false,
          /*transactional_ddl=*/false},
+        kRedshiftTableTypes,
+        sizeof(kRedshiftTableTypes) / sizeof(kRedshiftTableTypes[0]),
     };
   }
 };

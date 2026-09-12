@@ -32,7 +32,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -62,10 +61,6 @@ static const uint32_t kSupportedInfoCodes[] = {
     ADBC_INFO_DRIVER_NAME,          ADBC_INFO_DRIVER_VERSION,
     ADBC_INFO_DRIVER_ARROW_VERSION, ADBC_INFO_DRIVER_ADBC_VERSION,
 };
-
-static const std::unordered_map<std::string, std::string> kPgTableTypes = {
-    {"table", "r"},       {"view", "v"},          {"materialized_view", "m"},
-    {"toast_table", "t"}, {"foreign_table", "f"}, {"partitioned_table", "p"}};
 
 static const char* kCatalogQueryAll = "SELECT datname FROM pg_catalog.pg_database";
 
@@ -177,7 +172,8 @@ static const char* kConstraintsQueryAll =
 
 class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
  public:
-  PostgresGetObjectsHelper(PGconn* conn, bool load_constraints)
+  PostgresGetObjectsHelper(
+      PGconn* conn, const adbc::driver::pgwire::BackendProfile& backend_profile)
       : current_database_(PQdb(conn)),
         all_catalogs_(conn, kCatalogQueryAll),
         some_catalogs_(conn, CatalogQuery()),
@@ -189,7 +185,8 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
         some_columns_(conn, ColumnsQuery()),
         all_constraints_(conn, kConstraintsQueryAll),
         some_constraints_(conn, ConstraintsQuery()),
-        load_constraints_(load_constraints) {}
+        backend_profile_(backend_profile),
+        load_constraints_(backend_profile.capabilities.metadata_constraints) {}
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -378,6 +375,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   PqResultHelper some_columns_;
   PqResultHelper all_constraints_;
   PqResultHelper some_constraints_;
+  const adbc::driver::pgwire::BackendProfile& backend_profile_;
   bool load_constraints_;
 
   // Iterator state for the catalogs/schema/table/column queries
@@ -429,26 +427,25 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
     int table_types_bind_len = 0;
 
     if (table_types.empty()) {
-      for (const auto& item : kPgTableTypes) {
+      for (std::size_t i = 0; i < backend_profile_.table_type_count; i++) {
+        const auto& item = backend_profile_.table_types[i];
         if (table_types_bind_len > 0) {
           table_types_bind << ", ";
         }
 
-        table_types_bind << "\"" << item.second << "\"";
+        table_types_bind << "\"" << item.relkind << "\"";
         table_types_bind_len++;
       }
     } else {
       for (auto type : table_types) {
-        const auto maybe_item = kPgTableTypes.find(std::string(type));
-        if (maybe_item == kPgTableTypes.end()) {
-          continue;
-        }
+        const auto* item = backend_profile_.FindTableType(type);
+        if (item == nullptr) continue;
 
         if (table_types_bind_len > 0) {
           table_types_bind << ", ";
         }
 
-        table_types_bind << "\"" << maybe_item->second << "\"";
+        table_types_bind << "\"" << item->relkind << "\"";
         table_types_bind_len++;
       }
     }
@@ -595,8 +592,7 @@ AdbcStatusCode PostgresConnection::GetObjects(
     struct AdbcConnection* connection, int c_depth, const char* catalog,
     const char* db_schema, const char* table_name, const char** table_type,
     const char* column_name, struct ArrowArrayStream* out, struct AdbcError* error) {
-  PostgresGetObjectsHelper helper(
-      conn_, backend_profile().capabilities.metadata_constraints);
+  PostgresGetObjectsHelper helper(conn_, backend_profile());
 
   const auto catalog_filter =
       catalog ? std::make_optional(std::string_view(catalog)) : std::nullopt;
@@ -1133,9 +1129,9 @@ AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connecti
                                                  struct ArrowArrayStream* out,
                                                  struct AdbcError* error) {
   std::vector<std::string> table_types;
-  table_types.reserve(kPgTableTypes.size());
-  for (auto const& table_type : kPgTableTypes) {
-    table_types.push_back(table_type.first);
+  table_types.reserve(backend_profile().table_type_count);
+  for (std::size_t i = 0; i < backend_profile().table_type_count; i++) {
+    table_types.emplace_back(backend_profile().table_types[i].name);
   }
 
   RAISE_STATUS(error, adbc::driver::MakeTableTypesStream(table_types, out));

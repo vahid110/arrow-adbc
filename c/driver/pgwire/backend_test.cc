@@ -47,6 +47,20 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   EXPECT_FALSE(profile.capabilities.metadata_statistics);
 }
 
+TEST(BackendProfileTest, TableTypesBelongToBackendSemantics) {
+  constexpr auto postgres = BackendProfile::PostgreSQL();
+  constexpr auto redshift = BackendProfile::Redshift();
+
+  ASSERT_NE(postgres.FindTableType("partitioned_table"), nullptr);
+  EXPECT_EQ(postgres.FindTableType("partitioned_table")->relkind, "p");
+  EXPECT_EQ(redshift.table_type_count, 2U);
+  ASSERT_NE(redshift.FindTableType("table"), nullptr);
+  EXPECT_EQ(redshift.FindTableType("table")->relkind, "r");
+  ASSERT_NE(redshift.FindTableType("view"), nullptr);
+  EXPECT_EQ(redshift.FindTableType("view")->relkind, "v");
+  EXPECT_EQ(redshift.FindTableType("partitioned_table"), nullptr);
+}
+
 TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
   constexpr auto postgres = BackendProfile::PostgreSQL();
   constexpr auto redshift = BackendProfile::Redshift();

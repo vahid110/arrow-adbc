@@ -43,9 +43,9 @@ authentication exchanges itself.
 - [ ] Construct the existing PostgreSQL driver from the reusable core and
       PostgreSQL semantics, with no intended behavior change.
 - [x] Add Redshift detection and a read/query-only profile.
-- [ ] Add the verified Redshift scalar type matrix.
-- [ ] Add Redshift `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`.
-- [ ] Add Redshift transaction coverage.
+- [x] Add the verified Redshift scalar type matrix.
+- [x] Add Redshift `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`.
+- [x] Add Redshift transaction coverage.
 - [ ] Add correctness-first batched-INSERT ingestion.
 - [ ] Package distinct PostgreSQL and Redshift driver artifacts.
 
@@ -75,8 +75,10 @@ Every structural milestone must:
 
 ## Current work
 
-Establish the local build baseline, then extract libpq RAII helpers without changing
-query, metadata, type, transaction, or COPY behavior.
+Validate the Redshift read/query profile against the live Serverless workgroup,
+then use the observed catalog and result behavior to define the next small type and
+metadata seams. Keep Redshift CI manual until narrowly scoped AWS credentials can
+add and remove a single-runner `/32` security-group rule automatically.
 
 ## Progress log
 
@@ -126,3 +128,19 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: GitHub Actions runs `34686600361`, `34686724734`, and `34686810469`
   passed the complete PostgreSQL 18 suite for catalog adaptation, Redshift smoke
   test integration, and unsupported-path guards respectively.
+- 2026-09-12: Generated a dedicated Redshift admin credential and stored the
+  connection URI only as the encrypted GitHub Actions secret
+  `ADBC_REDSHIFT_TEST_URI`; no credential value is stored in the repository.
+- 2026-09-12: Restricted the Redshift security group to TCP 5439 from the current
+  development address as a `/32`. Public endpoint activation is limited by that
+  rule; broad public ingress is not permitted.
+- 2026-09-12: Enabled the public endpoint behind the restricted security group and
+  authenticated over required SSL. The live server reported Redshift
+  `1.0.436211`.
+- 2026-09-12: Expanded the opt-in live suite to five tests covering eleven core
+  scalar mappings, value decoding, `GetInfo`, Redshift-specific table types,
+  `GetObjects`, `GetTableSchema`, and explicit commit/rollback. All five tests
+  passed; their temporary table was dropped and all test connections were closed.
+- 2026-09-12: Moved table-type names and `pg_class.relkind` mappings into the
+  backend profile. PostgreSQL retains its six existing table types while Redshift
+  reports only the verified `table` and `view` types.
