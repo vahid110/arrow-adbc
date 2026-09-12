@@ -67,6 +67,8 @@ authentication exchanges itself.
 - [x] Add Redshift transaction coverage.
 - [x] Add correctness-first batched-INSERT ingestion.
 - [x] Package distinct PostgreSQL and Redshift driver artifacts.
+- [x] Keep CMake and Meson source, artifact, package, and focused-test coverage in
+      parity.
 
 ## Quality gates
 
@@ -251,3 +253,9 @@ owner/repository IDs plus the development branch.
   runner ingress rule was revoked successfully; an independent AWS console check
   confirmed that only the pre-existing default-group and development `/32` rules
   remained.
+- 2026-09-12: Restored CMake/Meson parity after the core extraction. Meson now
+  compiles the extracted metadata and type-discovery components into both drivers,
+  produces and installs distinct PostgreSQL and Redshift shared libraries, public
+  headers, and pkg-config files, and runs the common seam tests plus the Redshift
+  artifact-entry-point test. A fresh Meson build completed all 84 targets; the 14
+  database-independent core tests and the Redshift artifact test passed.

@@ -17,20 +17,35 @@
 
 libpq_dep = dependency('libpq')
 
+pgwire_driver_sources = [
+    'connection.cc',
+    'error.cc',
+    'database.cc',
+    'metadata.cc',
+    'postgresql.cc',
+    'result_helper.cc',
+    'result_reader.cc',
+    'statement.cc',
+    'type_discovery.cc',
+]
+
 adbc_postgres_driver_lib = library(
     'adbc_driver_postgresql',
-    sources: [
-        'connection.cc',
-        'error.cc',
-        'database.cc',
-        'postgresql.cc',
-        'result_helper.cc',
-        'result_reader.cc',
-        'statement.cc',
-    ],
+    sources: pgwire_driver_sources,
     include_directories: [include_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_framework_lib],
     dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
+    install: true,
+)
+
+adbc_redshift_driver_lib = library(
+    'adbc_driver_redshift',
+    sources: pgwire_driver_sources,
+    include_directories: [include_dir, c_dir, safe_math_dir],
+    link_with: [adbc_common_lib, adbc_framework_lib],
+    dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
+    cpp_args: ['-DADBC_PGWIRE_DEFAULT_REDSHIFT'],
+    install: true,
 )
 
 pkg.generate(
@@ -41,18 +56,35 @@ pkg.generate(
     filebase: 'adbc-driver-postgresql',
 )
 
+pkg.generate(
+    name: 'Apache Arrow Database Connectivity (ADBC) Redshift driver',
+    description: 'The ADBC Redshift driver provides an ADBC driver for Amazon Redshift.',
+    url: 'https://github.com/apache/arrow-adbc',
+    libraries: [adbc_redshift_driver_lib],
+    filebase: 'adbc-driver-redshift',
+)
+
 adbc_driver_postgresql_dep = declare_dependency(
     include_directories: include_dir,
     link_with: adbc_postgres_driver_lib,
+)
+
+adbc_driver_redshift_dep = declare_dependency(
+    include_directories: include_dir,
+    link_with: adbc_redshift_driver_lib,
 )
 
 postgres_tests = {
     'driver-postgresql': {
         'src_name': 'driver_postgresql',
         'sources': [
+            '../pgwire/backend_test.cc',
+            '../pgwire/libpq_raii_test.cc',
+            'metadata_test.cc',
             'postgres_type_test.cc',
             'postgresql_test.cc',
             'redshift_test.cc',
+            'type_discovery_test.cc',
         ],
     },
     'driver-postgresql-copy': {
@@ -79,3 +111,12 @@ foreach name, conf : postgres_tests
     )
     test('adbc-' + name, exc)
 endforeach
+
+redshift_exc = executable(
+    'adbc-driver-redshift-test',
+    sources: ['../pgwire/redshift_driver_test.cc'],
+    include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
+    link_with: [adbc_common_lib, adbc_redshift_driver_lib],
+    dependencies: [libpq_dep, gtest_main_dep, fmt_dep],
+)
+test('adbc-driver-redshift', redshift_exc)
