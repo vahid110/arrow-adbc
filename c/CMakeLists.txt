@@ -79,6 +79,7 @@ endif()
 
 if(ADBC_DRIVER_POSTGRESQL)
   install(FILES "${REPOSITORY_ROOT}/c/include/arrow-adbc/driver/postgresql.h"
+                "${REPOSITORY_ROOT}/c/include/arrow-adbc/driver/redshift.h"
           DESTINATION include/arrow-adbc/driver)
   add_subdirectory(driver/postgresql)
 endif()

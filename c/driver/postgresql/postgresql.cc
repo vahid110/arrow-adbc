@@ -26,6 +26,8 @@
 #include <memory>
 
 #include <arrow-adbc/adbc.h>
+#include <arrow-adbc/driver/postgresql.h>
+#include <arrow-adbc/driver/redshift.h>
 
 #include "connection.h"
 #include "database.h"
@@ -997,7 +999,11 @@ AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
 #if !defined(ADBC_NO_COMMON_ENTRYPOINTS)
 ADBC_EXPORT
 AdbcStatusCode AdbcDriverInit(int version, void* raw_driver, struct AdbcError* error) {
+#if defined(ADBC_PGWIRE_DEFAULT_REDSHIFT)
+  return AdbcDriverRedshiftInit(version, raw_driver, error);
+#else
   return AdbcDriverPostgresqlInit(version, raw_driver, error);
+#endif
 }
 #endif  // ADBC_NO_COMMON_ENTRYPOINTS
 }

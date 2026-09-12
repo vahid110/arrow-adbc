@@ -47,7 +47,7 @@ authentication exchanges itself.
 - [x] Add Redshift `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`.
 - [x] Add Redshift transaction coverage.
 - [x] Add correctness-first batched-INSERT ingestion.
-- [ ] Package distinct PostgreSQL and Redshift driver artifacts.
+- [x] Package distinct PostgreSQL and Redshift driver artifacts.
 
 ## Quality gates
 
@@ -75,10 +75,10 @@ Every structural milestone must:
 
 ## Current work
 
-Package a distinct Redshift driver artifact around its named entry point, then
-continue separating type discovery from Arrow mapping and value encoding. Keep
-Redshift CI manual until narrowly scoped AWS credentials can add and remove a
-single-runner `/32` security-group rule automatically.
+Continue separating type discovery from Arrow mapping and value encoding, then
+move backend metadata SQL behind a normalized provider. Keep Redshift CI manual
+until narrowly scoped AWS credentials can add and remove a single-runner `/32`
+security-group rule automatically.
 
 ## Progress log
 
@@ -175,3 +175,8 @@ single-runner `/32` security-group rule automatically.
   `AdbcDriverPostgresqlInit` behavior remains compatible and the new
   `AdbcDriverRedshiftInit` pins Redshift semantics, rejecting a mismatched server.
   The live Redshift connection test now runs through the named Redshift entry point.
+- 2026-09-12: Added independently installable shared and static Redshift artifacts,
+  `libadbc_driver_redshift`, whose standard `AdbcDriverInit` selects the Redshift
+  factory. Added a public Redshift entry-point header, CMake package metadata,
+  pkg-config metadata, an artifact-level test, and CI coverage. A temporary-prefix
+  install verified every library, header, and package metadata output.

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
+#include <arrow-adbc/driver/redshift.h>
 #include <gtest/gtest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow.hpp>
@@ -30,9 +31,6 @@
 #include "validation/adbc_validation_util.h"
 
 using adbc_validation::IsOkStatus;
-
-extern "C" AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
-                                                  struct AdbcError* error);
 
 namespace {
 

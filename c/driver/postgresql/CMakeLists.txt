@@ -26,15 +26,18 @@ else()
   pkg_check_modules(LIBPQ REQUIRED libpq)
 endif()
 
+set(PGWIRE_DRIVER_SOURCES
+    connection.cc
+    error.cc
+    database.cc
+    postgresql.cc
+    result_helper.cc
+    result_reader.cc
+    statement.cc)
+
 add_arrow_lib(adbc_driver_postgresql
               SOURCES
-              connection.cc
-              error.cc
-              database.cc
-              postgresql.cc
-              result_helper.cc
-              result_reader.cc
-              statement.cc
+              ${PGWIRE_DRIVER_SOURCES}
               OUTPUTS
               ADBC_LIBRARIES
               CMAKE_PACKAGE_NAME
@@ -68,13 +71,68 @@ foreach(LIB_TARGET ${ADBC_LIBRARIES})
   endif()
 endforeach()
 
+add_arrow_lib(adbc_driver_redshift
+              SOURCES
+              ${PGWIRE_DRIVER_SOURCES}
+              OUTPUTS
+              ADBC_REDSHIFT_LIBRARIES
+              CMAKE_PACKAGE_NAME
+              AdbcDriverRedshift
+              PKG_CONFIG_NAME
+              adbc-driver-redshift
+              SHARED_LINK_FLAGS
+              ${ADBC_LINK_FLAGS}
+              SHARED_LINK_LIBS
+              adbc_driver_common
+              adbc_driver_framework
+              ${LIBPQ_LINK_LIBRARIES}
+              STATIC_LINK_LIBS
+              ${LIBPQ_LINK_LIBRARIES}
+              adbc_driver_common
+              adbc_driver_framework
+              ${LIBPQ_STATIC_LIBRARIES})
+
+foreach(LIB_TARGET ${ADBC_REDSHIFT_LIBRARIES})
+  target_compile_definitions(${LIB_TARGET} PRIVATE ADBC_EXPORTING
+                                                   ADBC_PGWIRE_DEFAULT_REDSHIFT)
+  target_include_directories(${LIB_TARGET} SYSTEM
+                             PRIVATE ${REPOSITORY_ROOT}/c/
+                                     ${REPOSITORY_ROOT}/c/include/
+                                     ${LIBPQ_INCLUDE_DIRS}
+                                     ${REPOSITORY_ROOT}/c/driver
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+  )
+
+  if(NOT ADBC_DEFINE_COMMON_ENTRYPOINTS)
+    target_compile_definitions(${LIB_TARGET} PRIVATE ${ADBC_TARGET_COMPILE_DEFINITIONS})
+  endif()
+endforeach()
+
 if(ADBC_TEST_LINKAGE STREQUAL "shared")
   set(TEST_LINK_LIBS adbc_driver_postgresql_shared)
+  set(REDSHIFT_TEST_LINK_LIBS adbc_driver_redshift_shared)
 else()
   set(TEST_LINK_LIBS adbc_driver_postgresql_static)
+  set(REDSHIFT_TEST_LINK_LIBS adbc_driver_redshift_static)
 endif()
 
 if(ADBC_BUILD_TESTS)
+  add_test_case(driver_redshift_test
+                PREFIX
+                adbc
+                EXTRA_LABELS
+                driver-redshift
+                SOURCES
+                ../pgwire/redshift_driver_test.cc
+                EXTRA_LINK_LIBS
+                adbc_driver_common
+                ${REDSHIFT_TEST_LINK_LIBS})
+  target_compile_features(adbc-driver-redshift-test PRIVATE cxx_std_20)
+  target_include_directories(adbc-driver-redshift-test SYSTEM
+                             PRIVATE ${REPOSITORY_ROOT}/c/ ${REPOSITORY_ROOT}/c/include/
+                                     ${LIBPQ_INCLUDE_DIRS} ${REPOSITORY_ROOT}/c/driver)
+  adbc_configure_target(adbc-driver-redshift-test)
+
   add_test_case(driver_postgresql_test
                 PREFIX
                 adbc
