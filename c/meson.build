@@ -78,6 +78,11 @@ if get_option('flightsql').enabled()
 endif
 
 if get_option('postgresql').enabled()
+    install_headers(
+        'include/arrow-adbc/driver/postgresql.h',
+        'include/arrow-adbc/driver/redshift.h',
+        subdir: 'arrow-adbc/driver',
+    )
     subdir('driver/postgresql')
 endif
 
