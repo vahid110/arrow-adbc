@@ -1312,4 +1312,8 @@ const std::array<int, 3>& PostgresConnection::VendorVersion() {
   return database_->VendorVersion();
 }
 
+const adbc::driver::pgwire::BackendProfile& PostgresConnection::backend_profile() const {
+  return database_->backend_profile();
+}
+
 }  // namespace adbcpq

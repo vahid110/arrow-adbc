@@ -27,6 +27,7 @@
 #include <arrow-adbc/adbc.h>
 #include <libpq-fe.h>
 
+#include "driver/pgwire/backend.h"
 #include "driver/pgwire/libpq_raii.h"
 #include "postgres_type.h"
 
@@ -85,6 +86,7 @@ class PostgresConnection {
   bool use_copy() const { return use_copy_; }
   std::string_view VendorName();
   const std::array<int, 3>& VendorVersion();
+  const adbc::driver::pgwire::BackendProfile& backend_profile() const;
 
  private:
   friend class PostgresStatement;

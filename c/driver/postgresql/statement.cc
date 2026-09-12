@@ -601,9 +601,12 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
     return ExecuteBind(stream, rows_affected, error);
   }
 
-  // If we have been requested to avoid COPY or there is no output requested,
-  // execute using the PqResultArrayReader.
-  if (!stream || !use_copy()) {
+  const auto result_mode = adbc::driver::pgwire::SelectQueryResultMode(
+      connection_->backend_profile(), use_copy(), stream != nullptr);
+
+  // Text results are the portable PostgreSQL-wire path. Binary COPY is an
+  // optional backend capability and remains PostgreSQL's default fast path.
+  if (result_mode == adbc::driver::pgwire::QueryResultMode::kText) {
     PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
     reader.SetVendorName(connection_->VendorName());
     RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));

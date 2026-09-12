@@ -68,6 +68,9 @@ class PostgresDatabase {
   std::string_view VendorName() { return backend_profile_.name; }
   const std::array<int, 3>& VendorVersion() { return postgres_server_version_; }
   bool use_copy() const { return use_copy_; }
+  const adbc::driver::pgwire::BackendProfile& backend_profile() const {
+    return backend_profile_;
+  }
 
  private:
   int32_t open_connections_;

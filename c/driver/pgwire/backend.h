@@ -26,6 +26,11 @@ enum class BackendKind {
   kRedshift,
 };
 
+enum class QueryResultMode {
+  kText,
+  kBinaryCopy,
+};
+
 struct BackendCapabilities {
   bool prepared_statements = true;
   bool binary_parameters = true;
@@ -69,5 +74,14 @@ struct BackendProfile {
     };
   }
 };
+
+constexpr QueryResultMode SelectQueryResultMode(const BackendProfile& profile,
+                                                bool copy_enabled,
+                                                bool output_requested) {
+  if (output_requested && copy_enabled && profile.capabilities.binary_query_copy) {
+    return QueryResultMode::kBinaryCopy;
+  }
+  return QueryResultMode::kText;
+}
 
 }  // namespace adbc::driver::pgwire

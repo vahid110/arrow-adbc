@@ -45,5 +45,16 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   EXPECT_FALSE(profile.capabilities.metadata_statistics);
 }
 
+TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
+  constexpr auto postgres = BackendProfile::PostgreSQL();
+  constexpr auto redshift = BackendProfile::Redshift();
+
+  EXPECT_EQ(SelectQueryResultMode(postgres, true, true),
+            QueryResultMode::kBinaryCopy);
+  EXPECT_EQ(SelectQueryResultMode(postgres, false, true), QueryResultMode::kText);
+  EXPECT_EQ(SelectQueryResultMode(postgres, true, false), QueryResultMode::kText);
+  EXPECT_EQ(SelectQueryResultMode(redshift, true, true), QueryResultMode::kText);
+}
+
 }  // namespace
 }  // namespace adbc::driver::pgwire
