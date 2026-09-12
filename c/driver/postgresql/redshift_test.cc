@@ -242,6 +242,35 @@ TEST_F(RedshiftSmokeTest, RecoversAfterQueryError) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
+TEST_F(RedshiftSmokeTest, ReturnsLargerResultCompletely) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(&statement,
+                               "WITH RECURSIVE seq(n) AS ("
+                               "SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1024) "
+                               "SELECT n FROM seq ORDER BY n",
+                               &error_),
+      IsOkStatus(&error_));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 1U);
+  EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_INT32);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_EQ(reader.array->length, 1024);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), 1);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 1023), 1024);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  EXPECT_EQ(reader.array->release, nullptr);
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
 TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   constexpr std::string_view kTableName = "adbc_redshift_mvp_metadata";
   ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_metadata", &error_);
