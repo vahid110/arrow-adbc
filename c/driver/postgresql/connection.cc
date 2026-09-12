@@ -1250,6 +1250,18 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
       return ADBC_STATUS_OK;
     }
 
+    if (backend_profile().transactions.isolation_levels ==
+        adbc::driver::pgwire::IsolationLevelPolicy::kDatabaseConfigured) {
+      if (std::strcmp(value, ADBC_OPTION_ISOLATION_LEVEL_DEFAULT) == 0) {
+        return ADBC_STATUS_OK;
+      }
+      InternalAdbcSetError(
+          error,
+          "[libpq] %s configures transaction isolation at the database level",
+          std::string(VendorName()).c_str());
+      return ADBC_STATUS_NOT_IMPLEMENTED;
+    }
+
     std::string pg_level;
     if (std::strcmp(value, ADBC_OPTION_ISOLATION_LEVEL_DEFAULT) == 0) {
       pg_level = "READ COMMITTED";  // PostgreSQL default

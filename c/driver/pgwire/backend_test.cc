@@ -32,6 +32,9 @@ TEST(BackendProfileTest, PostgreSQLCapabilitiesPreserveCurrentFastPaths) {
   EXPECT_TRUE(profile.capabilities.type_catalog_has_typarray);
   EXPECT_TRUE(profile.capabilities.metadata_constraints);
   EXPECT_TRUE(profile.capabilities.metadata_statistics);
+  EXPECT_EQ(profile.transactions.isolation_levels,
+            IsolationLevelPolicy::kSessionConfigurable);
+  EXPECT_TRUE(profile.transactions.transactional_ddl);
 }
 
 TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
@@ -45,6 +48,9 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   EXPECT_FALSE(profile.capabilities.type_catalog_has_typarray);
   EXPECT_FALSE(profile.capabilities.metadata_constraints);
   EXPECT_FALSE(profile.capabilities.metadata_statistics);
+  EXPECT_EQ(profile.transactions.isolation_levels,
+            IsolationLevelPolicy::kDatabaseConfigured);
+  EXPECT_FALSE(profile.transactions.transactional_ddl);
 }
 
 TEST(BackendProfileTest, TableTypesBelongToBackendSemantics) {

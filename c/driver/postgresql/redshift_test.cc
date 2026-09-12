@@ -228,6 +228,25 @@ TEST_F(RedshiftSmokeTest, CommitsAndRollsBackExplicitTransactions) {
   ASSERT_THAT(AdbcConnectionRollback(&connection_, &error_), IsOkStatus(&error_));
 }
 
+TEST_F(RedshiftSmokeTest, RejectsSessionIsolationOverrides) {
+  EXPECT_EQ(AdbcConnectionSetOption(&connection_,
+                                    ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
+                                    ADBC_OPTION_ISOLATION_LEVEL_SERIALIZABLE, &error_),
+            ADBC_STATUS_NOT_IMPLEMENTED);
+  ASSERT_NE(error_.message, nullptr);
+  EXPECT_NE(std::string_view(error_.message).find("database level"),
+            std::string_view::npos);
+  if (error_.release != nullptr) {
+    error_.release(&error_);
+    error_ = {};
+  }
+
+  EXPECT_THAT(AdbcConnectionSetOption(&connection_,
+                                      ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
+                                      ADBC_OPTION_ISOLATION_LEVEL_DEFAULT, &error_),
+              IsOkStatus(&error_));
+}
+
 TEST_F(RedshiftSmokeTest, ExecutesBoundParameterQuery) {
   nanoarrow::UniqueSchema bind_schema;
   ArrowSchemaInit(bind_schema.get());

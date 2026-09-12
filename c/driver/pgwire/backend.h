@@ -46,7 +46,16 @@ struct BackendCapabilities {
   bool type_catalog_has_typarray = false;
   bool metadata_constraints = false;
   bool metadata_statistics = false;
-  bool transactional_ddl = false;
+};
+
+enum class IsolationLevelPolicy {
+  kSessionConfigurable,
+  kDatabaseConfigured,
+};
+
+struct TransactionSemantics {
+  IsolationLevelPolicy isolation_levels;
+  bool transactional_ddl;
 };
 
 struct TableTypeMapping {
@@ -78,6 +87,7 @@ struct BackendProfile {
   BackendKind kind;
   std::string_view name;
   BackendCapabilities capabilities;
+  TransactionSemantics transactions;
   const TableTypeMapping* table_types;
   std::size_t table_type_count;
   const TypeReceiveAlias* type_receive_aliases;
@@ -110,7 +120,8 @@ struct BackendProfile {
          /*binary_ingest_copy=*/true,
          /*type_catalog_has_typarray=*/true,
          /*metadata_constraints=*/true,
-         /*metadata_statistics=*/true,
+         /*metadata_statistics=*/true},
+        {/*isolation_levels=*/IsolationLevelPolicy::kSessionConfigurable,
          /*transactional_ddl=*/true},
         kPostgreSQLTableTypes,
         sizeof(kPostgreSQLTableTypes) / sizeof(kPostgreSQLTableTypes[0]),
@@ -129,7 +140,8 @@ struct BackendProfile {
          /*binary_ingest_copy=*/false,
          /*type_catalog_has_typarray=*/false,
          /*metadata_constraints=*/false,
-         /*metadata_statistics=*/false,
+         /*metadata_statistics=*/false},
+        {/*isolation_levels=*/IsolationLevelPolicy::kDatabaseConfigured,
          /*transactional_ddl=*/false},
         kRedshiftTableTypes,
         sizeof(kRedshiftTableTypes) / sizeof(kRedshiftTableTypes[0]),
