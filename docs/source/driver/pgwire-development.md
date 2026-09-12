@@ -42,7 +42,7 @@ authentication exchanges itself.
 - [ ] Isolate PostgreSQL transaction policy.
 - [ ] Construct the existing PostgreSQL driver from the reusable core and
       PostgreSQL semantics, with no intended behavior change.
-- [ ] Add Redshift detection and a read/query-only profile.
+- [x] Add Redshift detection and a read/query-only profile.
 - [ ] Add the verified Redshift scalar type matrix.
 - [ ] Add Redshift `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`.
 - [ ] Add Redshift transaction coverage.
@@ -109,3 +109,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Added an explicit query-result transport selector. PostgreSQL keeps
   binary COPY when enabled, while capability-limited backends such as Redshift
   select the portable text-result path.
+- 2026-09-12: Added one-time Redshift detection from `SELECT version()` and parse
+  the vendor version using the selected backend profile. Unknown PostgreSQL-wire
+  servers retain the PostgreSQL-compatible default.

@@ -75,6 +75,13 @@ struct BackendProfile {
   }
 };
 
+inline BackendProfile DetectBackendProfile(std::string_view version_string) {
+  if (version_string.find("Redshift") != std::string_view::npos) {
+    return BackendProfile::Redshift();
+  }
+  return BackendProfile::PostgreSQL();
+}
+
 constexpr QueryResultMode SelectQueryResultMode(const BackendProfile& profile,
                                                 bool copy_enabled,
                                                 bool output_requested) {

@@ -56,5 +56,19 @@ TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
   EXPECT_EQ(SelectQueryResultMode(redshift, true, true), QueryResultMode::kText);
 }
 
+TEST(BackendProfileTest, DetectsRedshiftFromServerVersion) {
+  const auto redshift = DetectBackendProfile(
+      "PostgreSQL 8.0.2 on x86_64-pc-linux-gnu, Redshift 1.0.12345");
+  EXPECT_EQ(redshift.kind, BackendKind::kRedshift);
+  EXPECT_EQ(redshift.name, "Redshift");
+}
+
+TEST(BackendProfileTest, DefaultsUnknownPgWireServersToPostgreSQLCompatibility) {
+  const auto postgres = DetectBackendProfile("PostgreSQL 18.1");
+  const auto unknown = DetectBackendProfile("compatible pgwire server");
+  EXPECT_EQ(postgres.kind, BackendKind::kPostgreSQL);
+  EXPECT_EQ(unknown.kind, BackendKind::kPostgreSQL);
+}
+
 }  // namespace
 }  // namespace adbc::driver::pgwire
