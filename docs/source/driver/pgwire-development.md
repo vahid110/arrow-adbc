@@ -123,7 +123,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       larger results, and type/metadata edge cases.
 - [ ] Keep PostgreSQL's complete integration suite and downstream client
       compatibility tests green; preserve observed public behavior and ordering.
-- [ ] Define a documented support matrix with explicit unsupported features and
+- [x] Define a documented support matrix with explicit unsupported features and
       test evidence for each claim.
 
 ### 3. Redshift-native capabilities
@@ -374,3 +374,7 @@ owner/repository IDs plus the development branch.
   on Windows x64 Debug, x64 Release, and ARM64 Release; all three vcpkg jobs
   passed. This proves installed artifact loading, not a distributable package or
   live Windows-to-Redshift behavior.
+- 2026-09-12: Locally installed the CMake build to a different prefix and built
+  the standalone client with `find_package(AdbcDriverManager)` from that
+  relocated prefix. It loaded the installed Redshift library successfully;
+  cross-platform relocation remains a release-packaging test item.
