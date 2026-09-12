@@ -111,10 +111,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 ### 1. Installable and usable driver
 
-- [ ] Publish a Redshift build/install/connection guide and explicit MVP limits.
-- [ ] Exercise the installed shared library through the ADBC driver manager from
+- [x] Publish a Redshift build/install/connection guide and explicit MVP limits.
+- [x] Exercise the installed shared library through the ADBC driver manager from
       a clean prefix, independent of the driver-linked unit test binary.
-- [ ] Add a CI smoke test for the installed artifact and its public header/package
+- [x] Add a CI smoke test for the installed artifact and its public header/package
       metadata on Linux.
 
 ### 2. Correctness and compatibility
@@ -154,7 +154,7 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift | Clean install/client smoke and release artifact |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | macOS Intel | C++ build | Clean install/client smoke and live database test |
 | macOS Apple Silicon | C++ build | Clean install/client smoke and live database test |
 | Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
@@ -162,7 +162,7 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | Debian x86-64 | Not separately tested | Dedicated container build, install, client, and database tests |
 | Linux ARM64 | Not tested | Native or cross-build, install, client, and database tests |
 
-- [ ] Add a Linux x86-64 clean-prefix installation test first.
+- [x] Add a Linux x86-64 clean-prefix installation test first.
 - [ ] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
 - [ ] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
 - [ ] Publish packages only for targets whose release qualification is green.
@@ -331,3 +331,9 @@ owner/repository IDs plus the development branch.
   compatibility detail not asserted by the C++ suite: `GetTableTypes` ordering.
   Restored Apache's historical order in the PostgreSQL profile and added an exact
   provider test while leaving Redshift's verified `table`, `view` order unchanged.
+- 2026-09-12: Completed the first production-readiness checkpoint. A standalone C
+  client compiled only against a clean installed prefix and loaded the Redshift
+  shared library through the ADBC driver manager. GitHub Actions run
+  `34709216855` verified the installed public header, pkg-config/CMake metadata,
+  and rejection of a PostgreSQL server; the full PostgreSQL 18 and nine-test live
+  Redshift suites passed, and the temporary AWS ingress rule was revoked.
