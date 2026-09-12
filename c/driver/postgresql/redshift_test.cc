@@ -16,6 +16,7 @@
 // under the License.
 
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -263,6 +264,128 @@ TEST_F(RedshiftSmokeTest, ExecutesBoundParameterQuery) {
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), 42);
 
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
+TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
+  constexpr std::string_view kTableName = "adbc_redshift_mvp_ingest";
+  ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_ingest", &error_);
+
+  nanoarrow::UniqueSchema bind_schema;
+  ArrowSchemaInit(bind_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 2),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(bind_schema->children[0], NANOARROW_TYPE_INT32),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(bind_schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(bind_schema->children[1], NANOARROW_TYPE_STRING),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(bind_schema->children[1], "label"),
+              adbc_validation::IsOkErrno());
+
+  nanoarrow::UniqueArray bind;
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t, std::string>(
+          bind_schema.get(), bind.get(), nullptr, {1, 2}, {"one", "two"})),
+      adbc_validation::IsOkErrno());
+
+  struct AdbcStatement ingest = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_),
+              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     kTableName.data(), &error_),
+              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementBind(&ingest, bind.get(), bind_schema.get(), &error_),
+              IsOkStatus(&error_));
+  int64_t rows_affected = -1;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
+              IsOkStatus(&error_));
+  EXPECT_EQ(rows_affected, 2);
+  EXPECT_THAT(AdbcStatementRelease(&ingest, &error_), IsOkStatus(&error_));
+
+  struct AdbcStatement query = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &query,
+                  "SELECT id, label FROM adbc_redshift_mvp_ingest ORDER BY id", &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<int32_t>(
+      reader.array_view->children[0], {1, 2}));
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
+      reader.array_view->children[1], {"one", "two"}));
+  EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
+
+  ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest", &error_);
+}
+
+TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
+  constexpr std::string_view kTableName = "adbc_redshift_mvp_ingest_atomic";
+  ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_ingest_atomic",
+             &error_);
+  ExecuteSql(&connection_,
+             "CREATE TABLE adbc_redshift_mvp_ingest_atomic (id INTEGER NOT NULL)",
+             &error_);
+
+  nanoarrow::UniqueSchema bind_schema;
+  ArrowSchemaInit(bind_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 1),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(bind_schema->children[0], NANOARROW_TYPE_INT32),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(bind_schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+
+  nanoarrow::UniqueArray bind;
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t>(
+          bind_schema.get(), bind.get(), nullptr,
+          std::vector<std::optional<int32_t>>{1, std::nullopt})),
+      adbc_validation::IsOkErrno());
+
+  struct AdbcStatement ingest = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_),
+              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     kTableName.data(), &error_),
+              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error_),
+              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementBind(&ingest, bind.get(), bind_schema.get(), &error_),
+              IsOkStatus(&error_));
+
+  int64_t rows_affected = -1;
+  EXPECT_NE(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(rows_affected, 0);
+  if (error_.release != nullptr) {
+    error_.release(&error_);
+    error_ = {};
+  }
+  EXPECT_THAT(AdbcStatementRelease(&ingest, &error_), IsOkStatus(&error_));
+
+  struct AdbcStatement query = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &query,
+                  "SELECT COUNT(*) FROM adbc_redshift_mvp_ingest_atomic", &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), 0);
+  EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
+
+  ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest_atomic", &error_);
 }
 
 }  // namespace

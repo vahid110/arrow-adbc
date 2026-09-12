@@ -711,8 +711,9 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
 AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
                                                 int64_t* rows_affected,
                                                 struct AdbcError* error) {
-  if (adbc::driver::pgwire::SelectBulkIngestMode(connection_->backend_profile()) ==
-      adbc::driver::pgwire::BulkIngestMode::kUnsupported) {
+  const auto bulk_mode =
+      adbc::driver::pgwire::SelectBulkIngestMode(connection_->backend_profile());
+  if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kUnsupported) {
     InternalAdbcSetError(error, "[libpq] %s bulk ingestion is not implemented",
                          std::string(connection_->VendorName()).c_str());
     return ADBC_STATUS_NOT_IMPLEMENTED;
@@ -761,6 +762,21 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
         &escaped_field_list, &copy_target_types, &has_copy_target_types, &tmp_error);
     return Status::FromAdbc(status_code, tmp_error);
   }));
+
+  if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kParameterizedInsert) {
+    std::string query = "INSERT INTO " + escaped_table + " (" + escaped_field_list +
+                        ") VALUES (";
+    for (int64_t i = 0; i < bind_stream.bind_schema->n_children; i++) {
+      if (i > 0) query += ", ";
+      query += "$" + std::to_string(i + 1);
+    }
+    query += ")";
+
+    RAISE_STATUS(error, bind_stream.ExecutePreparedRows(
+                            connection_->conn(), query, *connection_->type_resolver(),
+                            connection_->autocommit(), rows_affected));
+    return ADBC_STATUS_OK;
+  }
 
   std::string query = "COPY ";
   query += escaped_table;
