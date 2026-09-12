@@ -44,6 +44,7 @@
 #include "driver/framework/objects.h"
 #include "driver/framework/utility.h"
 #include "error.h"
+#include "metadata.h"
 #include "postgres_util.h"
 #include "result_helper.h"
 
@@ -62,131 +63,24 @@ static const uint32_t kSupportedInfoCodes[] = {
     ADBC_INFO_DRIVER_ARROW_VERSION, ADBC_INFO_DRIVER_ADBC_VERSION,
 };
 
-static const char* kCatalogQueryAll = "SELECT datname FROM pg_catalog.pg_database";
-
-// catalog_name is not a parameter here or on any other queries
-// because it will always be the currently connected database.
-static const char* kSchemaQueryAll =
-    "SELECT nspname FROM pg_catalog.pg_namespace WHERE "
-    "nspname !~ '^pg_' AND nspname <> 'information_schema'";
-
-// Parameterized on schema_name, relkind
-// Note that when binding relkind as a string it must look like {"r", "v", ...}
-// (i.e., double quotes). Binding a binary list<string> element also works.
-// Don't use pg_table_is_visible(): it is search_path-dependent and would hide tables
-// in non-current schemas even when GetObjects is called with a schema filter.
-static const char* kTablesQueryAll =
-    "SELECT c.relname, CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' "
-    "WHEN 'm' THEN 'materialized view' WHEN 't' THEN 'TOAST table' "
-    "WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table' END "
-    "AS reltype FROM pg_catalog.pg_class c "
-    "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = $1 AND c.relkind = "
-    "ANY($2)";
-
 // Parameterized on schema_name, table_name
-static const char* kColumnsQueryAll =
-    "SELECT attr.attname, attr.attnum, "
-    "pg_catalog.col_description(cls.oid, attr.attnum), "
-    "typ.typname "
-    "FROM pg_catalog.pg_attribute AS attr "
-    "INNER JOIN pg_catalog.pg_class AS cls ON attr.attrelid = cls.oid "
-    "INNER JOIN pg_catalog.pg_namespace AS nsp ON nsp.oid = cls.relnamespace "
-    "INNER JOIN pg_catalog.pg_type AS typ ON attr.atttypid = typ.oid "
-    "WHERE attr.attnum > 0 AND NOT attr.attisdropped "
-    "AND nsp.nspname LIKE $1 AND cls.relname LIKE $2";
-
-// Parameterized on schema_name, table_name
-static const char* kConstraintsQueryAll =
-    "WITH fk_unnest AS ( "
-    "    SELECT "
-    "        con.conname, "
-    "        'FOREIGN KEY' AS contype, "
-    "        conrelid, "
-    "        UNNEST(con.conkey) AS conkey, "
-    "        confrelid, "
-    "        UNNEST(con.confkey) AS confkey "
-    "    FROM pg_catalog.pg_constraint AS con "
-    "    INNER JOIN pg_catalog.pg_class AS cls ON cls.oid = conrelid "
-    "    INNER JOIN pg_catalog.pg_namespace AS nsp ON nsp.oid = cls.relnamespace "
-    "    WHERE con.contype = 'f' AND nsp.nspname = $1 "
-    "    AND cls.relname = $2 "
-    "), "
-    "fk_names AS ( "
-    "    SELECT "
-    "        fk_unnest.conname, "
-    "        fk_unnest.contype, "
-    "        fk_unnest.conkey, "
-    "        fk_unnest.confkey, "
-    "        attr.attname, "
-    "        fnsp.nspname AS fschema, "
-    "        fcls.relname AS ftable, "
-    "        fattr.attname AS fattname "
-    "    FROM fk_unnest "
-    "    INNER JOIN pg_catalog.pg_class AS cls ON cls.oid = fk_unnest.conrelid "
-    "    INNER JOIN pg_catalog.pg_class AS fcls ON fcls.oid = fk_unnest.confrelid "
-    "    INNER JOIN pg_catalog.pg_namespace AS fnsp ON fnsp.oid = fcls.relnamespace"
-    "    INNER JOIN pg_catalog.pg_attribute AS attr ON attr.attnum = "
-    "fk_unnest.conkey "
-    "        AND attr.attrelid = fk_unnest.conrelid "
-    "    LEFT JOIN pg_catalog.pg_attribute AS fattr ON fattr.attnum =  "
-    "fk_unnest.confkey "
-    "        AND fattr.attrelid = fk_unnest.confrelid "
-    "), "
-    "fkeys AS ( "
-    "    SELECT "
-    "        conname, "
-    "        contype, "
-    "        ARRAY_AGG(attname ORDER BY conkey) AS colnames, "
-    "        fschema, "
-    "        ftable, "
-    "        ARRAY_AGG(fattname ORDER BY confkey) AS fcolnames "
-    "    FROM fk_names "
-    "    GROUP BY "
-    "        conname, "
-    "        contype, "
-    "        fschema, "
-    "        ftable "
-    "), "
-    "other_constraints AS ( "
-    "    SELECT con.conname, CASE con.contype WHEN 'c' THEN 'CHECK' WHEN 'u' THEN  "
-    "    'UNIQUE' WHEN 'p' THEN 'PRIMARY KEY' END AS contype, "
-    "    ARRAY_AGG(attr.attname) AS colnames "
-    "    FROM pg_catalog.pg_constraint AS con  "
-    "    CROSS JOIN UNNEST(conkey) AS conkeys  "
-    "    INNER JOIN pg_catalog.pg_class AS cls ON cls.oid = con.conrelid  "
-    "    INNER JOIN pg_catalog.pg_namespace AS nsp ON nsp.oid = cls.relnamespace  "
-    "    INNER JOIN pg_catalog.pg_attribute AS attr ON attr.attnum = conkeys  "
-    "    AND cls.oid = attr.attrelid  "
-    "    WHERE con.contype IN ('c', 'u', 'p') AND nsp.nspname = $1 "
-    "    AND cls.relname = $2 "
-    "    GROUP BY conname, contype "
-    ") "
-    "SELECT "
-    "    conname, contype, colnames, fschema, ftable, fcolnames "
-    "FROM fkeys "
-    "UNION ALL "
-    "SELECT "
-    "    conname, contype, colnames, NULL, NULL, NULL "
-    "FROM other_constraints";
 
 class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
  public:
   PostgresGetObjectsHelper(
       PGconn* conn, const adbc::driver::pgwire::BackendProfile& backend_profile)
       : current_database_(PQdb(conn)),
-        all_catalogs_(conn, kCatalogQueryAll),
-        some_catalogs_(conn, CatalogQuery()),
-        all_schemas_(conn, kSchemaQueryAll),
-        some_schemas_(conn, SchemaQuery()),
-        all_tables_(conn, kTablesQueryAll),
-        some_tables_(conn, TablesQuery()),
-        all_columns_(conn, kColumnsQueryAll),
-        some_columns_(conn, ColumnsQuery()),
-        all_constraints_(conn, kConstraintsQueryAll),
-        some_constraints_(conn, ConstraintsQuery()),
-        backend_profile_(backend_profile),
-        load_constraints_(backend_profile.capabilities.metadata_constraints) {}
+        queries_(backend_profile),
+        all_catalogs_(conn, queries_.Catalogs(false)),
+        some_catalogs_(conn, queries_.Catalogs(true)),
+        all_schemas_(conn, queries_.Schemas(false)),
+        some_schemas_(conn, queries_.Schemas(true)),
+        all_tables_(conn, queries_.Tables(false)),
+        some_tables_(conn, queries_.Tables(true)),
+        all_columns_(conn, queries_.Columns(false)),
+        some_columns_(conn, queries_.Columns(true)),
+        all_constraints_(conn, queries_.Constraints(false)),
+        some_constraints_(conn, queries_.Constraints(true)) {}
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -247,7 +141,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   Status LoadTables(std::string_view catalog, std::string_view schema,
                     std::optional<std::string_view> table_filter,
                     const std::vector<std::string_view>& table_types) override {
-    std::string table_types_bind = TableTypesArrayLiteral(table_types);
+    std::string table_types_bind = queries_.TableTypesArrayLiteral(table_types);
 
     if (table_filter.has_value()) {
       UNWRAP_STATUS(some_tables_.Execute(
@@ -282,7 +176,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
       next_column_ = all_columns_.Row(-1);
     }
 
-    if (load_constraints_) {
+    if (queries_.LoadsConstraints()) {
       if (column_filter.has_value()) {
         UNWRAP_STATUS(some_constraints_.Execute(
             {std::string(schema), std::string(table), std::string(*column_filter)}))
@@ -363,6 +257,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
 
  private:
   std::string current_database_;
+  MetadataQuerySet queries_;
 
   // Ready-to-Execute() queries
   PqResultHelper all_catalogs_;
@@ -375,8 +270,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   PqResultHelper some_columns_;
   PqResultHelper all_constraints_;
   PqResultHelper some_constraints_;
-  const adbc::driver::pgwire::BackendProfile& backend_profile_;
-  bool load_constraints_;
 
   // Iterator state for the catalogs/schema/table/column queries
   PqResultRow next_catalog_;
@@ -391,68 +284,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   std::vector<std::string> constraint_fcolumn_names_;
   std::vector<std::string> constraint_fkey_names_;
 
-  // Queries that are slightly modified versions of the generic queries that allow
-  // the filter for that level to be passed through as a parameter. Defined here
-  // because global strings should be const char* according to cpplint and using
-  // the + operator to concatenate them is the most concise way to construct them.
-
-  // Parameterized on catalog_name
-  static std::string CatalogQuery() {
-    return std::string(kCatalogQueryAll) + " WHERE datname = $1";
-  }
-
-  // Parameterized on schema_name
-  static std::string SchemaQuery() {
-    return std::string(kSchemaQueryAll) + " AND nspname = $1";
-  }
-
-  // Parameterized on schema_name, relkind, table_name
-  static std::string TablesQuery() {
-    return std::string(kTablesQueryAll) + " AND c.relname LIKE $3";
-  }
-
-  // Parameterized on schema_name, table_name, column_name
-  static std::string ColumnsQuery() {
-    return std::string(kColumnsQueryAll) + " AND attr.attname LIKE $3";
-  }
-
-  // Parameterized on schema_name, table_name, column_name
-  static std::string ConstraintsQuery() {
-    return std::string(kConstraintsQueryAll) + " WHERE conname LIKE $3";
-  }
-
-  std::string TableTypesArrayLiteral(const std::vector<std::string_view>& table_types) {
-    std::stringstream table_types_bind;
-    table_types_bind << "{";
-    int table_types_bind_len = 0;
-
-    if (table_types.empty()) {
-      for (std::size_t i = 0; i < backend_profile_.table_type_count; i++) {
-        const auto& item = backend_profile_.table_types[i];
-        if (table_types_bind_len > 0) {
-          table_types_bind << ", ";
-        }
-
-        table_types_bind << "\"" << item.relkind << "\"";
-        table_types_bind_len++;
-      }
-    } else {
-      for (auto type : table_types) {
-        const auto* item = backend_profile_.FindTableType(type);
-        if (item == nullptr) continue;
-
-        if (table_types_bind_len > 0) {
-          table_types_bind << ", ";
-        }
-
-        table_types_bind << "\"" << item->relkind << "\"";
-        table_types_bind_len++;
-      }
-    }
-
-    table_types_bind << "}";
-    return table_types_bind.str();
-  }
 };
 
 // A notice processor that does nothing with notices. In the future we can log
@@ -1076,13 +907,8 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
     PQfreemem(quoted);
   }
 
-  std::string query =
-      "SELECT attname, atttypid "
-      "FROM pg_catalog.pg_class AS cls "
-      "INNER JOIN pg_catalog.pg_attribute AS attr ON cls.oid = attr.attrelid "
-      "INNER JOIN pg_catalog.pg_type AS typ ON attr.atttypid = typ.oid "
-      "WHERE attr.attnum >= 0 AND cls.oid = $1::regclass::oid "
-      "ORDER BY attr.attnum";
+  MetadataQuerySet metadata(backend_profile());
+  std::string query = metadata.TableSchema();
 
   std::vector<std::string> params = {table_name_str};
 
@@ -1123,11 +949,8 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
 AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connection,
                                                  struct ArrowArrayStream* out,
                                                  struct AdbcError* error) {
-  std::vector<std::string> table_types;
-  table_types.reserve(backend_profile().table_type_count);
-  for (std::size_t i = 0; i < backend_profile().table_type_count; i++) {
-    table_types.emplace_back(backend_profile().table_types[i].name);
-  }
+  MetadataQuerySet metadata(backend_profile());
+  std::vector<std::string> table_types = metadata.TableTypeNames();
 
   RAISE_STATUS(error, adbc::driver::MakeTableTypesStream(table_types, out));
   return ADBC_STATUS_OK;

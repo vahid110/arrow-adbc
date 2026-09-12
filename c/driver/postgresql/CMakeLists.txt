@@ -30,6 +30,7 @@ set(PGWIRE_DRIVER_SOURCES
     connection.cc
     error.cc
     database.cc
+    metadata.cc
     postgresql.cc
     result_helper.cc
     result_reader.cc
@@ -144,6 +145,7 @@ if(ADBC_BUILD_TESTS)
                 error_test.cc
                 ../pgwire/backend_test.cc
                 ../pgwire/libpq_raii_test.cc
+                metadata_test.cc
                 postgres_type_test.cc
                 postgresql_test.cc
                 redshift_test.cc
