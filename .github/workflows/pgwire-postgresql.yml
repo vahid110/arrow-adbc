@@ -70,7 +70,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DADBC_BUILD_TESTS=ON
           -DADBC_DRIVER_POSTGRESQL=ON
-          -DADBC_DRIVER_MANAGER=OFF
+          -DADBC_DRIVER_MANAGER=ON
           -DADBC_DRIVER_SQLITE=OFF
           -DADBC_DRIVER_FLIGHTSQL=OFF
           -DADBC_USE_ASAN=OFF
@@ -88,6 +88,24 @@ jobs:
 
       - name: Verify Redshift artifact
         run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
+
+      - name: Install and test the Redshift driver through the driver manager
+        run: |
+          cmake --build build/pgwire-ci --parallel 4
+          cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-prefix/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-prefix/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-prefix/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-install-smoke"
+          test -f "$RUNNER_TEMP/pgwire-prefix/include/arrow-adbc/driver/redshift.h"
+          test -f "$RUNNER_TEMP/pgwire-prefix/lib/pkgconfig/adbc-driver-redshift.pc"
+          test -f "$RUNNER_TEMP/pgwire-prefix/lib/cmake/AdbcDriverRedshift/AdbcDriverRedshiftConfig.cmake"
+          "$RUNNER_TEMP/redshift-install-smoke" \
+            "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so" \
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
 
   cpp-redshift:
     name: C++ / Redshift Serverless
