@@ -61,6 +61,15 @@ TEST(BackendProfileTest, TableTypesBelongToBackendSemantics) {
   EXPECT_EQ(redshift.FindTableType("partitioned_table"), nullptr);
 }
 
+TEST(BackendProfileTest, TypeReceiveAliasesBelongToBackendSemantics) {
+  constexpr auto postgres = BackendProfile::PostgreSQL();
+  constexpr auto redshift = BackendProfile::Redshift();
+
+  EXPECT_EQ(postgres.CanonicalTypeReceive("varbyte_recv"), "varbyte_recv");
+  EXPECT_EQ(redshift.CanonicalTypeReceive("varbyte_recv"), "bytearecv");
+  EXPECT_EQ(redshift.CanonicalTypeReceive("int4recv"), "int4recv");
+}
+
 TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
   constexpr auto postgres = BackendProfile::PostgreSQL();
   constexpr auto redshift = BackendProfile::Redshift();

@@ -137,7 +137,7 @@ add and remove a single-runner `/32` security-group rule automatically.
 - 2026-09-12: Enabled the public endpoint behind the restricted security group and
   authenticated over required SSL. The live server reported Redshift
   `1.0.436211`.
-- 2026-09-12: Expanded the opt-in live suite to five tests covering eleven core
+- 2026-09-12: Expanded the opt-in live suite to five tests covering twelve core
   scalar mappings, value decoding, `GetInfo`, Redshift-specific table types,
   `GetObjects`, `GetTableSchema`, and explicit commit/rollback. All five tests
   passed; their temporary table was dropped and all test connections were closed.
@@ -147,3 +147,6 @@ add and remove a single-runner `/32` security-group rule automatically.
 - 2026-09-12: Verified a bound `INT32` parameter and binary result round trip on
   Redshift. Marked binary parameters supported while keeping binary `COPY` query
   transport disabled; these are separate protocol capabilities.
+- 2026-09-12: Added the first backend-owned type discovery alias, mapping
+  Redshift's `varbyte_recv` identity to the core binary representation. A live
+  `VARBYTE` query returned the expected Arrow binary schema and bytes.
