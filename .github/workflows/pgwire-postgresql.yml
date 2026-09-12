@@ -151,14 +151,25 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DADBC_BUILD_TESTS=ON
           -DADBC_DRIVER_POSTGRESQL=ON
-          -DADBC_DRIVER_MANAGER=OFF
+          -DADBC_DRIVER_MANAGER=ON
           -DADBC_DRIVER_SQLITE=OFF
           -DADBC_DRIVER_FLIGHTSQL=OFF
           -DADBC_USE_ASAN=OFF
           -DADBC_USE_UBSAN=OFF
 
       - name: Build Redshift tests
-        run: cmake --build build/pgwire-ci --target adbc-driver-postgresql-test --parallel 4
+        run: cmake --build build/pgwire-ci --parallel 4
+
+      - name: Install Redshift client artifact
+        run: |
+          cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-prefix/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-prefix/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-prefix/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-install-smoke"
 
       - name: Configure temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
@@ -191,6 +202,14 @@ jobs:
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftSmokeTest.*'
+
+      - name: Connect through installed Redshift driver manager
+        env:
+          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+        run: >-
+          "$RUNNER_TEMP/redshift-install-smoke"
+          "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so"
+          "$ADBC_REDSHIFT_TEST_URI"
 
       - name: Close temporary Redshift ingress
         if: ${{ always() && steps.ingress.outcome == 'success' }}
