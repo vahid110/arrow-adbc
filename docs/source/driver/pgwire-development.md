@@ -227,3 +227,8 @@ owner/repository IDs plus the development branch.
   and revoking ingress on `sg-00551344e2efb9c68`. Added a post-PostgreSQL live CI
   job that keeps the database port open only for the focused test interval and
   always removes the runner rule afterward.
+- 2026-09-12: GitHub Actions run `34691303802` passed the complete PostgreSQL 18
+  gate and all nine live Redshift tests using OIDC credentials. The temporary
+  runner ingress rule was revoked successfully; an independent AWS console check
+  confirmed that only the pre-existing default-group and development `/32` rules
+  remained.
