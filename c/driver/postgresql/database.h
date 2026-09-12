@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <arrow-adbc/adbc.h>
@@ -35,6 +36,7 @@ using adbc::driver::Status;
 class PostgresDatabase {
  public:
   PostgresDatabase();
+  explicit PostgresDatabase(adbc::driver::pgwire::BackendProfile required_profile);
   ~PostgresDatabase();
 
   // Public ADBC API
@@ -78,6 +80,7 @@ class PostgresDatabase {
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
   adbc::driver::pgwire::BackendProfile backend_profile_ =
       adbc::driver::pgwire::BackendProfile::PostgreSQL();
+  std::optional<adbc::driver::pgwire::BackendKind> required_backend_;
   std::array<int, 3> postgres_server_version_{};
   bool use_copy_ = true;
 };

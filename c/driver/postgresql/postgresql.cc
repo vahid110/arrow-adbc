@@ -128,6 +128,22 @@ AdbcStatusCode PostgresDatabaseNew(struct AdbcDatabase* database,
   return ADBC_STATUS_OK;
 }
 
+AdbcStatusCode RedshiftDatabaseNew(struct AdbcDatabase* database,
+                                   struct AdbcError* error) {
+  if (!database) {
+    InternalAdbcSetError(error, "%s", "[libpq] database must not be null");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  if (database->private_data) {
+    InternalAdbcSetError(error, "%s", "[libpq] database is already initialized");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  auto impl = std::make_shared<PostgresDatabase>(
+      adbc::driver::pgwire::BackendProfile::Redshift());
+  database->private_data = new std::shared_ptr<PostgresDatabase>(impl);
+  return ADBC_STATUS_OK;
+}
+
 AdbcStatusCode PostgresDatabaseRelease(struct AdbcDatabase* database,
                                        struct AdbcError* error) {
   if (!database->private_data) return ADBC_STATUS_INVALID_STATE;
@@ -885,9 +901,11 @@ AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement* statement,
 #endif  // ADBC_NO_COMMON_ENTRYPOINTS
 
 extern "C" {
-ADBC_EXPORT
-AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
-                                        struct AdbcError* error) {
+using DatabaseNewFn = AdbcStatusCode (*)(struct AdbcDatabase*, struct AdbcError*);
+
+static AdbcStatusCode PgWireDriverInit(int version, void* raw_driver,
+                                       struct AdbcError* error,
+                                       DatabaseNewFn database_new) {
   if (version != ADBC_VERSION_1_0_0 && version != ADBC_VERSION_1_1_0) {
     return ADBC_STATUS_NOT_IMPLEMENTED;
   }
@@ -934,7 +952,7 @@ AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
   }
 
   driver->DatabaseInit = PostgresDatabaseInit;
-  driver->DatabaseNew = PostgresDatabaseNew;
+  driver->DatabaseNew = database_new;
   driver->DatabaseRelease = PostgresDatabaseRelease;
   driver->DatabaseSetOption = PostgresDatabaseSetOption;
 
@@ -962,6 +980,18 @@ AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
   driver->StatementSetSqlQuery = PostgresStatementSetSqlQuery;
 
   return ADBC_STATUS_OK;
+}
+
+ADBC_EXPORT
+AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
+                                        struct AdbcError* error) {
+  return PgWireDriverInit(version, raw_driver, error, PostgresDatabaseNew);
+}
+
+ADBC_EXPORT
+AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
+                                      struct AdbcError* error) {
+  return PgWireDriverInit(version, raw_driver, error, RedshiftDatabaseNew);
 }
 
 #if !defined(ADBC_NO_COMMON_ENTRYPOINTS)

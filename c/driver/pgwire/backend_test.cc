@@ -17,7 +17,13 @@
 
 #include "driver/pgwire/backend.h"
 
+#include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
+
+extern "C" AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
+                                                    struct AdbcError* error);
+extern "C" AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
+                                                  struct AdbcError* error);
 
 namespace adbc::driver::pgwire {
 namespace {
@@ -106,6 +112,20 @@ TEST(BackendProfileTest, DefaultsUnknownPgWireServersToPostgreSQLCompatibility) 
   const auto unknown = DetectBackendProfile("compatible pgwire server");
   EXPECT_EQ(postgres.kind, BackendKind::kPostgreSQL);
   EXPECT_EQ(unknown.kind, BackendKind::kPostgreSQL);
+}
+
+TEST(DriverConstructionTest, NamedDriversComposeDistinctDatabaseFactories) {
+  struct AdbcDriver postgresql = {};
+  struct AdbcDriver redshift = {};
+  struct AdbcError error = {};
+
+  ASSERT_EQ(AdbcDriverPostgresqlInit(ADBC_VERSION_1_1_0, &postgresql, &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcDriverRedshiftInit(ADBC_VERSION_1_1_0, &redshift, &error),
+            ADBC_STATUS_OK);
+  ASSERT_NE(postgresql.DatabaseNew, nullptr);
+  ASSERT_NE(redshift.DatabaseNew, nullptr);
+  EXPECT_NE(postgresql.DatabaseNew, redshift.DatabaseNew);
 }
 
 }  // namespace

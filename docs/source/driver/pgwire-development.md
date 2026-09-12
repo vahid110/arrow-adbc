@@ -40,7 +40,7 @@ authentication exchanges itself.
 - [ ] Separate type discovery, Arrow mapping, and value encoding.
 - [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
 - [x] Isolate PostgreSQL transaction policy.
-- [ ] Construct the existing PostgreSQL driver from the reusable core and
+- [x] Construct the existing PostgreSQL driver from the reusable core and
       PostgreSQL semantics, with no intended behavior change.
 - [x] Add Redshift detection and a read/query-only profile.
 - [x] Add the verified Redshift scalar type matrix.
@@ -75,9 +75,9 @@ Every structural milestone must:
 
 ## Current work
 
-Make the existing driver construction explicitly compose the PostgreSQL profile,
-then continue separating type discovery from Arrow mapping and value encoding.
-Keep Redshift CI manual until narrowly scoped AWS credentials can add and remove a
+Package a distinct Redshift driver artifact around its named entry point, then
+continue separating type discovery from Arrow mapping and value encoding. Keep
+Redshift CI manual until narrowly scoped AWS credentials can add and remove a
 single-runner `/32` security-group rule automatically.
 
 ## Progress log
@@ -170,3 +170,8 @@ single-runner `/32` security-group rule automatically.
   isolation overrides now fail explicitly instead of reporting a misleading
   success; default isolation remains accepted. Live commit, rollback, and
   isolation-policy tests passed.
+- 2026-09-12: Refactored driver initialization around one common ADBC function-table
+  builder and distinct PostgreSQL and Redshift database factories. The public
+  `AdbcDriverPostgresqlInit` behavior remains compatible and the new
+  `AdbcDriverRedshiftInit` pins Redshift semantics, rejecting a mismatched server.
+  The live Redshift connection test now runs through the named Redshift entry point.
