@@ -142,10 +142,10 @@ jobs:
 
       - name: Install PostgreSQL 18 build dependencies
         run: |
-          brew install --quiet postgresql@18 ninja pkgconf
+          brew install --quiet postgresql@18 libpq ninja pkgconf
           pg_prefix="$(brew --prefix postgresql@18)"
           echo "$pg_prefix/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$pg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Start temporary PostgreSQL server
         run: |
