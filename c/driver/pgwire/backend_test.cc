@@ -39,7 +39,7 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   EXPECT_EQ(profile.kind, BackendKind::kRedshift);
   EXPECT_EQ(profile.name, "Redshift");
   EXPECT_TRUE(profile.capabilities.prepared_statements);
-  EXPECT_FALSE(profile.capabilities.binary_parameters);
+  EXPECT_TRUE(profile.capabilities.binary_parameters);
   EXPECT_FALSE(profile.capabilities.binary_query_copy);
   EXPECT_FALSE(profile.capabilities.binary_ingest_copy);
   EXPECT_FALSE(profile.capabilities.type_catalog_has_typarray);

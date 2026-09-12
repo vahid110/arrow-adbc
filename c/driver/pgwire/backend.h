@@ -100,7 +100,7 @@ struct BackendProfile {
         BackendKind::kRedshift,
         "Redshift",
         {/*prepared_statements=*/true,
-         /*binary_parameters=*/false,
+         /*binary_parameters=*/true,
          /*binary_query_copy=*/false,
          /*binary_ingest_copy=*/false,
          /*type_catalog_has_typarray=*/false,
