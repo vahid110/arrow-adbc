@@ -489,15 +489,12 @@ AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
     return ADBC_STATUS_OK;
   }
 
-  PGresult* result = PQexec(conn_, "COMMIT");
-  if (PQresultStatus(result) != PGRES_COMMAND_OK) {
-    AdbcStatusCode code =
-        MakeStatus(result, "[libpq] Failed to commit: {}", PQerrorMessage(conn_))
-            .ToAdbc(error);
-    PQclear(result);
-    return code;
+  adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "COMMIT"));
+  if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+    return MakeStatus(result.get(), "[libpq] Failed to commit: {}",
+                      PQerrorMessage(conn_))
+        .ToAdbc(error);
   }
-  PQclear(result);
   return ADBC_STATUS_OK;
 }
 
@@ -515,14 +512,12 @@ AdbcStatusCode PostgresConnection::EnsureTransaction(struct AdbcError* error) {
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PGresult* result = PQexec(conn_, "BEGIN TRANSACTION");
-  if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+  adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "BEGIN TRANSACTION"));
+  if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
     InternalAdbcSetError(error, "%s%s",
                          "[libpq] Failed to begin transaction: ", PQerrorMessage(conn_));
-    PQclear(result);
     return ADBC_STATUS_IO;
   }
-  PQclear(result);
   return ADBC_STATUS_OK;
 }
 
@@ -1190,14 +1185,12 @@ AdbcStatusCode PostgresConnection::Rollback(struct AdbcError* error) {
     return ADBC_STATUS_OK;
   }
 
-  PGresult* result = PQexec(conn_, "ROLLBACK");
-  if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+  adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "ROLLBACK"));
+  if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
     InternalAdbcSetError(error, "%s%s",
                          "[libpq] Failed to rollback: ", PQerrorMessage(conn_));
-    PQclear(result);
     return ADBC_STATUS_IO;
   }
-  PQclear(result);
   return ADBC_STATUS_OK;
 }
 
@@ -1222,14 +1215,12 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
 
     if (autocommit != autocommit_) {
       if (autocommit && PQtransactionStatus(conn_) != PQTRANS_IDLE) {
-        PGresult* result = PQexec(conn_, "COMMIT");
-        if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+        adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "COMMIT"));
+        if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
           InternalAdbcSetError(error, "%s%s", "[libpq] Failed to update autocommit: ",
                                PQerrorMessage(conn_));
-          PQclear(result);
           return ADBC_STATUS_IO;
         }
-        PQclear(result);
       }
       autocommit_ = autocommit;
     }

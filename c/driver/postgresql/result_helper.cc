@@ -34,16 +34,12 @@ namespace adbcpq {
 
 Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) const {
   // TODO: make stmtName a unique identifier?
-  PGresult* result =
-      PQprepare(conn_, /*stmtName=*/"", query_.c_str(), n_params, param_oids);
-  if (PQresultStatus(result) != PGRES_COMMAND_OK) {
-    auto status = MakeStatus(result, "Failed to prepare query: {}\nQuery was: {}",
+  adbc::driver::pgwire::UniqueResult result(
+      PQprepare(conn_, /*stmtName=*/"", query_.c_str(), n_params, param_oids));
+  if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+    return MakeStatus(result.get(), "Failed to prepare query: {}\nQuery was: {}",
                              PQerrorMessage(conn_), query_.c_str());
-    PQclear(result);
-    return status;
   }
-
-  PQclear(result);
   return Status::Ok();
 }
 
