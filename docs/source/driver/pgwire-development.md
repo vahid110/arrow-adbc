@@ -131,6 +131,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Add optional, short-lived IAM credential preparation without changing the
       common libpq authentication path.
 - [ ] Benchmark prepared-insert throughput before choosing an optimization.
+- [x] Provision a private, short-retention S3 fixture and a namespace-attached,
+      read-only Redshift IAM role for an opt-in staged `COPY` experiment.
+- [ ] Resolve the scoped IAM role-assumption failure before using staged `COPY`.
 - [ ] If justified, add staged S3 `COPY` ingestion with least-privilege IAM,
       deterministic object cleanup, and a separate opt-in live test. Consider
       `UNLOAD` only after a measured read-path need.
@@ -178,6 +181,40 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 - Do not purchase reservations or increase capacity without explicit approval.
 - When Redshift testing is no longer active, evaluate deleting the workgroup and
   namespace; recreate them when needed rather than carrying avoidable storage cost.
+
+### Staged `COPY` test fixture (not driver support)
+
+In AWS account `149112076833`, region `eu-central-1`:
+
+- Bucket `adbc-pgwire-ci-149112076833-euc1` is dedicated to the `pgwire-ci`
+  workgroup. Public access is blocked, ACLs are disabled, and default encryption
+  uses SSE-S3. The `staging/` prefix expires after one day and incomplete
+  multipart uploads are aborted after one day. Tests must still delete their
+  exact objects in a `finally`/cleanup path; lifecycle is a backstop.
+- IAM role `adbc-pgwire-ci-copy` trusts the two Redshift service principals
+  required by AWS documentation, constrained to account `149112076833` and
+  the known `pgwire-ci` workgroup/namespace ARN variants. Its inline policy
+  permits `s3:ListBucket` only for `staging/*` and `s3:GetObject` only for
+  `staging/*`. It has no S3 write or broad managed policy.
+- The role was attached to namespace `pgwire-ci` on 2026-09-12. A subsequent
+  `get-namespace` returned `AVAILABLE` with the role `in-sync`.
+- A two-row, temporary-table `COPY` smoke test failed three times with
+  `UnauthorizedException: Not authorized to get credentials of role`, even
+  after adding the documented second service principal and exact known
+  workgroup/namespace ARN variants. A database privilege check returned
+  `has_assumerole_privilege(..., 'copy') = true`, so database `ASSUMEROLE` is
+  not the apparent cause. No `AssumeRole` event for this role was visible in
+  CloudTrail event history. Keep the exact-resource trust restriction until
+  the actual source context is identified or an explicit decision is made to
+  relax it. The failed batches rolled back their temporary tables; the exact
+  staging object was deleted after the test.
+- This fixture alone does not enable ADBC staged ingestion. An uploader needs
+  separate, short-lived write permissions, and any opt-in driver path needs
+  strict option validation, safe SQL construction, and deterministic cleanup.
+
+See the AWS documentation on [Serverless namespace IAM roles](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-security-other-services.html),
+[minimum S3 permissions for `COPY`](https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-access-permissions.html),
+and [source-scoped service trust](https://docs.aws.amazon.com/redshift/latest/mgmt/cross-service-confused-deputy-prevention.html).
 
 ## Current work
 
