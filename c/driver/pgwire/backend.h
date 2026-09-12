@@ -53,6 +53,11 @@ enum class IsolationLevelPolicy {
   kDatabaseConfigured,
 };
 
+enum class VendorVersionSource {
+  kServerParameter,
+  kParsedVersionString,
+};
+
 struct TransactionSemantics {
   IsolationLevelPolicy isolation_levels;
   bool transactional_ddl;
@@ -85,6 +90,9 @@ inline constexpr TypeReceiveAlias kRedshiftTypeReceiveAliases[] = {
 struct BackendProfile {
   BackendKind kind;
   std::string_view name;
+  std::string_view driver_name;
+  std::string_view version_prefix;
+  VendorVersionSource vendor_version_source;
   BackendCapabilities capabilities;
   TransactionSemantics transactions;
   const TableTypeMapping* table_types;
@@ -112,6 +120,9 @@ struct BackendProfile {
     return {
         BackendKind::kPostgreSQL,
         "PostgreSQL",
+        "ADBC PostgreSQL Driver",
+        "PostgreSQL",
+        VendorVersionSource::kServerParameter,
         {/*prepared_statements=*/true,
          /*binary_parameters=*/true,
          /*binary_query_copy=*/true,
@@ -132,6 +143,9 @@ struct BackendProfile {
     return {
         BackendKind::kRedshift,
         "Redshift",
+        "ADBC Redshift Driver",
+        "Redshift",
+        VendorVersionSource::kParsedVersionString,
         {/*prepared_statements=*/true,
          /*binary_parameters=*/true,
          /*binary_query_copy=*/false,

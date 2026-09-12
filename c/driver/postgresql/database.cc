@@ -245,11 +245,8 @@ Status PostgresDatabase::InitVersions(PGconn* conn) {
                                    " but connected to ", detected_profile.name);
   }
   backend_profile_ = detected_profile;
-  const std::string_view version_prefix =
-      backend_profile_.kind == adbc::driver::pgwire::BackendKind::kRedshift
-          ? "Redshift"
-          : "PostgreSQL";
-  postgres_server_version_ = ParsePrefixedVersion(version_info, version_prefix);
+  postgres_server_version_ =
+      ParsePrefixedVersion(version_info, backend_profile_.version_prefix);
 
   return Status::Ok();
 }

@@ -32,6 +32,9 @@ TEST(BackendProfileTest, PostgreSQLCapabilitiesPreserveCurrentFastPaths) {
   constexpr auto profile = BackendProfile::PostgreSQL();
   EXPECT_EQ(profile.kind, BackendKind::kPostgreSQL);
   EXPECT_EQ(profile.name, "PostgreSQL");
+  EXPECT_EQ(profile.driver_name, "ADBC PostgreSQL Driver");
+  EXPECT_EQ(profile.version_prefix, "PostgreSQL");
+  EXPECT_EQ(profile.vendor_version_source, VendorVersionSource::kServerParameter);
   EXPECT_TRUE(profile.capabilities.binary_parameters);
   EXPECT_TRUE(profile.capabilities.binary_query_copy);
   EXPECT_TRUE(profile.capabilities.binary_ingest_copy);
@@ -47,6 +50,9 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   constexpr auto profile = BackendProfile::Redshift();
   EXPECT_EQ(profile.kind, BackendKind::kRedshift);
   EXPECT_EQ(profile.name, "Redshift");
+  EXPECT_EQ(profile.driver_name, "ADBC Redshift Driver");
+  EXPECT_EQ(profile.version_prefix, "Redshift");
+  EXPECT_EQ(profile.vendor_version_source, VendorVersionSource::kParsedVersionString);
   EXPECT_TRUE(profile.capabilities.prepared_statements);
   EXPECT_TRUE(profile.capabilities.binary_parameters);
   EXPECT_FALSE(profile.capabilities.binary_query_copy);
