@@ -977,6 +977,12 @@ AdbcStatusCode PostgresConnection::GetStatistics(const char* catalog,
                                                  const char* table_name, bool approximate,
                                                  struct ArrowArrayStream* out,
                                                  struct AdbcError* error) {
+  if (!backend_profile().capabilities.metadata_statistics) {
+    InternalAdbcSetError(error, "[libpq] %s does not support GetStatistics",
+                         std::string(VendorName()).c_str());
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+
   // Simplify our jobs here
   if (!approximate) {
     InternalAdbcSetError(error, "[libpq] Exact statistics are not implemented");

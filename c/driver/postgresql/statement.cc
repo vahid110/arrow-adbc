@@ -711,6 +711,13 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
 AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
                                                 int64_t* rows_affected,
                                                 struct AdbcError* error) {
+  if (adbc::driver::pgwire::SelectBulkIngestMode(connection_->backend_profile()) ==
+      adbc::driver::pgwire::BulkIngestMode::kUnsupported) {
+    InternalAdbcSetError(error, "[libpq] %s bulk ingestion is not implemented",
+                         std::string(connection_->VendorName()).c_str());
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+
   RAISE_ADBC(connection_->EnsureTransaction(error));
 
   if (!bind_.release) {

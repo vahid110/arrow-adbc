@@ -120,3 +120,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Added an opt-in Redshift smoke test, gated by
   `ADBC_REDSHIFT_TEST_URI`, covering database initialization, vendor version
   reporting, text-result execution, schema mapping, and scalar values.
+- 2026-09-12: Added capability-driven bulk-ingest selection and explicit
+  `NOT_IMPLEMENTED` results for Redshift ingestion and statistics, preventing
+  accidental execution of unsupported PostgreSQL-specific paths.
