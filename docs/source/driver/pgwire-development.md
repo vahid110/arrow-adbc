@@ -36,7 +36,7 @@ authentication exchanges itself.
 - [x] Pin and record the upstream baseline.
 - [x] Record the current PostgreSQL build/test baseline.
 - [ ] Extract libpq connection, result, cancellation, and error lifetime helpers.
-- [ ] Separate text-result and binary-COPY query paths.
+- [x] Separate text-result and binary-COPY query paths.
 - [ ] Separate type discovery, Arrow mapping, and value encoding.
 - [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
 - [ ] Isolate PostgreSQL transaction policy.
@@ -106,3 +106,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Migrated streaming query result ownership to the common pgwire RAII
   handle and kept response draining explicit, eliminating another manual cleanup
   path without changing COPY behavior.
+- 2026-09-12: Added an explicit query-result transport selector. PostgreSQL keeps
+  binary COPY when enabled, while capability-limited backends such as Redshift
+  select the portable text-result path.
