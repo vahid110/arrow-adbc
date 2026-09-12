@@ -96,11 +96,13 @@ measured Redshift requirement demonstrates the extension point.
 
 ## Current work
 
-The planned Redshift MVP and reusable-core milestones are complete. Next work is
-post-MVP and should start from the support matrix below rather than adding generic
-hooks speculatively. Keep live Redshift CI manual until narrowly scoped AWS
-credentials can add and remove a single-runner `/32` security-group rule
-automatically.
+The planned Redshift MVP and reusable-core milestones are complete. PostgreSQL CI
+remains the first mandatory gate. After it passes, the Redshift job builds before
+requesting short-lived AWS credentials, opens TCP 5439 for only the current GitHub
+runner `/32`, runs only the focused Redshift suite, and revokes that exact rule in
+an `always()` cleanup step. The AWS role can modify ingress on only the dedicated
+Redshift security group and its OIDC trust is pinned to this repository's immutable
+owner/repository IDs plus the development branch.
 
 ## Progress log
 
@@ -218,3 +220,10 @@ automatically.
   Actions run `34690357323` built both driver artifacts, passed the complete
   PostgreSQL 18 integration suite, verified that the Redshift driver rejects a
   PostgreSQL server, and passed the Redshift artifact-entry-point test.
+- 2026-09-12: Registered GitHub's OIDC endpoint in AWS and created the
+  `adbc-redshift-ci` role. Its trust policy requires the immutable
+  `vahid110@5770674/arrow-adbc@1363017696` subject on
+  `feature/pgwire-core-redshift`; its only resource permissions are authorizing
+  and revoking ingress on `sg-00551344e2efb9c68`. Added a post-PostgreSQL live CI
+  job that keeps the database port open only for the focused test interval and
+  always removes the runner rule afterward.
