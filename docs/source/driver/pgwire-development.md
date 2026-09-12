@@ -259,3 +259,7 @@ owner/repository IDs plus the development branch.
   headers, and pkg-config files, and runs the common seam tests plus the Redshift
   artifact-entry-point test. A fresh Meson build completed all 84 targets; the 14
   database-independent core tests and the Redshift artifact test passed.
+- 2026-09-12: Removed the remaining backend-name branches from common version and
+  `GetInfo` execution. Each backend profile now owns its version prefix, version
+  source policy, and public driver name; Redshift consequently identifies the
+  driver as `ADBC Redshift Driver` instead of inheriting PostgreSQL's name.

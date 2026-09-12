@@ -368,7 +368,8 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
         infos.push_back({info_codes[i], std::string(VendorName())});
         break;
       case ADBC_INFO_VENDOR_VERSION: {
-        if (backend_profile().kind == adbc::driver::pgwire::BackendKind::kRedshift) {
+        if (backend_profile().vendor_version_source ==
+            adbc::driver::pgwire::VendorVersionSource::kParsedVersionString) {
           const auto& version = VendorVersion();
           infos.push_back({info_codes[i], std::to_string(version[0]) + "." +
                                               std::to_string(version[1]) + "." +
@@ -390,7 +391,7 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
         break;
       }
       case ADBC_INFO_DRIVER_NAME:
-        infos.push_back({info_codes[i], "ADBC PostgreSQL Driver"});
+        infos.push_back({info_codes[i], std::string(backend_profile().driver_name)});
         break;
       case ADBC_INFO_DRIVER_VERSION:
         // TODO(lidavidm): fill in driver version
