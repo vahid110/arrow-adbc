@@ -76,11 +76,15 @@ jobs:
           -DADBC_USE_ASAN=OFF
           -DADBC_USE_UBSAN=OFF
 
-      - name: Build PostgreSQL tests
+      - name: Build PostgreSQL-wire tests
         run: >-
           cmake --build build/pgwire-ci
           --target adbc-driver-postgresql-test adbc-driver-postgresql-copy-test
+          adbc-driver-redshift-test
           --parallel 4
 
       - name: Run PostgreSQL tests
         run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
+
+      - name: Verify Redshift artifact
+        run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
