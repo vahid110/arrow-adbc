@@ -311,6 +311,19 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_metadata", &error_);
 }
 
+TEST_F(RedshiftSmokeTest, ReportsMissingTableSchema) {
+  nanoarrow::UniqueSchema schema;
+  EXPECT_EQ(AdbcConnectionGetTableSchema(&connection_, nullptr, "public",
+                                         "adbc_redshift_mvp_table_does_not_exist",
+                                         schema.get(), &error_),
+            ADBC_STATUS_NOT_FOUND);
+  ASSERT_NE(error_.message, nullptr);
+  if (error_.release != nullptr) {
+    error_.release(&error_);
+    error_ = {};
+  }
+}
+
 TEST_F(RedshiftSmokeTest, ReportsOnlySupportedTableTypes) {
   adbc_validation::StreamReader reader;
   ASSERT_THAT(AdbcConnectionGetTableTypes(&connection_, &reader.stream.value, &error_),
