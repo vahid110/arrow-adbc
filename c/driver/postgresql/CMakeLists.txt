@@ -145,10 +145,12 @@ if(ADBC_BUILD_TESTS)
                 error_test.cc
                 ../pgwire/backend_test.cc
                 ../pgwire/libpq_raii_test.cc
+                metadata.cc
                 metadata_test.cc
                 postgres_type_test.cc
                 postgresql_test.cc
                 redshift_test.cc
+                type_discovery.cc
                 type_discovery_test.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common
@@ -160,7 +162,9 @@ if(ADBC_BUILD_TESTS)
   )
   target_include_directories(adbc-driver-postgresql-test SYSTEM
                              PRIVATE ${REPOSITORY_ROOT}/c/ ${REPOSITORY_ROOT}/c/include/
-                                     ${LIBPQ_INCLUDE_DIRS} ${REPOSITORY_ROOT}/c/driver)
+                                     ${LIBPQ_INCLUDE_DIRS}
+                                     ${REPOSITORY_ROOT}/c/driver
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include)
   adbc_configure_target(adbc-driver-postgresql-test)
 
   add_test_case(driver_postgresql_copy_test
