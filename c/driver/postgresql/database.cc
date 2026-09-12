@@ -231,7 +231,12 @@ Status PostgresDatabase::InitVersions(PGconn* conn) {
   }
 
   std::string_view version_info = helper.Row(0)[0].value();
-  postgres_server_version_ = ParsePrefixedVersion(version_info, "PostgreSQL");
+  backend_profile_ = adbc::driver::pgwire::DetectBackendProfile(version_info);
+  const std::string_view version_prefix =
+      backend_profile_.kind == adbc::driver::pgwire::BackendKind::kRedshift
+          ? "Redshift"
+          : "PostgreSQL";
+  postgres_server_version_ = ParsePrefixedVersion(version_info, version_prefix);
 
   return Status::Ok();
 }
