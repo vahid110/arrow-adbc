@@ -61,6 +61,18 @@ Every structural milestone must:
    of incomplete or misleading results.
 6. Keep public PostgreSQL symbols, package names, option names, and defaults stable.
 
+## Redshift test-cost discipline
+
+- Use the `eu-central-1` Serverless workgroup `pgwire-ci`, capped at 4 RPUs.
+- Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
+- Avoid keepalive connections, polling queries, and idle open transactions so that
+  Serverless can return to its non-compute-billed idle state promptly.
+- Check trial-credit and RPU usage before and after larger integration runs.
+- Delete temporary schemas, tables, snapshots, and other billable test artifacts.
+- Do not purchase reservations or increase capacity without explicit approval.
+- When Redshift testing is no longer active, evaluate deleting the workgroup and
+  namespace; recreate them when needed rather than carrying avoidable storage cost.
+
 ## Current work
 
 Establish the local build baseline, then extract libpq RAII helpers without changing
@@ -86,3 +98,6 @@ query, metadata, type, transaction, or COPY behavior.
   integration workflow backed by PostgreSQL 18.
 - 2026-09-09: GitHub Actions run `34384221476` built both PostgreSQL test binaries
   and passed the complete `driver-postgresql` CTest label against PostgreSQL 18.
+- 2026-09-12: Created the `pgwire-ci` Redshift Serverless workgroup and namespace
+  in Frankfurt with base and maximum capacity fixed at 4 RPUs. Recorded the
+  cost-control rules above before enabling Redshift integration tests.
