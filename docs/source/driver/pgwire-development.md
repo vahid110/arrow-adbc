@@ -37,7 +37,7 @@ authentication exchanges itself.
 - [x] Record the current PostgreSQL build/test baseline.
 - [x] Extract libpq connection, result, cancellation, and error lifetime helpers.
 - [x] Separate text-result and binary-COPY query paths.
-- [ ] Separate type discovery, Arrow mapping, and value encoding.
+- [x] Separate type discovery, Arrow mapping, and value encoding.
 - [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
 - [x] Isolate PostgreSQL transaction policy.
 - [x] Construct the existing PostgreSQL driver from the reusable core and
@@ -75,10 +75,10 @@ Every structural milestone must:
 
 ## Current work
 
-Continue separating type discovery from Arrow mapping and value encoding, then
-move backend metadata SQL behind a normalized provider. Keep Redshift CI manual
-until narrowly scoped AWS credentials can add and remove a single-runner `/32`
-security-group rule automatically.
+Move backend metadata SQL behind a normalized provider, then run the complete
+PostgreSQL and Redshift regression gates. Keep Redshift CI manual until narrowly
+scoped AWS credentials can add and remove a single-runner `/32` security-group
+rule automatically.
 
 ## Progress log
 
@@ -180,3 +180,8 @@ security-group rule automatically.
   factory. Added a public Redshift entry-point header, CMake package metadata,
   pkg-config metadata, an artifact-level test, and CI coverage. A temporary-prefix
   install verified every library, header, and package metadata output.
+- 2026-09-12: Extracted type-catalog discovery from database lifecycle code into a
+  focused component with capability-driven PostgreSQL and Redshift query plans.
+  Catalog parsing feeds the existing type resolver, Arrow schema mapping remains
+  in the type model, and wire value decoding/encoding remains in result and bind
+  paths. Focused query-plan tests and a live Redshift scalar-mapping test passed.
