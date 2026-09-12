@@ -34,6 +34,7 @@ enum class QueryResultMode {
 
 enum class BulkIngestMode {
   kBinaryCopy,
+  kParameterizedInsert,
   kUnsupported,
 };
 
@@ -155,8 +156,12 @@ constexpr QueryResultMode SelectQueryResultMode(const BackendProfile& profile,
 }
 
 constexpr BulkIngestMode SelectBulkIngestMode(const BackendProfile& profile) {
-  return profile.capabilities.binary_ingest_copy ? BulkIngestMode::kBinaryCopy
-                                                 : BulkIngestMode::kUnsupported;
+  if (profile.capabilities.binary_ingest_copy) return BulkIngestMode::kBinaryCopy;
+  if (profile.capabilities.prepared_statements &&
+      profile.capabilities.binary_parameters) {
+    return BulkIngestMode::kParameterizedInsert;
+  }
+  return BulkIngestMode::kUnsupported;
 }
 
 }  // namespace adbc::driver::pgwire

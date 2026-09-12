@@ -46,7 +46,7 @@ authentication exchanges itself.
 - [x] Add the verified Redshift scalar type matrix.
 - [x] Add Redshift `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`.
 - [x] Add Redshift transaction coverage.
-- [ ] Add correctness-first batched-INSERT ingestion.
+- [x] Add correctness-first batched-INSERT ingestion.
 - [ ] Package distinct PostgreSQL and Redshift driver artifacts.
 
 ## Quality gates
@@ -75,10 +75,10 @@ Every structural milestone must:
 
 ## Current work
 
-Validate the Redshift read/query profile against the live Serverless workgroup,
-then use the observed catalog and result behavior to define the next small type and
-metadata seams. Keep Redshift CI manual until narrowly scoped AWS credentials can
-add and remove a single-runner `/32` security-group rule automatically.
+Extract the transaction-policy seam while preserving PostgreSQL behavior, then
+make the existing driver construction explicitly compose the PostgreSQL profile.
+Keep Redshift CI manual until narrowly scoped AWS credentials can add and remove a
+single-runner `/32` security-group rule automatically.
 
 ## Progress log
 
@@ -150,3 +150,12 @@ add and remove a single-runner `/32` security-group rule automatically.
 - 2026-09-12: Added the first backend-owned type discovery alias, mapping
   Redshift's `varbyte_recv` identity to the core binary representation. A live
   `VARBYTE` query returned the expected Arrow binary schema and bytes.
+- 2026-09-12: Added capability-selected, correctness-first Redshift ingestion via
+  prepared binary parameters. PostgreSQL retains binary `COPY`; the Redshift path
+  creates or appends through the same ADBC ingest mechanics and counts affected
+  rows without adding vendor conditionals to statement execution.
+- 2026-09-12: Wrapped each autocommit Redshift Arrow batch in one transaction so a
+  later row failure cannot leave earlier rows committed. Live tests verified both
+  a successful two-row create ingest and full rollback when the second appended
+  row violated a `NOT NULL` constraint. The complete eight-test Redshift suite
+  passed, and all temporary tables and connections were cleaned up.
