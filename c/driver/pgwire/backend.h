@@ -74,8 +74,8 @@ struct TypeReceiveAlias {
 };
 
 inline constexpr TableTypeMapping kPostgreSQLTableTypes[] = {
-    {"table", "r"},       {"view", "v"},          {"materialized_view", "m"},
-    {"toast_table", "t"}, {"foreign_table", "f"}, {"partitioned_table", "p"},
+    {"partitioned_table", "p"}, {"foreign_table", "f"}, {"toast_table", "t"},
+    {"materialized_view", "m"}, {"view", "v"},          {"table", "r"},
 };
 
 inline constexpr TableTypeMapping kRedshiftTableTypes[] = {
