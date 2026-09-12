@@ -157,13 +157,13 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift | Release artifact |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
-| Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
-| Windows ARM64 | vcpkg release build | Clean install/client smoke and live database test |
+| Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
+| Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
-- [ ] Add Windows x86-64/ARM64 installation tests (macOS Intel/Apple Silicon done).
+- [x] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
 - [x] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
 - [ ] Publish packages only for targets whose release qualification is green.
 
@@ -364,3 +364,13 @@ owner/repository IDs plus the development branch.
   passed all five Linux/macOS platform jobs, twelve focused live Redshift tests,
   the installed-client live connection, and temporary AWS ingress cleanup.
   Cancellation and remaining type/metadata edge cases are still open.
+- 2026-09-12: Added a missing-table `GetTableSchema` check to the live Redshift
+  suite. GitHub Actions run `34712196347` passed all five Linux/macOS platform
+  jobs, thirteen focused live Redshift tests, the installed-client connection,
+  and temporary AWS ingress cleanup.
+- 2026-09-12: Added a standalone driver-manager load-only mode and a small
+  installed-package CMake client. GitHub Actions run `34712196368` built that
+  client against the installed public CMake package and loaded the Redshift DLL
+  on Windows x64 Debug, x64 Release, and ARM64 Release; all three vcpkg jobs
+  passed. This proves installed artifact loading, not a distributable package or
+  live Windows-to-Redshift behavior.

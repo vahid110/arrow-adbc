@@ -81,6 +81,12 @@ against PostgreSQL on Linux and macOS and requires Redshift's driver to reject
 that server. It also connects through the independently installed client during
 the existing Ubuntu x86-64 live Redshift gate.
 
+On Windows, the [standalone CMake client](../pgwire/install_smoke/CMakeLists.txt)
+builds from the installed ADBC driver-manager package. Its `--load-only` mode
+checks that the installed Redshift DLL initializes through the driver manager
+without opening a database connection. The Windows x64 and ARM64 vcpkg jobs
+exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
+
 ## Current behavior and limits
 
 | Area | MVP behavior |
@@ -91,7 +97,7 @@ the existing Ubuntu x86-64 live Redshift gate.
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
 | Ingest | Correctness-first atomic prepared inserts; no Redshift S3 `COPY` or `UNLOAD` path |
-| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 have source-build checks; release artifacts and other platforms' database-backed installed-client qualification remain pending |
+| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 Release builds and installed DLL load checks pass through the public CMake package; release artifacts and other platforms' database-backed installed-client qualification remain pending |
 
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
 the development branch. The roadmap records what each gate proves and what it
