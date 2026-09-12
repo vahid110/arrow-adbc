@@ -123,3 +123,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Added capability-driven bulk-ingest selection and explicit
   `NOT_IMPLEMENTED` results for Redshift ingestion and statistics, preventing
   accidental execution of unsupported PostgreSQL-specific paths.
+- 2026-09-12: GitHub Actions runs `34686600361`, `34686724734`, and `34686810469`
+  passed the complete PostgreSQL 18 suite for catalog adaptation, Redshift smoke
+  test integration, and unsupported-path guards respectively.
