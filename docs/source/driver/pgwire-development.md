@@ -154,7 +154,7 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift | Release artifact |
 | macOS Intel | C++ build | Clean install/client smoke and live database test |
 | macOS Apple Silicon | C++ build | Clean install/client smoke and live database test |
 | Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
@@ -348,3 +348,8 @@ owner/repository IDs plus the development branch.
   passed all three Linux platform jobs, the eleven-test live Redshift suite, and
   the AWS ingress cleanup. These are source/install test results, not published
   binary-package or cross-platform live Redshift guarantees.
+- 2026-09-12: GitHub Actions run `34709927476` passed the eleven-test live
+  Redshift suite and then opened a real Redshift connection through the ADBC
+  driver manager and independently installed Redshift shared library on Ubuntu
+  x86-64. The same run passed Ubuntu ARM64 and Debian x86-64 PostgreSQL/install
+  gates, and revoked the temporary AWS ingress rule.

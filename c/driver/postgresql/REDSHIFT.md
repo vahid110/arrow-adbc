@@ -91,7 +91,7 @@ billable Redshift compute.
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
 | Ingest | Correctness-first atomic prepared inserts; no Redshift S3 `COPY` or `UNLOAD` path |
-| Platforms | Ubuntu x86-64/ARM64 and Debian x86-64 have source-build, PostgreSQL 18, and clean-prefix client checks; macOS Intel/Apple Silicon and Windows x64/ARM64 have source-build checks; release artifacts and database-backed installed-client qualification remain pending |
+| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64 and Debian x86-64 have source-build, PostgreSQL 18, and clean-prefix rejection checks; macOS Intel/Apple Silicon and Windows x64/ARM64 have source-build checks; release artifacts and other platforms' database-backed installed-client qualification remain pending |
 
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
 the development branch. The roadmap records what each gate proves and what it
