@@ -186,6 +186,62 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
+TEST_F(RedshiftSmokeTest, PreservesNullResults) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(&statement,
+                               "SELECT 1::INTEGER AS id, 'value'::VARCHAR(16) AS label "
+                               "UNION ALL SELECT NULL::INTEGER, NULL::VARCHAR(16) "
+                               "ORDER BY id NULLS LAST",
+                               &error_),
+      IsOkStatus(&error_));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 2U);
+  EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_INT32);
+  EXPECT_EQ(reader.fields[1].type, NANOARROW_TYPE_STRING);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_EQ(reader.array->length, 2);
+  EXPECT_FALSE(ArrowArrayViewIsNull(reader.array_view->children[0], 0));
+  EXPECT_FALSE(ArrowArrayViewIsNull(reader.array_view->children[1], 0));
+  EXPECT_TRUE(ArrowArrayViewIsNull(reader.array_view->children[0], 1));
+  EXPECT_TRUE(ArrowArrayViewIsNull(reader.array_view->children[1], 1));
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
+TEST_F(RedshiftSmokeTest, RecoversAfterQueryError) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELEC 1", &error_),
+              IsOkStatus(&error_));
+  EXPECT_NE(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error_),
+            ADBC_STATUS_OK);
+  ASSERT_NE(error_.message, nullptr);
+  if (error_.release != nullptr) {
+    error_.release(&error_);
+    error_ = {};
+  }
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 42::INTEGER", &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), 42);
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
 TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   constexpr std::string_view kTableName = "adbc_redshift_mvp_metadata";
   ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_metadata", &error_);
