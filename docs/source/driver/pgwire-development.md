@@ -61,6 +61,27 @@ Every structural milestone must:
    of incomplete or misleading results.
 6. Keep public PostgreSQL symbols, package names, option names, and defaults stable.
 
+## Redshift MVP support matrix
+
+| Area | MVP behavior |
+| --- | --- |
+| Driver artifact | Dedicated shared/static `adbc_driver_redshift` library and `AdbcDriverRedshiftInit`; rejects non-Redshift servers |
+| Connection/authentication | Standard libpq URI options, TLS, user/password; no Redshift-specific IAM token generation yet |
+| Vendor detection | `SELECT version()` once during database initialization; required by the Redshift artifact |
+| Query results | Portable libpq text-result path with Arrow conversion; PostgreSQL alone retains binary query `COPY` |
+| Parameters | Prepared statements with binary parameter encoding |
+| Core types | Boolean, signed integers, float, numeric-as-string, date/time/timestamp, text/varchar, and `VARBYTE` |
+| Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, and `GetTableSchema`; constraints and statistics are explicitly unsupported |
+| Transactions | Autocommit, explicit commit/rollback; isolation is database-configured and session overrides are explicitly unsupported |
+| Bulk ingest | Create and append through atomic prepared inserts; PostgreSQL alone retains binary ingest `COPY` |
+
+Post-MVP work should be driven by concrete use cases: IAM/Identity Center credential
+helpers, Redshift-native staged `COPY`/`UNLOAD`, additional Redshift types such as
+`SUPER` and spatial values, richer external/materialized-view metadata, and a
+multi-row or pipeline insert optimization that preserves the current atomic/error
+semantics. These do not belong in the core until a second implementation or a
+measured Redshift requirement demonstrates the extension point.
+
 ## Redshift test-cost discipline
 
 - Use the `eu-central-1` Serverless workgroup `pgwire-ci`, capped at 4 RPUs.
@@ -75,10 +96,11 @@ Every structural milestone must:
 
 ## Current work
 
-Run the complete PostgreSQL and Redshift regression gates, then document the MVP
-support matrix and remaining post-MVP work. Keep Redshift CI manual until narrowly
-scoped AWS credentials can add and remove a single-runner `/32` security-group
-rule automatically.
+The planned Redshift MVP and reusable-core milestones are complete. Next work is
+post-MVP and should start from the support matrix below rather than adding generic
+hooks speculatively. Keep live Redshift CI manual until narrowly scoped AWS
+credentials can add and remove a single-runner `/32` security-group rule
+automatically.
 
 ## Progress log
 
@@ -190,3 +212,9 @@ rule automatically.
   provider consumes only the backend profile, so core `GetObjects` iteration no
   longer owns backend SQL or table-kind mapping. Focused provider tests and live
   Redshift `GetObjects`, `GetTableSchema`, and `GetTableTypes` tests passed.
+- 2026-09-12: Completed the final regression pass. All nine live Redshift tests
+  passed through the named Redshift driver, including query, types, metadata,
+  transactions, parameter binding, successful ingest, and ingest rollback. GitHub
+  Actions run `34690357323` built both driver artifacts, passed the complete
+  PostgreSQL 18 integration suite, verified that the Redshift driver rejects a
+  PostgreSQL server, and passed the Redshift artifact-entry-point test.
