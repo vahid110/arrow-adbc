@@ -112,3 +112,5 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Added one-time Redshift detection from `SELECT version()` and parse
   the vendor version using the selected backend profile. Unknown PostgreSQL-wire
   servers retain the PostgreSQL-compatible default.
+- 2026-09-12: GitHub Actions run `34686322856` passed the complete PostgreSQL 18
+  integration suite after the result-transport and backend-detection refactors.
