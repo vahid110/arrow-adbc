@@ -359,3 +359,8 @@ owner/repository IDs plus the development branch.
   GitHub Actions run `34710421526` passed both macOS jobs, all three Linux
   platform jobs, the eleven-test live Redshift suite, and AWS ingress cleanup.
   Windows installation and macOS live Redshift-client qualification remain open.
+- 2026-09-12: Added a bounded 1,024-row recursive-query test for complete Arrow
+  result delivery and end-of-stream behavior. GitHub Actions run `34710970303`
+  passed all five Linux/macOS platform jobs, twelve focused live Redshift tests,
+  the installed-client live connection, and temporary AWS ingress cleanup.
+  Cancellation and remaining type/metadata edge cases are still open.
