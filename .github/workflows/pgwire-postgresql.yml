@@ -24,6 +24,7 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - "c/**"
+      - "!c/**/*.md"
       - ".github/workflows/pgwire-postgresql.yml"
 
 concurrency:
@@ -122,9 +123,83 @@ jobs:
             "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so" \
             "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
 
+  cpp-macos:
+    name: C++ / PostgreSQL 18 (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS Intel
+            runner: macos-15-intel
+          - platform: macOS Apple Silicon
+            runner: macos-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL 18 build dependencies
+        run: |
+          brew install --quiet postgresql@18 ninja pkgconf
+          pg_prefix="$(brew --prefix postgresql@18)"
+          echo "$pg_prefix/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$pg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Start temporary PostgreSQL server
+        run: |
+          initdb -D "$RUNNER_TEMP/pgdata" --auth=trust --locale=C --no-instructions
+          pg_ctl -D "$RUNNER_TEMP/pgdata" \
+            -o "-h 127.0.0.1 -p 55433" \
+            -l "$RUNNER_TEMP/postgres.log" start
+          echo "ADBC_POSTGRESQL_TEST_URI=postgresql://127.0.0.1:55433/postgres?user=$(whoami)" >> "$GITHUB_ENV"
+
+      - name: Configure and build
+        run: |
+          cmake -S c -B build/pgwire-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DADBC_BUILD_TESTS=ON \
+            -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_MANAGER=ON \
+            -DADBC_DRIVER_SQLITE=OFF \
+            -DADBC_DRIVER_FLIGHTSQL=OFF \
+            -DADBC_USE_ASAN=OFF \
+            -DADBC_USE_UBSAN=OFF
+          cmake --build build/pgwire-ci --parallel 4
+
+      - name: Run PostgreSQL and Redshift artifact tests
+        run: |
+          ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
+          ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
+
+      - name: Install and test the Redshift driver through the driver manager
+        run: |
+          cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-prefix/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-prefix/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-prefix/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-install-smoke"
+          test -f "$RUNNER_TEMP/pgwire-prefix/include/arrow-adbc/driver/redshift.h"
+          PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-prefix/lib/pkgconfig" \
+            pkg-config --exists adbc-driver-redshift
+          "$RUNNER_TEMP/redshift-install-smoke" \
+            "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.dylib" \
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
+
+      - name: Stop temporary PostgreSQL server
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/pgdata/postmaster.pid"; then
+            pg_ctl -D "$RUNNER_TEMP/pgdata" stop -m immediate
+          fi
+
   cpp-redshift:
     name: C++ / Redshift Serverless
-    needs: cpp-postgresql
+    needs: [cpp-postgresql, cpp-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
