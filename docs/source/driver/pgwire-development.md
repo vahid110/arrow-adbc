@@ -144,3 +144,6 @@ add and remove a single-runner `/32` security-group rule automatically.
 - 2026-09-12: Moved table-type names and `pg_class.relkind` mappings into the
   backend profile. PostgreSQL retains its six existing table types while Redshift
   reports only the verified `table` and `view` types.
+- 2026-09-12: Verified a bound `INT32` parameter and binary result round trip on
+  Redshift. Marked binary parameters supported while keeping binary `COPY` query
+  transport disabled; these are separate protocol capabilities.
