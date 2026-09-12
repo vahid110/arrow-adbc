@@ -103,6 +103,70 @@ multi-row or pipeline insert optimization that preserves the current atomic/erro
 semantics. These do not belong in the core until a second implementation or a
 measured Redshift requirement demonstrates the extension point.
 
+## Production-readiness roadmap
+
+The MVP is not a production-readiness claim. Work in small, independently buildable
+and testable checkpoints; record the result of each checkpoint below. A green build
+is evidence, not a substitute for a clean-client test or documented limitations.
+
+### 1. Installable and usable driver
+
+- [ ] Publish a Redshift build/install/connection guide and explicit MVP limits.
+- [ ] Exercise the installed shared library through the ADBC driver manager from
+      a clean prefix, independent of the driver-linked unit test binary.
+- [ ] Add a CI smoke test for the installed artifact and its public header/package
+      metadata on Linux.
+
+### 2. Correctness and compatibility
+
+- [ ] Expand focused live Redshift tests for NULL values, errors, cancellation,
+      larger results, and type/metadata edge cases.
+- [ ] Keep PostgreSQL's complete integration suite and downstream client
+      compatibility tests green; preserve observed public behavior and ordering.
+- [ ] Define a documented support matrix with explicit unsupported features and
+      test evidence for each claim.
+
+### 3. Redshift-native capabilities
+
+- [ ] Add optional, short-lived IAM credential preparation without changing the
+      common libpq authentication path.
+- [ ] Benchmark prepared-insert throughput before choosing an optimization.
+- [ ] If justified, add staged S3 `COPY` ingestion with least-privilege IAM,
+      deterministic object cleanup, and a separate opt-in live test. Consider
+      `UNLOAD` only after a measured read-path need.
+- [ ] Extend `SUPER`, spatial, external-object, or materialized-view support only
+      with verified Redshift behavior and tests.
+
+### 4. Release and upstream alignment
+
+- [ ] Split backend-neutral PostgreSQL-wire refactors into small Apache-ready
+      contributions, independent of Redshift-specific behavior.
+- [ ] Publish open-source release artifacts, install instructions, checksums,
+      dependency requirements, and a tested platform matrix.
+- [ ] Rebase on a newer Apache baseline after checking upstream changes and
+      rerunning PostgreSQL, Redshift, and downstream compatibility suites.
+
+### Platform and architecture qualification
+
+The current evidence proves source builds, not prebuilt binary support. A release
+claim requires an installed-artifact smoke test on each target plus appropriate
+database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
+
+| Target | Current evidence | Release qualification still needed |
+| --- | --- | --- |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift | Clean install/client smoke and release artifact |
+| macOS Intel | C++ build | Clean install/client smoke and live database test |
+| macOS Apple Silicon | C++ build | Clean install/client smoke and live database test |
+| Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
+| Windows ARM64 | vcpkg release build | Clean install/client smoke and live database test |
+| Debian x86-64 | Not separately tested | Dedicated container build, install, client, and database tests |
+| Linux ARM64 | Not tested | Native or cross-build, install, client, and database tests |
+
+- [ ] Add a Linux x86-64 clean-prefix installation test first.
+- [ ] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
+- [ ] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
+- [ ] Publish packages only for targets whose release qualification is green.
+
 ## Redshift test-cost discipline
 
 - Use the `eu-central-1` Serverless workgroup `pgwire-ci`, capped at 4 RPUs.
