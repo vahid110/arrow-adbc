@@ -150,7 +150,6 @@ if(ADBC_BUILD_TESTS)
                 postgres_type_test.cc
                 postgresql_test.cc
                 redshift_test.cc
-                type_discovery.cc
                 type_discovery_test.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common

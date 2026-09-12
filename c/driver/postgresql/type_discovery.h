@@ -29,8 +29,20 @@ namespace adbcpq {
 
 class PostgresTypeResolver;
 
-std::string BuildTypeCatalogQuery(
-    const adbc::driver::pgwire::BackendProfile& profile);
+inline std::string BuildTypeCatalogQuery(
+    const adbc::driver::pgwire::BackendProfile& profile) {
+  std::string columns = "oid, typname, typreceive, typbasetype, typrelid";
+  std::string array_filter;
+  if (profile.capabilities.type_catalog_has_typarray) {
+    columns += ", typarray";
+    array_filter = " AND typreceive::TEXT != 'array_recv'";
+  }
+
+  return "SELECT " + columns +
+         " FROM pg_catalog.pg_type WHERE (typreceive != 0 OR typsend != 0) "
+         "AND typtype != 'r'" +
+         array_filter;
+}
 
 adbc::driver::Status DiscoverPostgresTypes(
     PGconn* conn, const adbc::driver::pgwire::BackendProfile& profile,
