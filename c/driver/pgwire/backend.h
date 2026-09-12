@@ -53,6 +53,11 @@ struct TableTypeMapping {
   std::string_view relkind;
 };
 
+struct TypeReceiveAlias {
+  std::string_view vendor_receive;
+  std::string_view canonical_receive;
+};
+
 inline constexpr TableTypeMapping kPostgreSQLTableTypes[] = {
     {"table", "r"},             {"view", "v"},
     {"materialized_view", "m"}, {"toast_table", "t"},
@@ -64,18 +69,34 @@ inline constexpr TableTypeMapping kRedshiftTableTypes[] = {
     {"view", "v"},
 };
 
+inline constexpr TypeReceiveAlias kRedshiftTypeReceiveAliases[] = {
+    {"varbyte_recv", "bytearecv"},
+};
+
 struct BackendProfile {
   BackendKind kind;
   std::string_view name;
   BackendCapabilities capabilities;
   const TableTypeMapping* table_types;
   std::size_t table_type_count;
+  const TypeReceiveAlias* type_receive_aliases;
+  std::size_t type_receive_alias_count;
 
   constexpr const TableTypeMapping* FindTableType(std::string_view type_name) const {
     for (std::size_t i = 0; i < table_type_count; i++) {
       if (table_types[i].name == type_name) return &table_types[i];
     }
     return nullptr;
+  }
+
+  constexpr std::string_view CanonicalTypeReceive(
+      std::string_view vendor_receive) const {
+    for (std::size_t i = 0; i < type_receive_alias_count; i++) {
+      if (type_receive_aliases[i].vendor_receive == vendor_receive) {
+        return type_receive_aliases[i].canonical_receive;
+      }
+    }
+    return vendor_receive;
   }
 
   static constexpr BackendProfile PostgreSQL() {
@@ -92,6 +113,8 @@ struct BackendProfile {
          /*transactional_ddl=*/true},
         kPostgreSQLTableTypes,
         sizeof(kPostgreSQLTableTypes) / sizeof(kPostgreSQLTableTypes[0]),
+        nullptr,
+        0,
     };
   }
 
@@ -109,6 +132,8 @@ struct BackendProfile {
          /*transactional_ddl=*/false},
         kRedshiftTableTypes,
         sizeof(kRedshiftTableTypes) / sizeof(kRedshiftTableTypes[0]),
+        kRedshiftTypeReceiveAliases,
+        sizeof(kRedshiftTypeReceiveAliases) / sizeof(kRedshiftTypeReceiveAliases[0]),
     };
   }
 };

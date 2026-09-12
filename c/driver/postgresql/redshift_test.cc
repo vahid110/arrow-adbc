@@ -120,7 +120,8 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
           "SELECT TRUE::BOOLEAN, (-7)::SMALLINT, 42::INTEGER, 9000000000::BIGINT, "
           "1.25::REAL, 2.5::DOUBLE PRECISION, '12.34'::DECIMAL(10, 2), "
           "'2026-09-12'::DATE, '12:34:56'::TIME, "
-          "'2026-09-12 12:34:56'::TIMESTAMP, 'redshift'::VARCHAR(16)",
+          "'2026-09-12 12:34:56'::TIMESTAMP, 'redshift'::VARCHAR(16), "
+          "TO_VARBYTE('414243', 'hex')",
           &error_),
       IsOkStatus(&error_));
 
@@ -129,7 +130,7 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
                                         &reader.rows_affected, &error_),
               IsOkStatus(&error_));
   ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
-  ASSERT_EQ(reader.fields.size(), 11U);
+  ASSERT_EQ(reader.fields.size(), 12U);
   EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_BOOL);
   EXPECT_EQ(reader.fields[1].type, NANOARROW_TYPE_INT16);
   EXPECT_EQ(reader.fields[2].type, NANOARROW_TYPE_INT32);
@@ -141,6 +142,7 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_EQ(reader.fields[8].type, NANOARROW_TYPE_TIME64);
   EXPECT_EQ(reader.fields[9].type, NANOARROW_TYPE_TIMESTAMP);
   EXPECT_EQ(reader.fields[10].type, NANOARROW_TYPE_STRING);
+  EXPECT_EQ(reader.fields[11].type, NANOARROW_TYPE_BINARY);
 
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_NE(reader.array->release, nullptr);
@@ -149,6 +151,11 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[1], 0), -7);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[2], 0), 42);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0), 9000000000);
+  const ArrowBufferView bytes =
+      ArrowArrayViewGetBytesUnsafe(reader.array_view->children[11], 0);
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.data.data),
+                             bytes.size_bytes),
+            "ABC");
 
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }

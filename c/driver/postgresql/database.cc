@@ -245,7 +245,8 @@ static Status InsertPgAttributeResult(
     const PqResultHelper& result, const std::shared_ptr<PostgresTypeResolver>& resolver);
 
 static Status InsertPgTypeResult(const PqResultHelper& result,
-                                 const std::shared_ptr<PostgresTypeResolver>& resolver);
+                                 const std::shared_ptr<PostgresTypeResolver>& resolver,
+                                 const adbc::driver::pgwire::BackendProfile& profile);
 
 static std::string BuildPgTypeQuery(bool has_typarray) {
   std::string columns = "oid, typname, typreceive, typbasetype, typrelid";
@@ -298,7 +299,7 @@ ORDER BY
   PqResultHelper types(conn, type_query);
   for (int32_t i = 0; i < max_attempts; i++) {
     UNWRAP_STATUS(types.Execute());
-    UNWRAP_STATUS(InsertPgTypeResult(types, resolver));
+    UNWRAP_STATUS(InsertPgTypeResult(types, resolver, backend_profile_));
   }
 
   type_resolver_ = std::move(resolver);
@@ -342,7 +343,8 @@ static Status InsertPgAttributeResult(
 }
 
 static Status InsertPgTypeResult(const PqResultHelper& result,
-                                 const std::shared_ptr<PostgresTypeResolver>& resolver) {
+                                 const std::shared_ptr<PostgresTypeResolver>& resolver,
+                                 const adbc::driver::pgwire::BackendProfile& profile) {
   if (result.NumColumns() != 5 && result.NumColumns() != 6) {
     return Status::Internal(
         "Expected 5 or 6 columns from type resolver pg_type query but got ",
@@ -378,7 +380,7 @@ static Status InsertPgTypeResult(const PqResultHelper& result,
 
     type_item.oid = static_cast<uint32_t>(oid);
     type_item.typname = typname;
-    type_item.typreceive = typreceive;
+    type_item.typreceive = profile.CanonicalTypeReceive(typreceive).data();
     type_item.class_oid = static_cast<uint32_t>(typrelid);
     type_item.base_oid = static_cast<uint32_t>(typbasetype);
 
