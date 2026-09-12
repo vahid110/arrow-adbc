@@ -155,15 +155,15 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift | Release artifact |
-| macOS Intel | C++ build | Clean install/client smoke and live database test |
-| macOS Apple Silicon | C++ build | Clean install/client smoke and live database test |
+| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
+| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
 | Windows ARM64 | vcpkg release build | Clean install/client smoke and live database test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
-- [ ] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
+- [ ] Add Windows x86-64/ARM64 installation tests (macOS Intel/Apple Silicon done).
 - [x] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
 - [ ] Publish packages only for targets whose release qualification is green.
 
@@ -353,3 +353,9 @@ owner/repository IDs plus the development branch.
   driver manager and independently installed Redshift shared library on Ubuntu
   x86-64. The same run passed Ubuntu ARM64 and Debian x86-64 PostgreSQL/install
   gates, and revoked the temporary AWS ingress rule.
+- 2026-09-12: Added macOS Intel and Apple Silicon PostgreSQL 18 plus clean-prefix
+  Redshift library-loading jobs. The initial Apple Silicon run found a CI-only
+  libpq discovery gap; using Homebrew's separate `libpq` package corrected it.
+  GitHub Actions run `34710421526` passed both macOS jobs, all three Linux
+  platform jobs, the eleven-test live Redshift suite, and AWS ingress cleanup.
+  Windows installation and macOS live Redshift-client qualification remain open.
