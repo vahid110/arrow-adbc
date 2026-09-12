@@ -58,6 +58,13 @@ TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
   EXPECT_EQ(SelectQueryResultMode(redshift, true, true), QueryResultMode::kText);
 }
 
+TEST(BackendProfileTest, BulkIngestModeIsCapabilityDriven) {
+  EXPECT_EQ(SelectBulkIngestMode(BackendProfile::PostgreSQL()),
+            BulkIngestMode::kBinaryCopy);
+  EXPECT_EQ(SelectBulkIngestMode(BackendProfile::Redshift()),
+            BulkIngestMode::kUnsupported);
+}
+
 TEST(BackendProfileTest, DetectsRedshiftFromServerVersion) {
   const auto redshift = DetectBackendProfile(
       "PostgreSQL 8.0.2 on x86_64-pc-linux-gnu, Redshift 1.0.12345");
