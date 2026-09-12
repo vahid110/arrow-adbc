@@ -103,6 +103,8 @@ jobs:
           test -f "$RUNNER_TEMP/pgwire-prefix/include/arrow-adbc/driver/redshift.h"
           test -f "$RUNNER_TEMP/pgwire-prefix/lib/pkgconfig/adbc-driver-redshift.pc"
           test -f "$RUNNER_TEMP/pgwire-prefix/lib/cmake/AdbcDriverRedshift/AdbcDriverRedshiftConfig.cmake"
+          PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-prefix/lib/pkgconfig" \
+            pkg-config --exists adbc-driver-redshift
           "$RUNNER_TEMP/redshift-install-smoke" \
             "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so" \
             "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
