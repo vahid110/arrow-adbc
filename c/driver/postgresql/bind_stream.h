@@ -236,7 +236,8 @@ struct BindStream {
     return Status::Ok();
   }
 
-  Status BindAndExecuteCurrentRow(PGconn* pg_conn, PGresult** result_out,
+  Status BindAndExecuteCurrentRow(PGconn* pg_conn,
+                                  adbc::driver::pgwire::UniqueResult* result_out,
                                   int result_format) {
     param_buffer->size_bytes = 0;
     int64_t last_offset = 0;
@@ -282,21 +283,19 @@ struct BindStream {
       last_offset += param_lengths[col];
     }
 
-    PGresult* result =
+    adbc::driver::pgwire::UniqueResult result(
         PQexecPrepared(pg_conn, /*stmtName=*/"",
                        /*nParams=*/bind_schema->n_children, param_values.data(),
-                       param_lengths.data(), param_formats.data(), result_format);
+                       param_lengths.data(), param_formats.data(), result_format));
 
-    ExecStatusType pg_status = PQresultStatus(result);
+    ExecStatusType pg_status = PQresultStatus(result.get());
     if (pg_status != PGRES_COMMAND_OK && pg_status != PGRES_TUPLES_OK) {
-      Status status =
-          MakeStatus(result, "[libpq] Failed to execute prepared statement: {} {}",
-                     PQresStatus(pg_status), PQerrorMessage(pg_conn));
-      PQclear(result);
-      return status;
+      return MakeStatus(result.get(),
+                        "[libpq] Failed to execute prepared statement: {} {}",
+                        PQresStatus(pg_status), PQerrorMessage(pg_conn));
     }
 
-    *result_out = result;
+    *result_out = std::move(result);
     return Status::Ok();
   }
 
@@ -362,17 +361,13 @@ struct BindStream {
                         PQerrorMessage(pg_conn));
     }
 
-    PGresult* result = PQgetResult(pg_conn);
-    ExecStatusType pg_status = PQresultStatus(result);
+    adbc::driver::pgwire::UniqueResult result(PQgetResult(pg_conn));
+    ExecStatusType pg_status = PQresultStatus(result.get());
     if (pg_status != PGRES_COMMAND_OK) {
-      Status status =
-          MakeStatus(result, "[libpq] Failed to execute COPY statement: {} {}",
-                     PQresStatus(pg_status), PQerrorMessage(pg_conn));
-      PQclear(result);
-      return status;
+      return MakeStatus(result.get(),
+                        "[libpq] Failed to execute COPY statement: {} {}",
+                        PQresStatus(pg_status), PQerrorMessage(pg_conn));
     }
-
-    PQclear(result);
     return Status::Ok();
   }
 
@@ -407,10 +402,8 @@ struct BindStream {
       execution_status = EnsureNextRow();
       if (!execution_status.ok() || current->release == nullptr) break;
 
-      PGresult* raw_result = nullptr;
-      execution_status =
-          BindAndExecuteCurrentRow(pg_conn, &raw_result, kPgBinaryFormat);
-      adbc::driver::pgwire::UniqueResult result(raw_result);
+      adbc::driver::pgwire::UniqueResult result;
+      execution_status = BindAndExecuteCurrentRow(pg_conn, &result, kPgBinaryFormat);
       if (!execution_status.ok()) break;
       if (rows_affected) (*rows_affected)++;
     }

@@ -36,6 +36,7 @@
 #include <nanoarrow/nanoarrow.h>
 
 #include "driver/common/utils.h"
+#include "driver/pgwire/libpq_raii.h"
 #include "postgres_util.h"
 #include "result_helper.h"
 
@@ -144,20 +145,20 @@ AdbcStatusCode PostgresDatabase::Connect(PGconn** conn, struct AdbcError* error)
         "[libpq] Must set database option 'uri' before creating a connection");
     return ADBC_STATUS_INVALID_STATE;
   }
-  *conn = PQconnectdb(uri_.c_str());
-  if (PQstatus(*conn) != CONNECTION_OK) {
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri_.c_str()));
+  if (PQstatus(connection.get()) != CONNECTION_OK) {
     InternalAdbcSetError(error, "%s%s",
-                         "[libpq] Failed to connect: ", PQerrorMessage(*conn));
-    PQfinish(*conn);
-    *conn = nullptr;
+                         "[libpq] Failed to connect: ",
+                         PQerrorMessage(connection.get()));
     return ADBC_STATUS_IO;
   }
+  *conn = connection.release();
   open_connections_++;
   return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode PostgresDatabase::Disconnect(PGconn** conn, struct AdbcError* error) {
-  PQfinish(*conn);
+  adbc::driver::pgwire::UniqueConnection connection(*conn);
   *conn = nullptr;
   if (--open_connections_ < 0) {
     InternalAdbcSetError(error, "%s", "[libpq] Open connection count underflowed");

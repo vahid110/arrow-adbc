@@ -255,10 +255,10 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       return Status::Ok();
     }
 
-    PGresult* result;
+    adbc::driver::pgwire::UniqueResult result;
     UNWRAP_STATUS(bind_stream_->BindAndExecuteCurrentRow(
         conn_, &result, /*result_format*/ kPgBinaryFormat));
-    helper_.SetResult(result);
+    helper_.SetResult(result.release());
     if (affected_rows) {
       (*affected_rows) += helper_.AffectedRows();
     }

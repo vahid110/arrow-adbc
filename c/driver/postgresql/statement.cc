@@ -48,6 +48,7 @@
 #include "driver/common/options.h"
 #include "driver/common/utils.h"
 #include "driver/framework/utility.h"
+#include "driver/pgwire/libpq_raii.h"
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
@@ -438,19 +439,17 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
       break;
     case IngestMode::kReplace: {
       std::string drop = "DROP TABLE IF EXISTS " + *escaped_table;
-      PGresult* result = PQexecParams(conn, drop.c_str(), /*nParams=*/0,
-                                      /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
-                                      /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
-                                      /*resultFormat=*/1 /*(binary)*/);
-      if (PQresultStatus(result) != PGRES_COMMAND_OK) {
-        AdbcStatusCode code =
-            MakeStatus(result, "[libpq] Failed to drop table: {}\nQuery was: {}",
-                       PQerrorMessage(conn), drop)
-                .ToAdbc(error);
-        PQclear(result);
-        return code;
+      adbc::driver::pgwire::UniqueResult result(
+          PQexecParams(conn, drop.c_str(), /*nParams=*/0,
+                       /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
+                       /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
+                       /*resultFormat=*/1 /*(binary)*/));
+      if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+        return MakeStatus(result.get(),
+                          "[libpq] Failed to drop table: {}\nQuery was: {}",
+                          PQerrorMessage(conn), drop)
+            .ToAdbc(error);
       }
-      PQclear(result);
       break;
     }
     case IngestMode::kCreateAppend:
@@ -501,19 +500,17 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
 
   create += ")";
   InternalAdbcSetError(error, "%s%s", "[libpq] ", create.c_str());
-  PGresult* result = PQexecParams(conn, create.c_str(), /*nParams=*/0,
-                                  /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
-                                  /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
-                                  /*resultFormat=*/1 /*(binary)*/);
-  if (PQresultStatus(result) != PGRES_COMMAND_OK) {
-    AdbcStatusCode code =
-        MakeStatus(result, "[libpq] Failed to create table: {}\nQuery was: {}",
-                   PQerrorMessage(conn), create)
-            .ToAdbc(error);
-    PQclear(result);
-    return code;
+  adbc::driver::pgwire::UniqueResult result(
+      PQexecParams(conn, create.c_str(), /*nParams=*/0,
+                   /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
+                   /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
+                   /*resultFormat=*/1 /*(binary)*/));
+  if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+    return MakeStatus(result.get(),
+                      "[libpq] Failed to create table: {}\nQuery was: {}",
+                      PQerrorMessage(conn), create)
+        .ToAdbc(error);
   }
-  PQclear(result);
   if (ingest_.mode == IngestMode::kCreateAppend) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
@@ -783,17 +780,13 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   query += " (";
   query += escaped_field_list;
   query += ") FROM STDIN WITH (FORMAT binary)";
-  PGresult* result = PQexec(connection_->conn(), query.c_str());
-  if (PQresultStatus(result) != PGRES_COPY_IN) {
-    AdbcStatusCode code =
-        MakeStatus(result, "[libpq] COPY query failed: {}\nQuery was: {}",
-                   PQerrorMessage(connection_->conn()), query)
-            .ToAdbc(error);
-    PQclear(result);
-    return code;
+  adbc::driver::pgwire::UniqueResult result(
+      PQexec(connection_->conn(), query.c_str()));
+  if (PQresultStatus(result.get()) != PGRES_COPY_IN) {
+    return MakeStatus(result.get(), "[libpq] COPY query failed: {}\nQuery was: {}",
+                      PQerrorMessage(connection_->conn()), query)
+        .ToAdbc(error);
   }
-
-  PQclear(result);
   RAISE_STATUS(
       error, bind_stream.ExecuteCopy(connection_->conn(), *connection_->type_resolver(),
                                      has_copy_target_types ? &copy_target_types : nullptr,

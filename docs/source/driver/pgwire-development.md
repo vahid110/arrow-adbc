@@ -35,7 +35,7 @@ authentication exchanges itself.
 
 - [x] Pin and record the upstream baseline.
 - [x] Record the current PostgreSQL build/test baseline.
-- [ ] Extract libpq connection, result, cancellation, and error lifetime helpers.
+- [x] Extract libpq connection, result, cancellation, and error lifetime helpers.
 - [x] Separate text-result and binary-COPY query paths.
 - [ ] Separate type discovery, Arrow mapping, and value encoding.
 - [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
@@ -159,3 +159,7 @@ single-runner `/32` security-group rule automatically.
   a successful two-row create ingest and full rollback when the second appended
   row violated a `NOT NULL` constraint. The complete eight-test Redshift suite
   passed, and all temporary tables and connections were cleaned up.
+- 2026-09-12: Completed libpq lifetime extraction across the PostgreSQL-wire
+  implementation. Connection, cancellation, prepared/query results, transaction
+  commands, table DDL, and COPY setup/completion now use the shared scoped handles;
+  no manual `PQfinish`, `PQfreeCancel`, or `PQclear` calls remain in the driver.
