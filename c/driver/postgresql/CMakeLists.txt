@@ -33,7 +33,8 @@ set(PGWIRE_DRIVER_SOURCES
     postgresql.cc
     result_helper.cc
     result_reader.cc
-    statement.cc)
+    statement.cc
+    type_discovery.cc)
 
 add_arrow_lib(adbc_driver_postgresql
               SOURCES
@@ -146,6 +147,7 @@ if(ADBC_BUILD_TESTS)
                 postgres_type_test.cc
                 postgresql_test.cc
                 redshift_test.cc
+                type_discovery_test.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common
                 adbc_validation
