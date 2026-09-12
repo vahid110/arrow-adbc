@@ -38,7 +38,7 @@ authentication exchanges itself.
 - [x] Extract libpq connection, result, cancellation, and error lifetime helpers.
 - [x] Separate text-result and binary-COPY query paths.
 - [x] Separate type discovery, Arrow mapping, and value encoding.
-- [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
+- [x] Move PostgreSQL metadata SQL behind a normalized metadata provider.
 - [x] Isolate PostgreSQL transaction policy.
 - [x] Construct the existing PostgreSQL driver from the reusable core and
       PostgreSQL semantics, with no intended behavior change.
@@ -75,8 +75,8 @@ Every structural milestone must:
 
 ## Current work
 
-Move backend metadata SQL behind a normalized provider, then run the complete
-PostgreSQL and Redshift regression gates. Keep Redshift CI manual until narrowly
+Run the complete PostgreSQL and Redshift regression gates, then document the MVP
+support matrix and remaining post-MVP work. Keep Redshift CI manual until narrowly
 scoped AWS credentials can add and remove a single-runner `/32` security-group
 rule automatically.
 
@@ -185,3 +185,8 @@ rule automatically.
   Catalog parsing feeds the existing type resolver, Arrow schema mapping remains
   in the type model, and wire value decoding/encoding remains in result and bind
   paths. Focused query-plan tests and a live Redshift scalar-mapping test passed.
+- 2026-09-12: Moved catalog, schema, table, column, constraint, table-schema, and
+  table-type SQL construction behind a normalized metadata query provider. The
+  provider consumes only the backend profile, so core `GetObjects` iteration no
+  longer owns backend SQL or table-kind mapping. Focused provider tests and live
+  Redshift `GetObjects`, `GetTableSchema`, and `GetTableTypes` tests passed.
