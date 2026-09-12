@@ -115,6 +115,24 @@ jobs:
           if (-not $?) { throw "failed to configure CMake" }
 
           cmake --build .\build\${{ matrix.config }} --target install --config ${{ matrix.config }} --parallel
+      - name: Verify installed Redshift shared library
+        run: |
+          $prefix = Join-Path $pwd "local\${{ matrix.config }}"
+          $includeDir = Join-Path $prefix "include"
+          $libDir = Join-Path $prefix "lib"
+          $binDir = Join-Path $prefix "bin"
+          $driverDll = Join-Path $binDir "adbc_driver_redshift.dll"
+          $managerLib = Join-Path $libDir "adbc_driver_manager.lib"
+          $smokeExe = Join-Path $env:RUNNER_TEMP "redshift-install-smoke.exe"
+          if (-not (Test-Path $driverDll)) { throw "Redshift DLL was not installed" }
+          if (-not (Test-Path $managerLib)) { throw "driver manager import library was not installed" }
+          & cl.exe /nologo /std:c11 "/I$includeDir" `
+            .\c\driver\pgwire\redshift_install_smoke.c "/Fe:$smokeExe" `
+            /link "/LIBPATH:$libDir" adbc_driver_manager.lib
+          if ($LASTEXITCODE -ne 0) { throw "failed to compile installed client" }
+          $env:PATH = "$binDir;$env:PATH"
+          & $smokeExe $driverDll --load-only
+          if ($LASTEXITCODE -ne 0) { throw "failed to load installed Redshift DLL" }
       - name: Test (C++)
         env:
           BUILD_ALL: "0"

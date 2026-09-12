@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include <arrow-adbc/adbc.h>
+#include <arrow-adbc/adbc_driver_manager.h>
 #include <arrow-adbc/driver/redshift.h>
 
 static void ReleaseError(struct AdbcError* error) {
@@ -31,9 +32,35 @@ static void ReleaseError(struct AdbcError* error) {
 
 int main(int argc, char** argv) {
   if (argc != 3 && argc != 4) {
-    fprintf(stderr, "usage: %s DRIVER_LIBRARY URI [--expect-postgresql-rejection]\n",
-            argv[0]);
+    fprintf(stderr,
+            "usage: %s DRIVER_LIBRARY URI [--expect-postgresql-rejection]\n"
+            "       %s DRIVER_LIBRARY --load-only\n",
+            argv[0], argv[0]);
     return 2;
+  }
+
+  if (argc == 3 && strcmp(argv[2], "--load-only") == 0) {
+    struct AdbcError error = ADBC_ERROR_INIT;
+    struct AdbcDriver driver = {0};
+    AdbcStatusCode status =
+        AdbcLoadDriver(argv[1], "AdbcDriverInit", ADBC_VERSION_1_1_0, &driver, &error);
+    if (status != ADBC_STATUS_OK) {
+      fprintf(stderr, "installed Redshift driver could not load (status %d): %s\n",
+              (int)status, error.message == NULL ? "no error message" : error.message);
+    }
+    if (driver.release != NULL) {
+      AdbcStatusCode release_status = driver.release(&driver, &error);
+      if (status == ADBC_STATUS_OK && release_status != ADBC_STATUS_OK) {
+        fprintf(stderr, "installed Redshift driver could not release (status %d): %s\n",
+                (int)release_status,
+                error.message == NULL ? "no error message" : error.message);
+        status = release_status;
+      }
+    }
+    ReleaseError(&error);
+    if (status != ADBC_STATUS_OK) return 1;
+    puts("installed Redshift driver loaded successfully");
+    return 0;
   }
 
   const bool expect_rejection =
