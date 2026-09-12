@@ -35,9 +35,22 @@ permissions:
 
 jobs:
   cpp-postgresql:
-    name: C++ / PostgreSQL 18
-    runs-on: ubuntu-latest
-    container: ubuntu:24.04
+    name: C++ / PostgreSQL 18 (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Ubuntu x86-64
+            runner: ubuntu-latest
+            image: ubuntu:24.04
+          - platform: Debian x86-64
+            runner: ubuntu-latest
+            image: debian:bookworm
+          - platform: Ubuntu ARM64
+            runner: ubuntu-24.04-arm
+            image: ubuntu:24.04
+    container: ${{ matrix.image }}
     services:
       postgres:
         image: postgres:18
