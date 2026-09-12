@@ -177,7 +177,7 @@ static const char* kConstraintsQueryAll =
 
 class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
  public:
-  explicit PostgresGetObjectsHelper(PGconn* conn)
+  PostgresGetObjectsHelper(PGconn* conn, bool load_constraints)
       : current_database_(PQdb(conn)),
         all_catalogs_(conn, kCatalogQueryAll),
         some_catalogs_(conn, CatalogQuery()),
@@ -188,7 +188,8 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
         all_columns_(conn, kColumnsQueryAll),
         some_columns_(conn, ColumnsQuery()),
         all_constraints_(conn, kConstraintsQueryAll),
-        some_constraints_(conn, ConstraintsQuery()) {}
+        some_constraints_(conn, ConstraintsQuery()),
+        load_constraints_(load_constraints) {}
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -284,13 +285,16 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
       next_column_ = all_columns_.Row(-1);
     }
 
-    if (column_filter.has_value()) {
-      UNWRAP_STATUS(some_constraints_.Execute(
-          {std::string(schema), std::string(table), std::string(*column_filter)}))
-      next_constraint_ = some_constraints_.Row(-1);
-    } else {
-      UNWRAP_STATUS(all_constraints_.Execute({std::string(schema), std::string(table)}));
-      next_constraint_ = all_constraints_.Row(-1);
+    if (load_constraints_) {
+      if (column_filter.has_value()) {
+        UNWRAP_STATUS(some_constraints_.Execute(
+            {std::string(schema), std::string(table), std::string(*column_filter)}))
+        next_constraint_ = some_constraints_.Row(-1);
+      } else {
+        UNWRAP_STATUS(
+            all_constraints_.Execute({std::string(schema), std::string(table)}));
+        next_constraint_ = all_constraints_.Row(-1);
+      }
     }
 
     return Status::Ok();
@@ -374,6 +378,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   PqResultHelper some_columns_;
   PqResultHelper all_constraints_;
   PqResultHelper some_constraints_;
+  bool load_constraints_;
 
   // Iterator state for the catalogs/schema/table/column queries
   PqResultRow next_catalog_;
@@ -542,19 +547,25 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
         infos.push_back({info_codes[i], std::string(VendorName())});
         break;
       case ADBC_INFO_VENDOR_VERSION: {
-        RAISE_ADBC(EnsureTransaction(error));
-        // Gives a version in the form 140000 instead of 14.0.0
-        const char* stmt = "SHOW server_version_num";
-        auto result_helper = PqResultHelper{conn_, std::string(stmt)};
-        RAISE_STATUS(error, result_helper.Execute());
-        auto it = result_helper.begin();
-        if (it == result_helper.end()) {
-          InternalAdbcSetError(error, "[libpq] PostgreSQL returned no rows for '%s'",
-                               stmt);
-          return ADBC_STATUS_INTERNAL;
+        if (backend_profile().kind == adbc::driver::pgwire::BackendKind::kRedshift) {
+          const auto& version = VendorVersion();
+          infos.push_back({info_codes[i], std::to_string(version[0]) + "." +
+                                              std::to_string(version[1]) + "." +
+                                              std::to_string(version[2])});
+        } else {
+          RAISE_ADBC(EnsureTransaction(error));
+          // Gives a version in the form 140000 instead of 14.0.0
+          const char* stmt = "SHOW server_version_num";
+          auto result_helper = PqResultHelper{conn_, std::string(stmt)};
+          RAISE_STATUS(error, result_helper.Execute());
+          auto it = result_helper.begin();
+          if (it == result_helper.end()) {
+            InternalAdbcSetError(error, "[libpq] PostgreSQL returned no rows for '%s'",
+                                 stmt);
+            return ADBC_STATUS_INTERNAL;
+          }
+          infos.push_back({info_codes[i], (*it)[0].data});
         }
-        const char* server_version_num = (*it)[0].data;
-        infos.push_back({info_codes[i], server_version_num});
         break;
       }
       case ADBC_INFO_DRIVER_NAME:
@@ -584,7 +595,8 @@ AdbcStatusCode PostgresConnection::GetObjects(
     struct AdbcConnection* connection, int c_depth, const char* catalog,
     const char* db_schema, const char* table_name, const char** table_type,
     const char* column_name, struct ArrowArrayStream* out, struct AdbcError* error) {
-  PostgresGetObjectsHelper helper(conn_);
+  PostgresGetObjectsHelper helper(
+      conn_, backend_profile().capabilities.metadata_constraints);
 
   const auto catalog_filter =
       catalog ? std::make_optional(std::string_view(catalog)) : std::nullopt;

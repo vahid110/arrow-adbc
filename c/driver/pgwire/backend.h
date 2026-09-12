@@ -36,6 +36,7 @@ struct BackendCapabilities {
   bool binary_parameters = true;
   bool binary_query_copy = false;
   bool binary_ingest_copy = false;
+  bool type_catalog_has_typarray = false;
   bool metadata_constraints = false;
   bool metadata_statistics = false;
   bool transactional_ddl = false;
@@ -54,6 +55,7 @@ struct BackendProfile {
          /*binary_parameters=*/true,
          /*binary_query_copy=*/true,
          /*binary_ingest_copy=*/true,
+         /*type_catalog_has_typarray=*/true,
          /*metadata_constraints=*/true,
          /*metadata_statistics=*/true,
          /*transactional_ddl=*/true},
@@ -68,6 +70,7 @@ struct BackendProfile {
          /*binary_parameters=*/false,
          /*binary_query_copy=*/false,
          /*binary_ingest_copy=*/false,
+         /*type_catalog_has_typarray=*/false,
          /*metadata_constraints=*/false,
          /*metadata_statistics=*/false,
          /*transactional_ddl=*/false},
