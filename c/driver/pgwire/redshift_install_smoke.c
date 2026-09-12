@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include <arrow-adbc/adbc.h>
+#include <arrow-adbc/driver/redshift.h>
 
 static void ReleaseError(struct AdbcError* error) {
   if (error->release != NULL) error->release(error);
