@@ -29,6 +29,7 @@ TEST(BackendProfileTest, PostgreSQLCapabilitiesPreserveCurrentFastPaths) {
   EXPECT_TRUE(profile.capabilities.binary_parameters);
   EXPECT_TRUE(profile.capabilities.binary_query_copy);
   EXPECT_TRUE(profile.capabilities.binary_ingest_copy);
+  EXPECT_TRUE(profile.capabilities.type_catalog_has_typarray);
   EXPECT_TRUE(profile.capabilities.metadata_constraints);
   EXPECT_TRUE(profile.capabilities.metadata_statistics);
 }
@@ -41,6 +42,7 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
   EXPECT_FALSE(profile.capabilities.binary_parameters);
   EXPECT_FALSE(profile.capabilities.binary_query_copy);
   EXPECT_FALSE(profile.capabilities.binary_ingest_copy);
+  EXPECT_FALSE(profile.capabilities.type_catalog_has_typarray);
   EXPECT_FALSE(profile.capabilities.metadata_constraints);
   EXPECT_FALSE(profile.capabilities.metadata_statistics);
 }

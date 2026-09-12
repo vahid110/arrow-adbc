@@ -247,6 +247,20 @@ static Status InsertPgAttributeResult(
 static Status InsertPgTypeResult(const PqResultHelper& result,
                                  const std::shared_ptr<PostgresTypeResolver>& resolver);
 
+static std::string BuildPgTypeQuery(bool has_typarray) {
+  std::string columns = "oid, typname, typreceive, typbasetype, typrelid";
+  std::string array_filter;
+  if (has_typarray) {
+    columns += ", typarray";
+    array_filter = " AND typreceive::TEXT != 'array_recv'";
+  }
+
+  return "SELECT " + columns +
+         " FROM pg_catalog.pg_type WHERE (typreceive != 0 OR typsend != 0) "
+         "AND typtype != 'r'" +
+         array_filter;
+}
+
 Status PostgresDatabase::RebuildTypeResolver(PGconn* conn) {
   // We need a few queries to build the resolver. The current strategy might
   // fail for some recursive definitions (e.g., arrays of records of arrays).
@@ -267,10 +281,8 @@ ORDER BY
   // recursive definitions (e.g., record types with array column). This currently won't
   // handle range types because those rows don't have child OID information. Arrays types
   // are inserted after a successful insert of the element type.
-  std::string type_query =
-      "SELECT oid, typname, typreceive, typbasetype, typrelid, typarray FROM "
-      "pg_catalog.pg_type WHERE (typreceive != 0 OR typsend != 0) AND typtype != 'r' AND "
-      "typreceive::TEXT != 'array_recv'";
+  const std::string type_query = BuildPgTypeQuery(
+      backend_profile_.capabilities.type_catalog_has_typarray);
 
   // Create a new type resolver (this instance's type_resolver_ member
   // will be updated at the end if this succeeds).

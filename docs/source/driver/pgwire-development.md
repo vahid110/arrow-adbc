@@ -114,3 +114,6 @@ query, metadata, type, transaction, or COPY behavior.
   servers retain the PostgreSQL-compatible default.
 - 2026-09-12: GitHub Actions run `34686322856` passed the complete PostgreSQL 18
   integration suite after the result-transport and backend-detection refactors.
+- 2026-09-12: Made type-catalog discovery capability-aware for Redshift's missing
+  `pg_type.typarray`, used the cached Redshift vendor version for `GetInfo`, and
+  disabled unsupported constraint discovery without affecting PostgreSQL SQL.
