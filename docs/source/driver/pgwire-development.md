@@ -337,3 +337,9 @@ owner/repository IDs plus the development branch.
   `34709216855` verified the installed public header, pkg-config/CMake metadata,
   and rejection of a PostgreSQL server; the full PostgreSQL 18 and nine-test live
   Redshift suites passed, and the temporary AWS ingress rule was revoked.
+- 2026-09-12: Started correctness hardening with live tests for nullable result
+  columns and statement/connection recovery after a SQL error. GitHub Actions
+  run `34709484319` passed PostgreSQL 18, the installed-client smoke check, and
+  all eleven focused live Redshift tests. The temporary AWS ingress rule was
+  revoked. Cancellation, larger results, and further type/metadata edge cases
+  remain open.
