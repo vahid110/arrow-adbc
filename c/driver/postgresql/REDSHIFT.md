@@ -76,10 +76,10 @@ build/redshift-install-smoke "$prefix/lib/libadbc_driver_redshift.so" \
 ```
 
 On macOS use `libadbc_driver_redshift.dylib` instead of `.so`. The live smoke
-connection is opt-in; do not set the URI in shared logs. CI also runs this client
-against PostgreSQL and requires Redshift's driver to reject that server, proving
-that the installed library loads and selects the correct backend without using
-billable Redshift compute.
+connection is opt-in; do not set the URI in shared logs. CI runs this client
+against PostgreSQL on Linux and macOS and requires Redshift's driver to reject
+that server. It also connects through the independently installed client during
+the existing Ubuntu x86-64 live Redshift gate.
 
 ## Current behavior and limits
 
@@ -91,7 +91,7 @@ billable Redshift compute.
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
 | Ingest | Correctness-first atomic prepared inserts; no Redshift S3 `COPY` or `UNLOAD` path |
-| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64 and Debian x86-64 have source-build, PostgreSQL 18, and clean-prefix rejection checks; macOS Intel/Apple Silicon and Windows x64/ARM64 have source-build checks; release artifacts and other platforms' database-backed installed-client qualification remain pending |
+| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 have source-build checks; release artifacts and other platforms' database-backed installed-client qualification remain pending |
 
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
 the development branch. The roadmap records what each gate proves and what it
