@@ -47,8 +47,7 @@ PostgresDatabase::PostgresDatabase() : open_connections_(0) {
   type_resolver_ = std::make_shared<PostgresTypeResolver>();
 }
 
-PostgresDatabase::PostgresDatabase(
-    adbc::driver::pgwire::BackendProfile required_profile)
+PostgresDatabase::PostgresDatabase(adbc::driver::pgwire::BackendProfile required_profile)
     : open_connections_(0),
       backend_profile_(required_profile),
       required_backend_(required_profile.kind) {
@@ -157,8 +156,7 @@ AdbcStatusCode PostgresDatabase::Connect(PGconn** conn, struct AdbcError* error)
   adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri_.c_str()));
   if (PQstatus(connection.get()) != CONNECTION_OK) {
     InternalAdbcSetError(error, "%s%s",
-                         "[libpq] Failed to connect: ",
-                         PQerrorMessage(connection.get()));
+                         "[libpq] Failed to connect: ", PQerrorMessage(connection.get()));
     return ADBC_STATUS_IO;
   }
   *conn = connection.release();
@@ -241,8 +239,7 @@ Status PostgresDatabase::InitVersions(PGconn* conn) {
   }
 
   std::string_view version_info = helper.Row(0)[0].value();
-  const auto detected_profile =
-      adbc::driver::pgwire::DetectBackendProfile(version_info);
+  const auto detected_profile = adbc::driver::pgwire::DetectBackendProfile(version_info);
   if (required_backend_.has_value() && detected_profile.kind != *required_backend_) {
     return Status::InvalidArgument("[libpq] Expected ", backend_profile_.name,
                                    " but connected to ", detected_profile.name);

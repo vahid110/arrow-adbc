@@ -364,8 +364,7 @@ struct BindStream {
     adbc::driver::pgwire::UniqueResult result(PQgetResult(pg_conn));
     ExecStatusType pg_status = PQresultStatus(result.get());
     if (pg_status != PGRES_COMMAND_OK) {
-      return MakeStatus(result.get(),
-                        "[libpq] Failed to execute COPY statement: {} {}",
+      return MakeStatus(result.get(), "[libpq] Failed to execute COPY statement: {} {}",
                         PQresStatus(pg_status), PQerrorMessage(pg_conn));
     }
     return Status::Ok();
@@ -394,8 +393,7 @@ struct BindStream {
 
     // The transaction is already open in autocommit mode, so timezone cleanup
     // must not independently commit it.
-    Status execution_status =
-        SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false);
+    Status execution_status = SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false);
     if (execution_status.ok()) execution_status = Prepare(pg_conn, query);
     while (true) {
       if (!execution_status.ok()) break;

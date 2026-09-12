@@ -27,31 +27,25 @@ namespace adbcpq {
 namespace {
 
 TEST(MetadataQuerySetTest, TableTypesAreBackendOwned) {
-  MetadataQuerySet postgresql(
-      adbc::driver::pgwire::BackendProfile::PostgreSQL());
+  MetadataQuerySet postgresql(adbc::driver::pgwire::BackendProfile::PostgreSQL());
   MetadataQuerySet redshift(adbc::driver::pgwire::BackendProfile::Redshift());
 
   EXPECT_EQ(postgresql.TableTypeNames().size(), 6);
-  EXPECT_EQ(postgresql.TableTypesArrayLiteral({}),
-            R"({"r", "v", "m", "t", "f", "p"})");
-  EXPECT_EQ(redshift.TableTypeNames(),
-            (std::vector<std::string>{"table", "view"}));
+  EXPECT_EQ(postgresql.TableTypesArrayLiteral({}), R"({"r", "v", "m", "t", "f", "p"})");
+  EXPECT_EQ(redshift.TableTypeNames(), (std::vector<std::string>{"table", "view"}));
   EXPECT_EQ(redshift.TableTypesArrayLiteral({}), R"({"r", "v"})");
-  EXPECT_EQ(redshift.TableTypesArrayLiteral({"view", "foreign_table"}),
-            R"({"v"})");
+  EXPECT_EQ(redshift.TableTypesArrayLiteral({"view", "foreign_table"}), R"({"v"})");
 }
 
 TEST(MetadataQuerySetTest, CapabilitiesGuardOptionalQueries) {
-  MetadataQuerySet postgresql(
-      adbc::driver::pgwire::BackendProfile::PostgreSQL());
+  MetadataQuerySet postgresql(adbc::driver::pgwire::BackendProfile::PostgreSQL());
   MetadataQuerySet redshift(adbc::driver::pgwire::BackendProfile::Redshift());
 
   EXPECT_TRUE(postgresql.LoadsConstraints());
   EXPECT_FALSE(redshift.LoadsConstraints());
   EXPECT_NE(postgresql.Constraints(false).find("pg_catalog.pg_constraint"),
             std::string::npos);
-  EXPECT_NE(redshift.TableSchema().find("pg_catalog.pg_attribute"),
-            std::string::npos);
+  EXPECT_NE(redshift.TableSchema().find("pg_catalog.pg_attribute"), std::string::npos);
 }
 
 }  // namespace

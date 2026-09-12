@@ -96,18 +96,15 @@ std::string MetadataQuerySet::Schemas(bool filtered) const {
 }
 
 std::string MetadataQuerySet::Tables(bool filtered) const {
-  return std::string(kTablesQueryAll) +
-         (filtered ? " AND c.relname LIKE $3" : "");
+  return std::string(kTablesQueryAll) + (filtered ? " AND c.relname LIKE $3" : "");
 }
 
 std::string MetadataQuerySet::Columns(bool filtered) const {
-  return std::string(kColumnsQueryAll) +
-         (filtered ? " AND attr.attname LIKE $3" : "");
+  return std::string(kColumnsQueryAll) + (filtered ? " AND attr.attname LIKE $3" : "");
 }
 
 std::string MetadataQuerySet::Constraints(bool filtered) const {
-  return std::string(kConstraintsQueryAll) +
-         (filtered ? " WHERE conname LIKE $3" : "");
+  return std::string(kConstraintsQueryAll) + (filtered ? " WHERE conname LIKE $3" : "");
 }
 
 std::string MetadataQuerySet::TableSchema() const {

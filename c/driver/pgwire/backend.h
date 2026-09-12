@@ -69,9 +69,8 @@ struct TypeReceiveAlias {
 };
 
 inline constexpr TableTypeMapping kPostgreSQLTableTypes[] = {
-    {"table", "r"},             {"view", "v"},
-    {"materialized_view", "m"}, {"toast_table", "t"},
-    {"foreign_table", "f"},     {"partitioned_table", "p"},
+    {"table", "r"},       {"view", "v"},          {"materialized_view", "m"},
+    {"toast_table", "t"}, {"foreign_table", "f"}, {"partitioned_table", "p"},
 };
 
 inline constexpr TableTypeMapping kRedshiftTableTypes[] = {
@@ -100,8 +99,7 @@ struct BackendProfile {
     return nullptr;
   }
 
-  constexpr std::string_view CanonicalTypeReceive(
-      std::string_view vendor_receive) const {
+  constexpr std::string_view CanonicalTypeReceive(std::string_view vendor_receive) const {
     for (std::size_t i = 0; i < type_receive_alias_count; i++) {
       if (type_receive_aliases[i].vendor_receive == vendor_receive) {
         return type_receive_aliases[i].canonical_receive;

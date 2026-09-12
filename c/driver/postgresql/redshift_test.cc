@@ -43,8 +43,7 @@ TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {
   struct AdbcError error = {};
   struct AdbcDriver driver = {};
   struct AdbcDatabase database = {};
-  ASSERT_EQ(AdbcDriverRedshiftInit(ADBC_VERSION_1_1_0, &driver, &error),
-            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcDriverRedshiftInit(ADBC_VERSION_1_1_0, &driver, &error), ADBC_STATUS_OK);
   ASSERT_THAT(driver.DatabaseNew(&database, &error), IsOkStatus(&error));
   ASSERT_THAT(driver.DatabaseSetOption(&database, "uri", uri, &error),
               IsOkStatus(&error));
@@ -111,13 +110,11 @@ TEST_F(RedshiftSmokeTest, DetectsVendorAndExecutesTextResultQuery) {
   EXPECT_NE(version, "0.0.0");
 
   struct AdbcStatement statement = {};
-  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_),
-              IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &statement,
-                  "SELECT CAST(42 AS BIGINT) AS answer, "
-                  "CAST('redshift' AS VARCHAR(16)) AS label",
-                  &error_),
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
+                                       "SELECT CAST(42 AS BIGINT) AS answer, "
+                                       "CAST('redshift' AS VARCHAR(16)) AS label",
+                                       &error_),
               IsOkStatus(&error_));
 
   adbc_validation::StreamReader reader;
@@ -142,8 +139,7 @@ TEST_F(RedshiftSmokeTest, DetectsVendorAndExecutesTextResultQuery) {
 
 TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   struct AdbcStatement statement = {};
-  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
   ASSERT_THAT(
       AdbcStatementSetSqlQuery(
           &statement,
@@ -183,9 +179,9 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0), 9000000000);
   const ArrowBufferView bytes =
       ArrowArrayViewGetBytesUnsafe(reader.array_view->children[11], 0);
-  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.data.data),
-                             bytes.size_bytes),
-            "ABC");
+  EXPECT_EQ(
+      std::string_view(reinterpret_cast<const char*>(bytes.data.data), bytes.size_bytes),
+      "ABC");
 
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
@@ -213,16 +209,16 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   EXPECT_STREQ(schema->children[3]->format, "b");
 
   adbc_validation::StreamReader reader;
-  ASSERT_THAT(AdbcConnectionGetObjects(
-                  &connection_, ADBC_OBJECT_DEPTH_COLUMNS, nullptr, "public",
-                  kTableName.data(), nullptr, nullptr, &reader.stream.value, &error_),
+  ASSERT_THAT(AdbcConnectionGetObjects(&connection_, ADBC_OBJECT_DEPTH_COLUMNS, nullptr,
+                                       "public", kTableName.data(), nullptr, nullptr,
+                                       &reader.stream.value, &error_),
               IsOkStatus(&error_));
   ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   auto objects = adbc_validation::GetObjectsReader{&reader.array_view.value};
   ASSERT_NE(*objects, nullptr);
-  auto* table = InternalAdbcGetObjectsDataGetTableByName(
-      *objects, "dev", "public", kTableName.data());
+  auto* table = InternalAdbcGetObjectsDataGetTableByName(*objects, "dev", "public",
+                                                         kTableName.data());
   ASSERT_NE(table, nullptr);
   EXPECT_EQ(table->n_table_columns, 4);
   EXPECT_EQ(table->n_table_constraints, 0);
@@ -258,8 +254,7 @@ TEST_F(RedshiftSmokeTest, CommitsAndRollsBackExplicitTransactions) {
 }
 
 TEST_F(RedshiftSmokeTest, RejectsSessionIsolationOverrides) {
-  EXPECT_EQ(AdbcConnectionSetOption(&connection_,
-                                    ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
+  EXPECT_EQ(AdbcConnectionSetOption(&connection_, ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
                                     ADBC_OPTION_ISOLATION_LEVEL_SERIALIZABLE, &error_),
             ADBC_STATUS_NOT_IMPLEMENTED);
   ASSERT_NE(error_.message, nullptr);
@@ -270,10 +265,10 @@ TEST_F(RedshiftSmokeTest, RejectsSessionIsolationOverrides) {
     error_ = {};
   }
 
-  EXPECT_THAT(AdbcConnectionSetOption(&connection_,
-                                      ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
-                                      ADBC_OPTION_ISOLATION_LEVEL_DEFAULT, &error_),
-              IsOkStatus(&error_));
+  EXPECT_THAT(
+      AdbcConnectionSetOption(&connection_, ADBC_CONNECTION_OPTION_ISOLATION_LEVEL,
+                              ADBC_OPTION_ISOLATION_LEVEL_DEFAULT, &error_),
+      IsOkStatus(&error_));
 }
 
 TEST_F(RedshiftSmokeTest, ExecutesBoundParameterQuery) {
@@ -288,15 +283,13 @@ TEST_F(RedshiftSmokeTest, ExecutesBoundParameterQuery) {
   ASSERT_THAT(ArrowArrayInitFromSchema(bind.get(), bind_schema.get(), nullptr),
               adbc_validation::IsOkErrno());
   ASSERT_THAT(ArrowArrayStartAppending(bind.get()), adbc_validation::IsOkErrno());
-  ASSERT_THAT(ArrowArrayAppendInt(bind->children[0], 41),
-              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowArrayAppendInt(bind->children[0], 41), adbc_validation::IsOkErrno());
   ASSERT_THAT(ArrowArrayFinishElement(bind.get()), adbc_validation::IsOkErrno());
   ASSERT_THAT(ArrowArrayFinishBuildingDefault(bind.get(), nullptr),
               adbc_validation::IsOkErrno());
 
   struct AdbcStatement statement = {};
-  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1 + 1", &error_),
               IsOkStatus(&error_));
   ASSERT_THAT(AdbcStatementBind(&statement, bind.get(), bind_schema.get(), &error_),
@@ -332,14 +325,12 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
               adbc_validation::IsOkErrno());
 
   nanoarrow::UniqueArray bind;
-  ASSERT_THAT(
-      (adbc_validation::MakeBatch<int32_t, std::string>(
-          bind_schema.get(), bind.get(), nullptr, {1, 2}, {"one", "two"})),
-      adbc_validation::IsOkErrno());
+  ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
+                  bind_schema.get(), bind.get(), nullptr, {1, 2}, {"one", "two"})),
+              adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
-  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
   ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
                                      kTableName.data(), &error_),
               IsOkStatus(&error_));
@@ -353,18 +344,18 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
 
   struct AdbcStatement query = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &query,
-                  "SELECT id, label FROM adbc_redshift_mvp_ingest ORDER BY id", &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &query, "SELECT id, label FROM adbc_redshift_mvp_ingest ORDER BY id", &error_),
+      IsOkStatus(&error_));
   adbc_validation::StreamReader reader;
   ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
                                         &reader.rows_affected, &error_),
               IsOkStatus(&error_));
   ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
   ASSERT_NO_FATAL_FAILURE(reader.Next());
-  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<int32_t>(
-      reader.array_view->children[0], {1, 2}));
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int32_t>(reader.array_view->children[0], {1, 2}));
   ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
       reader.array_view->children[1], {"one", "two"}));
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
@@ -390,15 +381,13 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
               adbc_validation::IsOkErrno());
 
   nanoarrow::UniqueArray bind;
-  ASSERT_THAT(
-      (adbc_validation::MakeBatch<int32_t>(
-          bind_schema.get(), bind.get(), nullptr,
-          std::vector<std::optional<int32_t>>{1, std::nullopt})),
-      adbc_validation::IsOkErrno());
+  ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(
+                  bind_schema.get(), bind.get(), nullptr,
+                  std::vector<std::optional<int32_t>>{1, std::nullopt})),
+              adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
-  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
   ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
                                      kTableName.data(), &error_),
               IsOkStatus(&error_));
@@ -420,10 +409,10 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
 
   struct AdbcStatement query = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &query,
-                  "SELECT COUNT(*) FROM adbc_redshift_mvp_ingest_atomic", &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &query, "SELECT COUNT(*) FROM adbc_redshift_mvp_ingest_atomic", &error_),
+      IsOkStatus(&error_));
   adbc_validation::StreamReader reader;
   ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
                                         &reader.rows_affected, &error_),
