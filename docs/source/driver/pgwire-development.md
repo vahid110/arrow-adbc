@@ -103,3 +103,6 @@ query, metadata, type, transaction, or COPY behavior.
   cost-control rules above before enabling Redshift integration tests.
 - 2026-09-12: Migrated PostgreSQL connection cancellation ownership to the common
   pgwire RAII handle, removing the remaining manual `PGcancel` cleanup path.
+- 2026-09-12: Migrated streaming query result ownership to the common pgwire RAII
+  handle and kept response draining explicit, eliminating another manual cleanup
+  path without changing COPY behavior.

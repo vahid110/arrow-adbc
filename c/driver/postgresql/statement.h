@@ -28,6 +28,7 @@
 
 #include "copy/reader.h"
 #include "driver/common/utils.h"
+#include "driver/pgwire/libpq_raii.h"
 #include "postgres_type.h"
 
 #define ADBC_POSTGRESQL_OPTION_BATCH_SIZE_HINT_BYTES \
@@ -86,7 +87,7 @@ class TupleReader final : public std::enable_shared_from_this<TupleReader> {
   struct AdbcError error_;
   struct ArrowError na_error_;
   PGconn* conn_;
-  PGresult* result_;
+  adbc::driver::pgwire::UniqueResult result_;
   char* pgbuf_;
   struct ArrowBufferView data_;
   std::unique_ptr<PostgresCopyStreamReader> copy_reader_;
