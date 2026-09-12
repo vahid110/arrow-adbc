@@ -27,8 +27,7 @@ namespace adbcpq {
 
 class MetadataQuerySet {
  public:
-  explicit MetadataQuerySet(
-      const adbc::driver::pgwire::BackendProfile& backend_profile)
+  explicit MetadataQuerySet(const adbc::driver::pgwire::BackendProfile& backend_profile)
       : backend_profile_(backend_profile) {}
 
   std::string Catalogs(bool filtered) const;

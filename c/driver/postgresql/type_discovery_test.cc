@@ -25,8 +25,8 @@ namespace adbcpq {
 namespace {
 
 TEST(TypeDiscoveryTest, CatalogQueryUsesBackendCapabilities) {
-  const std::string postgresql = BuildTypeCatalogQuery(
-      adbc::driver::pgwire::BackendProfile::PostgreSQL());
+  const std::string postgresql =
+      BuildTypeCatalogQuery(adbc::driver::pgwire::BackendProfile::PostgreSQL());
   const std::string redshift =
       BuildTypeCatalogQuery(adbc::driver::pgwire::BackendProfile::Redshift());
 

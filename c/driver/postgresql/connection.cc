@@ -67,8 +67,8 @@ static const uint32_t kSupportedInfoCodes[] = {
 
 class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
  public:
-  PostgresGetObjectsHelper(
-      PGconn* conn, const adbc::driver::pgwire::BackendProfile& backend_profile)
+  PostgresGetObjectsHelper(PGconn* conn,
+                           const adbc::driver::pgwire::BackendProfile& backend_profile)
       : current_database_(PQdb(conn)),
         queries_(backend_profile),
         all_catalogs_(conn, queries_.Catalogs(false)),
@@ -283,7 +283,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   // into std::vector<std::string>.
   std::vector<std::string> constraint_fcolumn_names_;
   std::vector<std::string> constraint_fkey_names_;
-
 };
 
 // A notice processor that does nothing with notices. In the future we can log
@@ -322,8 +321,7 @@ AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
 
   adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "COMMIT"));
   if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-    return MakeStatus(result.get(), "[libpq] Failed to commit: {}",
-                      PQerrorMessage(conn_))
+    return MakeStatus(result.get(), "[libpq] Failed to commit: {}", PQerrorMessage(conn_))
         .ToAdbc(error);
   }
   return ADBC_STATUS_OK;
@@ -1079,8 +1077,7 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
         return ADBC_STATUS_OK;
       }
       InternalAdbcSetError(
-          error,
-          "[libpq] %s configures transaction isolation at the database level",
+          error, "[libpq] %s configures transaction isolation at the database level",
           std::string(VendorName()).c_str());
       return ADBC_STATUS_NOT_IMPLEMENTED;
     }

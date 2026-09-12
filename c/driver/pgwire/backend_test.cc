@@ -21,9 +21,9 @@
 #include <gtest/gtest.h>
 
 extern "C" AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
-                                                    struct AdbcError* error);
+                                                   struct AdbcError* error);
 extern "C" AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
-                                                  struct AdbcError* error);
+                                                 struct AdbcError* error);
 
 namespace adbc::driver::pgwire {
 namespace {
@@ -86,8 +86,7 @@ TEST(BackendProfileTest, QueryResultModeRequiresCapabilityOptionAndOutput) {
   constexpr auto postgres = BackendProfile::PostgreSQL();
   constexpr auto redshift = BackendProfile::Redshift();
 
-  EXPECT_EQ(SelectQueryResultMode(postgres, true, true),
-            QueryResultMode::kBinaryCopy);
+  EXPECT_EQ(SelectQueryResultMode(postgres, true, true), QueryResultMode::kBinaryCopy);
   EXPECT_EQ(SelectQueryResultMode(postgres, false, true), QueryResultMode::kText);
   EXPECT_EQ(SelectQueryResultMode(postgres, true, false), QueryResultMode::kText);
   EXPECT_EQ(SelectQueryResultMode(redshift, true, true), QueryResultMode::kText);
@@ -101,8 +100,8 @@ TEST(BackendProfileTest, BulkIngestModeIsCapabilityDriven) {
 }
 
 TEST(BackendProfileTest, DetectsRedshiftFromServerVersion) {
-  const auto redshift = DetectBackendProfile(
-      "PostgreSQL 8.0.2 on x86_64-pc-linux-gnu, Redshift 1.0.12345");
+  const auto redshift =
+      DetectBackendProfile("PostgreSQL 8.0.2 on x86_64-pc-linux-gnu, Redshift 1.0.12345");
   EXPECT_EQ(redshift.kind, BackendKind::kRedshift);
   EXPECT_EQ(redshift.name, "Redshift");
 }

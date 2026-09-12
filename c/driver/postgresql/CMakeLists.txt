@@ -160,10 +160,12 @@ if(ADBC_BUILD_TESTS)
                              PRIVATE ADBC_POSTGRESQL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata"
   )
   target_include_directories(adbc-driver-postgresql-test SYSTEM
-                             PRIVATE ${REPOSITORY_ROOT}/c/ ${REPOSITORY_ROOT}/c/include/
+                             PRIVATE ${REPOSITORY_ROOT}/c/
+                                     ${REPOSITORY_ROOT}/c/include/
                                      ${LIBPQ_INCLUDE_DIRS}
                                      ${REPOSITORY_ROOT}/c/driver
-                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include)
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+  )
   adbc_configure_target(adbc-driver-postgresql-test)
 
   add_test_case(driver_postgresql_copy_test

@@ -445,8 +445,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
                        /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
                        /*resultFormat=*/1 /*(binary)*/));
       if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-        return MakeStatus(result.get(),
-                          "[libpq] Failed to drop table: {}\nQuery was: {}",
+        return MakeStatus(result.get(), "[libpq] Failed to drop table: {}\nQuery was: {}",
                           PQerrorMessage(conn), drop)
             .ToAdbc(error);
       }
@@ -506,8 +505,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
                    /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
                    /*resultFormat=*/1 /*(binary)*/));
   if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-    return MakeStatus(result.get(),
-                      "[libpq] Failed to create table: {}\nQuery was: {}",
+    return MakeStatus(result.get(), "[libpq] Failed to create table: {}\nQuery was: {}",
                       PQerrorMessage(conn), create)
         .ToAdbc(error);
   }
@@ -761,8 +759,8 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   }));
 
   if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kParameterizedInsert) {
-    std::string query = "INSERT INTO " + escaped_table + " (" + escaped_field_list +
-                        ") VALUES (";
+    std::string query =
+        "INSERT INTO " + escaped_table + " (" + escaped_field_list + ") VALUES (";
     for (int64_t i = 0; i < bind_stream.bind_schema->n_children; i++) {
       if (i > 0) query += ", ";
       query += "$" + std::to_string(i + 1);
@@ -780,8 +778,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   query += " (";
   query += escaped_field_list;
   query += ") FROM STDIN WITH (FORMAT binary)";
-  adbc::driver::pgwire::UniqueResult result(
-      PQexec(connection_->conn(), query.c_str()));
+  adbc::driver::pgwire::UniqueResult result(PQexec(connection_->conn(), query.c_str()));
   if (PQresultStatus(result.get()) != PGRES_COPY_IN) {
     return MakeStatus(result.get(), "[libpq] COPY query failed: {}\nQuery was: {}",
                       PQerrorMessage(connection_->conn()), query)

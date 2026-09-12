@@ -42,9 +42,8 @@ ORDER BY
     attrelid, attnum
 )";
 
-Status InsertPgAttributeResult(
-    const PqResultHelper& result,
-    const std::shared_ptr<PostgresTypeResolver>& resolver) {
+Status InsertPgAttributeResult(const PqResultHelper& result,
+                               const std::shared_ptr<PostgresTypeResolver>& resolver) {
   int num_rows = result.NumRows();
   std::vector<std::pair<std::string, uint32_t>> columns;
   int64_t current_type_oid = 0;
@@ -79,10 +78,9 @@ Status InsertPgAttributeResult(
   return Status::Ok();
 }
 
-Status InsertPgTypeResult(
-    const PqResultHelper& result,
-    const std::shared_ptr<PostgresTypeResolver>& resolver,
-    const adbc::driver::pgwire::BackendProfile& profile) {
+Status InsertPgTypeResult(const PqResultHelper& result,
+                          const std::shared_ptr<PostgresTypeResolver>& resolver,
+                          const adbc::driver::pgwire::BackendProfile& profile) {
   if (result.NumColumns() != 5 && result.NumColumns() != 6) {
     return Status::Internal(
         "Expected 5 or 6 columns from type resolver pg_type query but got ",
@@ -137,9 +135,9 @@ Status InsertPgTypeResult(
 
 }  // namespace
 
-Status DiscoverPostgresTypes(
-    PGconn* conn, const adbc::driver::pgwire::BackendProfile& profile,
-    std::shared_ptr<PostgresTypeResolver>* resolver_out) {
+Status DiscoverPostgresTypes(PGconn* conn,
+                             const adbc::driver::pgwire::BackendProfile& profile,
+                             std::shared_ptr<PostgresTypeResolver>* resolver_out) {
   auto resolver = std::make_shared<PostgresTypeResolver>();
 
   PqResultHelper columns(conn, std::string(kColumnsQuery));

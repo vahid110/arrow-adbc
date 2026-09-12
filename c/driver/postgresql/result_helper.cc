@@ -38,7 +38,7 @@ Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) cons
       PQprepare(conn_, /*stmtName=*/"", query_.c_str(), n_params, param_oids));
   if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
     return MakeStatus(result.get(), "Failed to prepare query: {}\nQuery was: {}",
-                             PQerrorMessage(conn_), query_.c_str());
+                      PQerrorMessage(conn_), query_.c_str());
   }
   return Status::Ok();
 }

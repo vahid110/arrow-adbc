@@ -20,9 +20,9 @@
 #include <gtest/gtest.h>
 
 extern "C" AdbcStatusCode AdbcDriverInit(int version, void* raw_driver,
-                                          struct AdbcError* error);
+                                         struct AdbcError* error);
 extern "C" AdbcStatusCode AdbcDriverPostgresqlInit(int version, void* raw_driver,
-                                                    struct AdbcError* error);
+                                                   struct AdbcError* error);
 
 TEST(RedshiftArtifactTest, CommonEntrypointSelectsRedshiftFactory) {
   struct AdbcDriver common = {};
