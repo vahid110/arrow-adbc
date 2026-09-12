@@ -117,3 +117,6 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Made type-catalog discovery capability-aware for Redshift's missing
   `pg_type.typarray`, used the cached Redshift vendor version for `GetInfo`, and
   disabled unsupported constraint discovery without affecting PostgreSQL SQL.
+- 2026-09-12: Added an opt-in Redshift smoke test, gated by
+  `ADBC_REDSHIFT_TEST_URI`, covering database initialization, vendor version
+  reporting, text-result execution, schema mapping, and scalar values.
