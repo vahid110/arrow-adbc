@@ -31,7 +31,35 @@
 
 using adbc_validation::IsOkStatus;
 
+extern "C" AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
+                                                  struct AdbcError* error);
+
 namespace {
+
+TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (uri == nullptr) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+
+  struct AdbcError error = {};
+  struct AdbcDriver driver = {};
+  struct AdbcDatabase database = {};
+  ASSERT_EQ(AdbcDriverRedshiftInit(ADBC_VERSION_1_1_0, &driver, &error),
+            ADBC_STATUS_OK);
+  ASSERT_THAT(driver.DatabaseNew(&database, &error), IsOkStatus(&error));
+  ASSERT_THAT(driver.DatabaseSetOption(&database, "uri", uri, &error),
+              IsOkStatus(&error));
+  EXPECT_EQ(driver.DatabaseInit(&database, &error), ADBC_STATUS_INVALID_ARGUMENT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string_view(error.message).find("Expected Redshift"),
+            std::string_view::npos);
+  if (error.release != nullptr) {
+    error.release(&error);
+    error = {};
+  }
+  EXPECT_THAT(driver.DatabaseRelease(&database, &error), IsOkStatus(&error));
+}
 
 class RedshiftSmokeTest : public ::testing::Test {
  protected:
@@ -41,12 +69,14 @@ class RedshiftSmokeTest : public ::testing::Test {
       GTEST_SKIP() << "ADBC_REDSHIFT_TEST_URI is not configured";
     }
 
-    ASSERT_THAT(AdbcDatabaseNew(&database_, &error_), IsOkStatus(&error_));
-    ASSERT_THAT(AdbcDatabaseSetOption(&database_, "uri", uri, &error_),
+    ASSERT_EQ(AdbcDriverRedshiftInit(ADBC_VERSION_1_1_0, &driver_, &error_),
+              ADBC_STATUS_OK);
+    ASSERT_THAT(driver_.DatabaseNew(&database_, &error_), IsOkStatus(&error_));
+    ASSERT_THAT(driver_.DatabaseSetOption(&database_, "uri", uri, &error_),
                 IsOkStatus(&error_));
-    ASSERT_THAT(AdbcDatabaseInit(&database_, &error_), IsOkStatus(&error_));
-    ASSERT_THAT(AdbcConnectionNew(&connection_, &error_), IsOkStatus(&error_));
-    ASSERT_THAT(AdbcConnectionInit(&connection_, &database_, &error_),
+    ASSERT_THAT(driver_.DatabaseInit(&database_, &error_), IsOkStatus(&error_));
+    ASSERT_THAT(driver_.ConnectionNew(&connection_, &error_), IsOkStatus(&error_));
+    ASSERT_THAT(driver_.ConnectionInit(&connection_, &database_, &error_),
                 IsOkStatus(&error_));
   }
 
@@ -61,6 +91,7 @@ class RedshiftSmokeTest : public ::testing::Test {
   }
 
   struct AdbcError error_ = {};
+  struct AdbcDriver driver_ = {};
   struct AdbcDatabase database_ = {};
   struct AdbcConnection connection_ = {};
 };
