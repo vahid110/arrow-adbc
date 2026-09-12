@@ -27,6 +27,7 @@
 #include <arrow-adbc/adbc.h>
 #include <libpq-fe.h>
 
+#include "driver/pgwire/libpq_raii.h"
 #include "postgres_type.h"
 
 namespace adbcpq {
@@ -93,7 +94,7 @@ class PostgresConnection {
   std::shared_ptr<PostgresDatabase> database_;
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
   PGconn* conn_;
-  PGcancel* cancel_;
+  adbc::driver::pgwire::UniqueCancel cancel_;
   bool autocommit_;
   bool use_copy_;
   std::vector<std::pair<std::string, std::string>> post_init_options_;

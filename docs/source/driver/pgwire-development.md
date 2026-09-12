@@ -101,3 +101,5 @@ query, metadata, type, transaction, or COPY behavior.
 - 2026-09-12: Created the `pgwire-ci` Redshift Serverless workgroup and namespace
   in Frankfurt with base and maximum capacity fixed at 4 RPUs. Recorded the
   cost-control rules above before enabling Redshift integration tests.
+- 2026-09-12: Migrated PostgreSQL connection cancellation ownership to the common
+  pgwire RAII handle, removing the remaining manual `PGcancel` cleanup path.

@@ -466,7 +466,7 @@ AdbcStatusCode PostgresConnection::Cancel(struct AdbcError* error) {
   char errbuf[256];
   // > The return value is 1 if the cancel request was successfully dispatched
   // > and 0 if not.
-  if (PQcancel(cancel_, errbuf, sizeof(errbuf)) != 1) {
+  if (PQcancel(cancel_.get(), errbuf, sizeof(errbuf)) != 1) {
     InternalAdbcSetError(error, "[libpq] Failed to cancel operation: %s", errbuf);
     return ADBC_STATUS_UNKNOWN;
   }
@@ -1137,7 +1137,7 @@ AdbcStatusCode PostgresConnection::Init(struct AdbcDatabase* database,
 
   RAISE_ADBC(database_->Connect(&conn_, error));
 
-  cancel_ = PQgetCancel(conn_);
+  cancel_.reset(PQgetCancel(conn_));
   if (!cancel_) {
     InternalAdbcSetError(error, "[libpq] Could not initialize PGcancel");
     return ADBC_STATUS_UNKNOWN;
@@ -1154,10 +1154,7 @@ AdbcStatusCode PostgresConnection::Init(struct AdbcDatabase* database,
 }
 
 AdbcStatusCode PostgresConnection::Release(struct AdbcError* error) {
-  if (cancel_) {
-    PQfreeCancel(cancel_);
-    cancel_ = nullptr;
-  }
+  cancel_.reset();
   if (conn_) {
     return database_->Disconnect(&conn_, error);
   }
