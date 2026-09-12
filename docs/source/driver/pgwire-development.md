@@ -39,7 +39,7 @@ authentication exchanges itself.
 - [x] Separate text-result and binary-COPY query paths.
 - [ ] Separate type discovery, Arrow mapping, and value encoding.
 - [ ] Move PostgreSQL metadata SQL behind a normalized metadata provider.
-- [ ] Isolate PostgreSQL transaction policy.
+- [x] Isolate PostgreSQL transaction policy.
 - [ ] Construct the existing PostgreSQL driver from the reusable core and
       PostgreSQL semantics, with no intended behavior change.
 - [x] Add Redshift detection and a read/query-only profile.
@@ -75,8 +75,8 @@ Every structural milestone must:
 
 ## Current work
 
-Extract the transaction-policy seam while preserving PostgreSQL behavior, then
-make the existing driver construction explicitly compose the PostgreSQL profile.
+Make the existing driver construction explicitly compose the PostgreSQL profile,
+then continue separating type discovery from Arrow mapping and value encoding.
 Keep Redshift CI manual until narrowly scoped AWS credentials can add and remove a
 single-runner `/32` security-group rule automatically.
 
@@ -163,3 +163,10 @@ single-runner `/32` security-group rule automatically.
   implementation. Connection, cancellation, prepared/query results, transaction
   commands, table DDL, and COPY setup/completion now use the shared scoped handles;
   no manual `PQfinish`, `PQfreeCancel`, or `PQclear` calls remain in the driver.
+- 2026-09-12: Added backend-owned transaction semantics. PostgreSQL retains
+  session-configurable ADBC isolation levels and transactional DDL; Redshift is
+  marked as database-configured and non-transactional for DDL. Because AWS marks
+  `SET SESSION CHARACTERISTICS` as deprecated for Redshift, non-default ADBC
+  isolation overrides now fail explicitly instead of reporting a misleading
+  success; default isolation remains accepted. Live commit, rollback, and
+  isolation-policy tests passed.
