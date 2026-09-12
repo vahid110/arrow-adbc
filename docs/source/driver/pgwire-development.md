@@ -159,12 +159,12 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | macOS Apple Silicon | C++ build | Clean install/client smoke and live database test |
 | Windows x86-64 | C++ build, including vcpkg | Clean install/client smoke and live database test |
 | Windows ARM64 | vcpkg release build | Clean install/client smoke and live database test |
-| Debian x86-64 | Not separately tested | Dedicated container build, install, client, and database tests |
-| Linux ARM64 | Not tested | Native or cross-build, install, client, and database tests |
+| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
+| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
 - [ ] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
-- [ ] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
+- [x] Add dedicated Debian x86-64 and Linux ARM64 CI jobs.
 - [ ] Publish packages only for targets whose release qualification is green.
 
 ## Redshift test-cost discipline
@@ -343,3 +343,8 @@ owner/repository IDs plus the development branch.
   all eleven focused live Redshift tests. The temporary AWS ingress rule was
   revoked. Cancellation, larger results, and further type/metadata edge cases
   remain open.
+- 2026-09-12: Extended the PostgreSQL 18 and installed-client gates to Debian
+  Bookworm x86-64 and native Ubuntu 24.04 ARM64. GitHub Actions run `34709694015`
+  passed all three Linux platform jobs, the eleven-test live Redshift suite, and
+  the AWS ingress cleanup. These are source/install test results, not published
+  binary-package or cross-platform live Redshift guarantees.
