@@ -87,6 +87,7 @@ if(ADBC_BUILD_TESTS)
                 ../pgwire/libpq_raii_test.cc
                 postgres_type_test.cc
                 postgresql_test.cc
+                redshift_test.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common
                 adbc_validation
