@@ -149,7 +149,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       row-count check and guaranteed test-table cleanup.
 - [x] Provision a private, short-retention S3 fixture and a namespace-attached,
       read-only Redshift IAM role for an opt-in staged `COPY` experiment.
-- [ ] Resolve the scoped IAM role-assumption failure before using staged `COPY`.
+- [x] Resolve the scoped IAM role-assumption failure for the dedicated non-root
+      test identity; the two-row fixture succeeded with exact IAMR External ID
+      trust. This does not enable staged ingestion in the driver.
 - [x] Add and live-test a bounded multi-row parameterized INSERT path for
       Redshift, preserving whole-bind atomicity, as an intermediate improvement
       that requires no AWS uploader or broader IAM trust.
@@ -247,17 +249,18 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   The compute-usage panel was not opened because the console warns that
   retrieving it may consume workgroup capacity.
 - Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
-- [ ] Harden temporary CI ingress cleanup for an ambiguous authorize failure:
-  the current `always()` step runs only after a confirmed successful authorize.
-  If AWS creates the rule but the CLI loses its response, the `/32` could remain.
-  Do not blindly revoke by CIDR after failure: an identical pre-existing rule
-  might belong to someone else. A safe recovery needs a run-unique rule
-  description, the returned rule ID when available, and read-only
+- [x] Harden the opt-in COPY fixture's temporary CI ingress cleanup for an
+  ambiguous authorize or revoke response. It marks an attempt before calling
+  AWS and reconciles only a rule matching this run's unique description,
+  group, port, protocol, and CIDR; an exact returned rule ID is a fallback.
+  Never revoke a pre-existing rule by CIDR. The branch-scoped CI role's
+  separate `RedshiftCiIngressInspect` policy grants read-only
   [`ec2:DescribeSecurityGroupRules`](https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-security-group-rules.html)
-  to verify exact ownership before revoking an ambiguous rule. AWS lists this
-  read-only action without a resource type, so its IAM grant would require
-  `Resource: "*"` (with a regional condition where supported). This is a
-  proposed IAM permission expansion, not yet made.
+  with `Resource: "*"` and `aws:RequestedRegion=eu-central-1`. IAM simulation
+  allowed the Frankfurt request and denied `us-east-1`. Ten cleanup mocks
+  passed on Ubuntu and one live two-row run cleaned up its rule. A lost runner
+  can still bypass all in-job cleanup, so manually audit each opt-in run;
+  automatic push-triggered COPY remains gated on independent reconciliation.
 - Avoid keepalive connections, polling queries, and idle open transactions so that
   Serverless can return to its non-compute-billed idle state promptly.
 - Check trial-credit and RPU usage before and after larger integration runs.
@@ -330,8 +333,8 @@ In AWS account `149112076833`, region `eu-central-1`:
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
 
-The next gated AWS checkpoint is a *manual*, two-row non-root test, not an
-automatic push job. A manual, credential-only OIDC run `34767827101` verified
+The AWS checkpoint is a *manual*, two-row non-root test, not an automatic
+push job. A manual, credential-only OIDC run `34767827101` verified
 that the branch-scoped GitHub role `adbc-redshift-ci` receives the database
 username `IAMR:adbc-redshift-ci`, without opening ingress or querying Redshift.
 Its separate inline policy `RedshiftCiCopyFixture` grants only
@@ -340,18 +343,19 @@ and `s3:PutObject`/`s3:DeleteObject` under `staging/ci/*`. An IAM simulation
 allowed those exact resources and denied a sibling staging prefix. The COPY
 role's trust now uses the exact Serverless database-user `sts:ExternalId`
 alongside `aws:SourceAccount` and both Redshift service principals; its S3
-policy remains read-only. This trust is configured but not yet validated by
-a non-root database connection or `COPY`.
+policy remains read-only. Manual run
+[`34770466003`](https://github.com/vahid110/arrow-adbc/actions/runs/34770466003)
+verified that exact non-root database identity and successfully loaded the two
+expected rows with staged `COPY`. This qualifies the fixture and trust, not a
+driver ingest path.
 
 The manual COPY qualification must first check the actual connected user and
 database `ASSUMEROLE` privilege. Use unique run-specific data and manifest
 keys, require `mandatory: true`, verify exactly two rows, and delete both exact
 objects in failure-safe cleanup. The one-day lifecycle remains a backstop,
 not the normal cleanup path. Isolate the non-canceling CI run from push-driven
-jobs so a push cannot interrupt cleanup. Ownership-safe recovery of an
-ambiguous ingress authorization additionally needs the proposed read-only
-`ec2:DescribeSecurityGroupRules` grant; it has not been added. Do not run the
-two-row fixture until its ingress preflight and cleanup are qualified. After
+jobs so a push cannot interrupt cleanup. Ownership-safe recovery uses the
+regional read-only `ec2:DescribeSecurityGroupRules` grant described above. After
 each manual run, independently inspect the security group for its unique
 `adbc-pgwire-copy-<run-id>-<attempt>` rule description; a force-canceled job
 or lost runner can bypass in-job cleanup, and no ingress TTL exists. Remove
@@ -383,7 +387,8 @@ owner/repository IDs plus the development branch. The bounded multi-row INSERT
 path is live-tested, while two-row staged `COPY` probes proved the AWS mechanism
 with reduced trust conditions, including an exact database-user External ID.
 The dedicated IAMR role trust and uploader permissions are narrowly configured
-but not yet live-qualified by a non-root `COPY`. A private, offline-tested
+and live-qualified by a non-root two-row `COPY` fixture, with independent
+cleanup checks. A private, offline-tested
 preparation helper now builds a mandatory exact-object manifest and validates
 `COPY` SQL, but is not selected by the driver. Four PostgreSQL-only cleanup
 patches are published on separate
@@ -393,6 +398,17 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: The approved, separate `RedshiftCiIngressInspect` IAM policy now
+  grants `ec2:DescribeSecurityGroupRules` only in `eu-central-1` (the action
+  requires `Resource: "*"`); IAM simulation allowed Frankfurt and denied
+  `us-east-1`. AWS-free Ubuntu run
+  [`34770428140`](https://github.com/vahid110/arrow-adbc/actions/runs/34770428140)
+  passed all ten COPY cleanup mocks with all AWS-backed jobs skipped. Then
+  manual run [`34770466003`](https://github.com/vahid110/arrow-adbc/actions/runs/34770466003)
+  connected as `IAMR:adbc-redshift-ci` and passed the exact two-row staged
+  `COPY` fixture. An independent post-run AWS inspection found no rule with
+  `adbc-pgwire-copy-34770466003-1` and no objects under
+  `staging/ci/34770466003-1/`. This is fixture qualification, not driver support.
 - 2026-09-13: Added an AWS-free manual dispatch path for the staged-`COPY`
   cleanup mocks; `copy_fixture_selftest=true` is configured to skip the
   PostgreSQL and AWS-backed jobs, even if another manual probe input is also
@@ -400,7 +416,8 @@ short-lived evaluation archives.
   an unexpected database identity, denied `ASSUMEROLE`, a lost manifest-upload
   response, and a failed `COPY` query after ingress and staging. All ten mocks,
   shell syntax, workflow YAML parsing, and diff checks passed locally on macOS.
-  Ubuntu CI qualification remains pending; no live AWS call or `COPY` was made.
+  At this commit, Ubuntu CI qualification was pending; no live AWS call or
+  `COPY` had yet been made.
 - 2026-09-13: Published a manual, opt-in two-row `COPY` fixture, separate from
   the ADBC driver path. It requires read-only ingress discovery before any
   network/S3 mutation, uses an exact run-owned security-group rule ID and
