@@ -538,7 +538,7 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadTimestampEpochOffsetBoundary) {
   EXPECT_EQ(arrow_microseconds, (std::numeric_limits<int64_t>::max)());
 
   ArrowErrorInit(&error);
-  EXPECT_EQ(read_timestamp(kLargestRepresentable + 1, nullptr, &error), EOVERFLOW);
+  EXPECT_EQ(read_timestamp(kLargestRepresentable + 1, nullptr, &error), ERANGE);
   EXPECT_NE(std::string(error.message).find("overflows"), std::string::npos);
 }
 

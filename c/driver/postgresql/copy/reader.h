@@ -209,7 +209,8 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
       }
       if (!in_range) {
         ArrowErrorSet(error, "Value overflows Arrow type when adjusting Postgres epoch");
-        return EOVERFLOW;
+        // EOVERFLOW signals a retryable batch boundary to TupleReader.
+        return ERANGE;
       }
       value = adjusted;
     }
