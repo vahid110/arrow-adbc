@@ -154,7 +154,7 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
  public:
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes <= 0) {
+    if (field_size_bytes == -1) {
       return ArrowArrayAppendNull(array, 1);
     }
 
@@ -187,7 +187,7 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
  public:
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes <= 0) {
+    if (field_size_bytes == -1) {
       return ArrowArrayAppendNull(array, 1);
     }
 
@@ -224,7 +224,7 @@ class PostgresCopyIntervalFieldReader : public PostgresCopyFieldReader {
  public:
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes <= 0) {
+    if (field_size_bytes == -1) {
       return ArrowArrayAppendNull(array, 1);
     }
 
@@ -578,8 +578,16 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
 
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes <= 0) {
+    if (field_size_bytes == -1) {
       return ArrowArrayAppendNull(array, 1);
+    }
+
+    if (field_size_bytes < 12) {
+      ArrowErrorSet(error,
+                    "Expected array field with at least 12 bytes but found field with %d "
+                    "bytes",
+                    static_cast<int>(field_size_bytes));  // NOLINT(runtime/int)
+      return EINVAL;
     }
 
     // Keep the cursor where we start to parse the array so we can check
@@ -611,6 +619,13 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
 
     // This is apparently allowed
     if (n_dim == 0) {
+      if (field_size_bytes != 12) {
+        ArrowErrorSet(error,
+                      "Expected empty array field with 12 bytes but found field with %d "
+                      "bytes",
+                      static_cast<int>(field_size_bytes));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
       NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(array));
       return NANOARROW_OK;
     }
@@ -619,6 +634,11 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
     for (int32_t i = 0; i < n_dim; i++) {
       int32_t dim_size;
       NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &dim_size, error));
+      if (dim_size < 0) {
+        ArrowErrorSet(error, "Expected non-negative array dimension size but got %d",
+                      static_cast<int>(dim_size));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
       n_items *= dim_size;
 
       int32_t lower_bound;
@@ -638,6 +658,14 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
     for (int64_t i = 0; i < n_items; i++) {
       int32_t child_field_size_bytes;
       NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &child_field_size_bytes, error));
+      if (child_field_size_bytes < -1 || child_field_size_bytes > data->size_bytes) {
+        ArrowErrorSet(error,
+                      "Invalid COPY array element length %d with %ld bytes of input "
+                      "remaining",
+                      static_cast<int>(child_field_size_bytes),
+                      static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
       NANOARROW_RETURN_NOT_OK(
           child_->Read(data, child_field_size_bytes, array->children[0], error));
     }
@@ -709,6 +737,14 @@ class PostgresCopyRecordFieldReader : public PostgresCopyFieldReader {
 
       int32_t child_field_size_bytes;
       NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &child_field_size_bytes, error));
+      if (child_field_size_bytes < -1 || child_field_size_bytes > data->size_bytes) {
+        ArrowErrorSet(error,
+                      "Invalid COPY nested field length %d with %ld bytes of input "
+                      "remaining",
+                      static_cast<int>(child_field_size_bytes),
+                      static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
       int result =
           children_[i]->Read(data, child_field_size_bytes, array->children[i], error);
 
@@ -791,6 +827,13 @@ class PostgresCopyFieldTupleReader : public PostgresCopyFieldReader {
     for (int16_t i = 0; i < n_fields; i++) {
       int32_t child_field_size_bytes;
       NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &child_field_size_bytes, error));
+      if (child_field_size_bytes < -1 || child_field_size_bytes > data->size_bytes) {
+        ArrowErrorSet(error,
+                      "Invalid COPY field length %d with %ld bytes of input remaining",
+                      static_cast<int>(child_field_size_bytes),
+                      static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
       int result =
           children_[i]->Read(data, child_field_size_bytes, array->children[i], error);
 
