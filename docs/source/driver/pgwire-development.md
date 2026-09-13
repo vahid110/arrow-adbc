@@ -149,6 +149,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 - [ ] Split backend-neutral PostgreSQL-wire refactors into small Apache-ready
       contributions, independent of Redshift-specific behavior.
+- [x] Prepare and publish the first isolated Apache-ready libpq RAII cleanup
+      branch from current `upstream/main`, with no Redshift code or project
+      roadmap in its diff; build and run both PostgreSQL C++ test suites locally.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
@@ -248,10 +251,18 @@ Redshift security group and its OIDC trust is pinned to this repository's immuta
 owner/repository IDs plus the development branch. Current development is the
 bounded multi-row INSERT path described above; the account-scoped staged `COPY`
 test proved the mechanism but a production trust/uploader design is not yet
-implemented or verified.
+implemented or verified. The first backend-neutral cleanup is now isolated on
+`feature/pgwire-libpq-raii-upstream`; production hardening and remaining release
+qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: Created `feature/pgwire-libpq-raii-upstream` directly from
+  `upstream/main` with only the libpq RAII/result-helper cleanup (commit
+  `d8dc6a7c9`), leaving the project roadmap and all Redshift code out of the
+  Apache-facing diff. A clean local macOS Apple Silicon CMake build and both
+  PostgreSQL driver C++ test suites passed against local PostgreSQL. Pushed the
+  branch to the `vahid110/arrow-adbc` fork; no upstream PR has been opened.
 - 2026-09-13: Corrected batch-size code passed full PostgreSQL 18 and live
   Redshift workflow run `34745845306`, including 14 focused live cases and
   the two-Arrow-batch ingest test. Native Windows vcpkg Release checks on x64
