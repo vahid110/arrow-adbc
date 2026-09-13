@@ -141,6 +141,10 @@ jobs:
           (cd "$RUNNER_TEMP" && sha256sum -c "$archive.sha256")
           mkdir "$RUNNER_TEMP/pgwire-package-test"
           tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$RUNNER_TEMP/$archive"
+          test -f "$RUNNER_TEMP/pgwire-package-test/README.md"
+          test -f "$RUNNER_TEMP/pgwire-package-test/LICENSE.txt"
+          test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
+          test -f "$RUNNER_TEMP/pgwire-package-test/include/arrow-adbc/driver/redshift.h"
           test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
             pkg-config \
             --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
