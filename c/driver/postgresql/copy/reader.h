@@ -149,6 +149,40 @@ class PostgresCopyFieldReader {
   }
 };
 
+// Give each field reader only the bytes declared for that field. In particular,
+// variable-length readers must not satisfy a truncated field by reading bytes
+// belonging to the next field (or the COPY trailer).
+inline ArrowErrorCode ReadCopyField(PostgresCopyFieldReader* reader,
+                                    ArrowBufferView* data, int32_t field_size_bytes,
+                                    ArrowArray* array, ArrowError* error) {
+  ArrowBufferView field_data = *data;
+  field_data.size_bytes = field_size_bytes == -1 ? 0 : field_size_bytes;
+  const int64_t bounded_size = field_data.size_bytes;
+  const ArrowErrorCode result = reader->Read(&field_data, field_size_bytes, array, error);
+
+  // Keep the caller's cursor behavior on errors (including EOVERFLOW) so a
+  // failed read has the same observable position as before field bounding.
+  const int64_t bytes_read = bounded_size - field_data.size_bytes;
+  if (bytes_read < 0 || bytes_read > bounded_size) {
+    ArrowErrorSet(error, "COPY field reader consumed outside its field boundary");
+    return EINVAL;
+  }
+  if (bytes_read > 0) {
+    data->data.as_uint8 += bytes_read;
+  }
+  data->size_bytes -= bytes_read;
+  if (result != NANOARROW_OK) {
+    return result;
+  }
+
+  if (field_data.size_bytes != 0) {
+    ArrowErrorSet(error, "Expected to read %d bytes from COPY field but read %d bytes",
+                  static_cast<int>(field_size_bytes), static_cast<int>(bytes_read));
+    return EINVAL;
+  }
+  return NANOARROW_OK;
+}
+
 // Reader for a Postgres boolean (one byte -> bitmap)
 class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
  public:
@@ -639,8 +673,8 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
                       static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
         return EINVAL;
       }
-      NANOARROW_RETURN_NOT_OK(
-          child_->Read(data, child_field_size_bytes, array->children[0], error));
+      NANOARROW_RETURN_NOT_OK(ReadCopyField(child_.get(), data, child_field_size_bytes,
+                                            array->children[0], error));
     }
 
     int64_t bytes_read = data->data.as_uint8 - data0;
@@ -718,8 +752,8 @@ class PostgresCopyRecordFieldReader : public PostgresCopyFieldReader {
                       static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
         return EINVAL;
       }
-      int result =
-          children_[i]->Read(data, child_field_size_bytes, array->children[i], error);
+      int result = ReadCopyField(children_[i].get(), data, child_field_size_bytes,
+                                 array->children[i], error);
 
       // On overflow, pretend all previous children for this struct were never
       // appended to. This leaves array in a valid state in the specific case
@@ -807,8 +841,8 @@ class PostgresCopyFieldTupleReader : public PostgresCopyFieldReader {
                       static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
         return EINVAL;
       }
-      int result =
-          children_[i]->Read(data, child_field_size_bytes, array->children[i], error);
+      int result = ReadCopyField(children_[i].get(), data, child_field_size_bytes,
+                                 array->children[i], error);
 
       // On overflow, pretend all previous children for this struct were never
       // appended to. This leaves array in a valid state in the specific case
