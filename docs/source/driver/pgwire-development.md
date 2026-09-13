@@ -122,6 +122,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 - [ ] Expand focused live Redshift tests for NULL values, errors, cancellation,
       larger results, and type/metadata edge cases.
+- [ ] Qualify Redshift query cancellation with a bounded, cleanup-safe live
+      query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
+      documents as unsupported.
 - [ ] Keep PostgreSQL's complete integration suite and downstream client
       compatibility tests green; preserve observed public behavior and ordering.
 - [x] Define a documented support matrix with explicit unsupported features and
@@ -275,12 +278,20 @@ continued production hardening and platform qualification.
 
 ## Progress log
 
+- 2026-09-13: Built a relocatable development archive recipe for Ubuntu 24.04
+  x86-64 with license notices, a usage guide, and SHA-256 verification. The CI
+  recipe extracts the archive to a second prefix, checks pkg-config relocation,
+  and compiles/loads an independent driver-manager client. The same packaging
+  and extracted-client sequence passed locally on macOS Apple Silicon, using
+  that platform's `.dylib` output. Linux artifact qualification is pending
+  manual workflow run `34748813873`; no release support is claimed from the
+  local check alone.
 - 2026-09-13: Rebased-core vcpkg workflow `34747963136` passed x64 Debug,
   x64 Release, and native ARM64 Release, including installed-driver checks.
   The same rebased commit passed the repository-wide Integration, C#, Rust,
-  Dev/pre-commit, Native Windows, and focused PostgreSQL/Redshift workflows.
-  Native Unix and Java workflows remain queued, so their final results are
-  not yet claimed. The AWS dashboard showed $298.08 of $300.00 Redshift trial
+  Dev/pre-commit, Native Windows, Java, and focused PostgreSQL/Redshift workflows.
+  Native Unix still has queued jobs, so its final result is not yet claimed.
+  The AWS dashboard showed $298.08 of $300.00 Redshift trial
   credit remaining through 2026-12-11; no RPU-hour limit or alarms are
   configured, and no AWS setting was changed during this inspection.
 - 2026-09-13: Published stacked `feature/pgwire-libpq-cancel-upstream` from the

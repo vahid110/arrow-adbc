@@ -24,6 +24,8 @@ an ABI/platform compatibility guarantee. The archive contains the installed
 ADBC Redshift and PostgreSQL driver libraries, the ADBC driver manager, public
 headers, CMake and pkg-config metadata, and license notices. The CI job builds
 and loads a client against the archive after extracting it to a different path.
+Only the shared-library client path is qualified; bundled static archives may
+require dependencies that are not included here.
 
 Before extraction, verify the adjacent checksum file:
 
