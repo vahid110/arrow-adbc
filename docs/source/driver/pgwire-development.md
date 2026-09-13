@@ -131,6 +131,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Add optional, short-lived IAM credential preparation without changing the
       common libpq authentication path.
 - [ ] Benchmark prepared-insert throughput before choosing an optimization.
+- [x] Add an opt-in, one-shot 1,000-row prepared-insert benchmark with an exact
+      row-count check and guaranteed test-table cleanup.
 - [x] Provision a private, short-retention S3 fixture and a namespace-attached,
       read-only Redshift IAM role for an opt-in staged `COPY` experiment.
 - [ ] Resolve the scoped IAM role-assumption failure before using staged `COPY`.
@@ -212,6 +214,10 @@ In AWS account `149112076833`, region `eu-central-1`:
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
 
+The benchmark is available through manual dispatch of the `PgWire Drivers`
+workflow with `benchmark=true`. Push-triggered CI does not run it. Its measured
+result must be recorded before deciding whether staged `COPY` is justified.
+
 See the AWS documentation on [Serverless namespace IAM roles](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-security-other-services.html),
 [minimum S3 permissions for `COPY`](https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-access-permissions.html),
 and [source-scoped service trust](https://docs.aws.amazon.com/redshift/latest/mgmt/cross-service-confused-deputy-prevention.html).
@@ -228,6 +234,12 @@ owner/repository IDs plus the development branch.
 
 ## Progress log
 
+- 2026-09-13: Added a manually dispatched, one-shot Redshift prepared-insert
+  benchmark. It prepares 1,000 Arrow integer rows, times bind plus ingest,
+  checks both reported and queried row counts, and drops its uniquely named
+  table in fixture teardown. Local build and database-independent focused tests
+  pass; the measured live result is pending. The full local PostgreSQL suite
+  could not run without `ADBC_POSTGRESQL_TEST_URI` and remains a CI gate.
 - 2026-09-09: Created the local fork and development branch from Apache `main`.
 - 2026-09-09: Added this tracked implementation plan before changing driver code.
 - 2026-09-09: Built both PostgreSQL test executables against libpq 18.6. The 22
