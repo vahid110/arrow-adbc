@@ -217,13 +217,13 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug tarball/client connection to live Redshift; checked, short-retention Release development archive with extracted-client connections to PostgreSQL 18 and live Redshift | Production release artifact and compatibility guarantee |
-| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
-| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
-| Windows x86-64 | C++/vcpkg Release build; checked, short-retention x64 development ZIP; extracted-client PostgreSQL 18 connection and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
-| Windows ARM64 | Native vcpkg Release build; checked, short-retention ARM64 development ZIP; extracted-client PostgreSQL 18 connection and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
-| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
-| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug client query against Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 query and earlier live Redshift connection | Production release artifact and compatibility guarantee |
+| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
+| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
+| Windows x86-64 | C++/vcpkg Release build; checked, short-retention x64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| Windows ARM64 | Native vcpkg Release build; checked, short-retention ARM64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
+| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
 - [x] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
@@ -373,8 +373,12 @@ short-lived evaluation archives.
   passed; the Redshift driver's PostgreSQL rejection and load-only paths still
   passed. Fixed a Windows `min`/`max` macro collision in the numeric-boundary
   test and a codespell false positive in the staged-`COPY` test fixture.
-  Local builds, focused tests, pinned formatting, and codespell passed;
-  cross-platform CI is pending for this checkpoint.
+  Local builds, focused tests, pinned formatting, and codespell passed. CI run
+  `34764557170` passed all five PostgreSQL 18 targets and the focused live
+  Redshift suite, including the relocated-client query and temporary ingress
+  cleanup. Package run `34764557189` verified extracted-client queries on all
+  seven Linux, macOS, and Windows targets. Dev run `34764557186` passed, and
+  the native Windows C++ job passed the previously failing driver build.
 - 2026-09-13: CI run `34762177471` passed all five PostgreSQL 18 targets and
   the focused live Redshift job; its temporary ingress cleanup succeeded.
   Development-package run `34762177517` passed all seven Linux, macOS, and
