@@ -83,12 +83,14 @@ jobs:
           cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
           cp c/driver/pgwire/DEVELOPMENT_PACKAGE.md \
             "$RUNNER_TEMP/pgwire-prefix/README.md"
+          artifact_dir="$GITHUB_WORKSPACE/pgwire-artifacts"
+          mkdir -p "$artifact_dir"
           archive="adbc-redshift-dev-${PACKAGE_PLATFORM}-${GITHUB_SHA}.tar.gz"
-          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/$archive" .
-          (cd "$RUNNER_TEMP" && sha256sum "$archive" > "$archive.sha256")
-          (cd "$RUNNER_TEMP" && sha256sum -c "$archive.sha256")
+          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$artifact_dir/$archive" .
+          (cd "$artifact_dir" && sha256sum "$archive" > "$archive.sha256")
+          (cd "$artifact_dir" && sha256sum -c "$archive.sha256")
           mkdir "$RUNNER_TEMP/pgwire-package-test"
-          tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$RUNNER_TEMP/$archive"
+          tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$artifact_dir/$archive"
           test -f "$RUNNER_TEMP/pgwire-package-test/README.md"
           test -f "$RUNNER_TEMP/pgwire-package-test/LICENSE.txt"
           test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
@@ -115,9 +117,7 @@ jobs:
           name: adbc-redshift-dev-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/adbc-redshift-dev-${{ matrix.platform }}-*.tar.gz
-            ${{ runner.temp }}/adbc-redshift-dev-${{ matrix.platform }}-*.tar.gz.sha256
+          path: pgwire-artifacts/
 
   macos:
     name: macOS ${{ matrix.arch }} development archive
@@ -196,3 +196,24 @@ jobs:
           path: |
             ${{ runner.temp }}/adbc-redshift-dev-macos-${{ matrix.arch }}-*.tar.gz
             ${{ runner.temp }}/adbc-redshift-dev-macos-${{ matrix.arch }}-*.tar.gz.sha256
+
+  verify-downloads:
+    name: Verify downloadable archive and checksum pairs
+    runs-on: ubuntu-24.04
+    needs: [linux, macos]
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: adbc-redshift-dev-*
+          path: downloaded
+
+      - name: Verify all five published archive pairs
+        run: |
+          for platform in ubuntu24-x86_64 debian12-x86_64 ubuntu24-arm64 \
+                          macos-x86_64 macos-arm64; do
+            package_dir="downloaded/adbc-redshift-dev-$platform"
+            archive="adbc-redshift-dev-$platform-${GITHUB_SHA}.tar.gz"
+            test -f "$package_dir/$archive"
+            test -f "$package_dir/$archive.sha256"
+            (cd "$package_dir" && sha256sum -c "$archive.sha256")
+          done
