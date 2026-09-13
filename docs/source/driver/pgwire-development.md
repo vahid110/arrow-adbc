@@ -476,12 +476,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
   a zero-length non-null field could read the following field's first byte.
   Both now return `EINVAL` without appending a value; the zero-length case
   leaves the input cursor unchanged. Two new regressions and all 26 offline
-  reader cases pass locally. No AWS call was needed.
+  reader cases pass locally, including under ASan/UBSan. The pushed head passed
+  the [five-platform PostgreSQL 18 and Redshift artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34784112936)
+  and [seven-platform development archive/checksum run](https://github.com/vahid110/arrow-adbc/actions/runs/34784115801)
+  with AWS-backed jobs skipped. No AWS call was needed.
 - 2026-09-13: Published the generic JSONB validation fix on isolated fork
   branch [`feature/upstream-pg-jsonb-validation`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-jsonb-validation)
   from `upstream/main` at `4d50e2e30`. Its one-commit diff changes only the
   PostgreSQL COPY reader and test; an isolated source build and all 24 offline
-  reader cases pass. No Apache PR has been opened.
+  reader cases pass. The fork's
+  [repository-wide pre-commit check](https://github.com/vahid110/arrow-adbc/actions/runs/34784028374)
+  passed. No Apache PR has been opened.
 - 2026-09-13: Hardened the private Redshift CSV writer against a malformed
   Arrow child array with no buffer list. It now returns `kMalformedArrow`
   without touching the caller's output instead of reaching a nanoarrow null
