@@ -1167,6 +1167,14 @@ class PostgresCopyStreamReader {
 
     uint32_t flags;
     NANOARROW_RETURN_NOT_OK(ReadChecked<uint32_t>(data, &flags, error));
+    // High-order flags change the tuple format (for example, OID fields) and
+    // must be understood before decoding rows. Low-order flags are advisory.
+    if ((flags & 0xffff0000u) != 0) {
+      ArrowErrorSet(error, "Unsupported critical binary COPY flags 0x%08x",
+                    static_cast<unsigned int>(flags));
+      return EINVAL;
+    }
+
     uint32_t extension_length;
     NANOARROW_RETURN_NOT_OK(ReadChecked<uint32_t>(data, &extension_length, error));
 

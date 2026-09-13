@@ -65,6 +65,68 @@ static const uint8_t kTestPgCopyZeroLengthField[] = {
     0x00, 0x00, 0x00, 0x00,                                // Zero-byte field
     0xff, 0xff};                                           // COPY trailer
 
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectCriticalHeaderFlags) {
+  for (const uint32_t flags : {0x00010000u, 0x80000000u}) {
+    SCOPED_TRACE(flags);
+    uint8_t header[] = {0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+                        0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,  // Flags
+                        0x00, 0x00, 0x00, 0x00,                    // No extension
+                        0xff, 0xff};                               // COPY trailer
+    header[11] = static_cast<uint8_t>(flags >> 24);
+    header[12] = static_cast<uint8_t>(flags >> 16);
+    header[13] = static_cast<uint8_t>(flags >> 8);
+    header[14] = static_cast<uint8_t>(flags);
+
+    ArrowBufferView data;
+    data.data.as_uint8 = header;
+    data.size_bytes = sizeof(header);
+    PostgresCopyStreamReader reader;
+    ArrowError error{};
+    EXPECT_EQ(reader.ReadHeader(&data, &error), EINVAL);
+    EXPECT_NE(std::string(error.message).find("Unsupported critical binary COPY flags"),
+              std::string::npos);
+    EXPECT_EQ(data.data.as_uint8, header + 15);
+    EXPECT_EQ(data.size_bytes, 6);
+  }
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyAcceptNoncriticalHeaderFlagAndExtension) {
+  static const uint8_t kHeader[] = {
+      0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+      0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x01,  // Noncritical flag
+      0x00, 0x00, 0x00, 0x02,                    // Two-byte extension
+      0x42, 0x43,                                // Extension metadata
+      0xff, 0xff};                               // COPY trailer
+
+  ArrowBufferView data;
+  data.data.as_uint8 = kHeader;
+  data.size_bytes = sizeof(kHeader);
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  ASSERT_EQ(reader.ReadHeader(&data, &error), NANOARROW_OK) << error.message;
+  EXPECT_EQ(data.data.as_uint8, kHeader + 21);
+  EXPECT_EQ(data.size_bytes, 2);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectTruncatedHeaderExtension) {
+  static const uint8_t kHeader[] = {0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+                                    0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,  // No flags
+                                    0x00, 0x00, 0x00, 0x03,  // Three-byte extension
+                                    0x42, 0x43};             // Only two bytes available
+
+  ArrowBufferView data;
+  data.data.as_uint8 = kHeader;
+  data.size_bytes = sizeof(kHeader);
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  EXPECT_EQ(reader.ReadHeader(&data, &error), EINVAL);
+  EXPECT_STREQ(error.message,
+               "Expected 3 bytes of extension metadata at start of stream but found 2 "
+               "bytes of input");
+  EXPECT_EQ(data.data.as_uint8, kHeader + 19);
+  EXPECT_EQ(data.size_bytes, 2);
+}
+
 TEST(PostgresCopyUtilsTest, PostgresCopyReadBoolean) {
   ArrowBufferView data;
   data.data.as_uint8 = kTestPgCopyBoolean;
@@ -103,8 +165,8 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadBoolean) {
 }
 
 TEST(PostgresCopyUtilsTest, PostgresCopyRejectZeroLengthFixedWidthFields) {
-  for (const auto type_id : {PostgresTypeId::kBool, PostgresTypeId::kInt4,
-                             PostgresTypeId::kInterval}) {
+  for (const auto type_id :
+       {PostgresTypeId::kBool, PostgresTypeId::kInt4, PostgresTypeId::kInterval}) {
     SCOPED_TRACE(static_cast<int>(type_id));
     ArrowBufferView data;
     data.data.as_uint8 = kTestPgCopyZeroLengthField;
@@ -1012,8 +1074,9 @@ TEST(PostgresCopyUtilsTest, PostgresCopyRejectZeroLengthArray) {
   ArrowError error{};
   ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
   ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
-  ASSERT_STREQ(error.message,
-               "Expected array field with at least 12 bytes but found field with 0 bytes");
+  ASSERT_STREQ(
+      error.message,
+      "Expected array field with at least 12 bytes but found field with 0 bytes");
   EXPECT_EQ(data.data.as_uint8, kTestPgCopyZeroLengthField + 25);
   EXPECT_EQ(data.size_bytes, 2);
 }
@@ -1050,19 +1113,17 @@ TEST(PostgresCopyUtilsTest, PostgresCopyRejectOversizedEmptyArray) {
 TEST(PostgresCopyUtilsTest, PostgresCopyRejectMultidimensionalArray) {
   // COPY (SELECT ARRAY[[1, 2], [3, 4]]::int4[]) TO STDOUT WITH (FORMAT binary);
   static const uint8_t kTwoDimensionalArray[] = {
-      0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // COPY header
+      0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,        // COPY header
       0x00, 0x01, 0x00, 0x00, 0x00, 0x3c,              // One 60-byte field
-      0x00, 0x00, 0x00, 0x02,  // Two dimensions
-      0x00, 0x00, 0x00, 0x00,  // No NULLs
-      0x00, 0x00, 0x00, 0x17,  // int4 element OID
+      0x00, 0x00, 0x00, 0x02,                          // Two dimensions
+      0x00, 0x00, 0x00, 0x00,                          // No NULLs
+      0x00, 0x00, 0x00, 0x17,                          // int4 element OID
       0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01,  // First dimension
       0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01,  // Second dimension
-      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01,
-      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02,
-      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03,
-      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04,
-      0xff, 0xff};  // COPY trailer
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04,
+      0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03,
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0xff, 0xff};  // COPY trailer
 
   ArrowBufferView data;
   data.data.as_uint8 = kTwoDimensionalArray;
@@ -1102,8 +1163,7 @@ TEST(PostgresCopyUtilsTest, PostgresCopyRejectNegativeArrayDimension) {
   ArrowError error{};
   ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
   ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
-  ASSERT_STREQ(error.message,
-               "Expected non-negative array dimension size but got -1");
+  ASSERT_STREQ(error.message, "Expected non-negative array dimension size but got -1");
 }
 
 TEST(PostgresCopyUtilsTest, PostgresCopyReadInt2vector) {
