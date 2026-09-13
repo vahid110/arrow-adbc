@@ -123,8 +123,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Expand focused live Redshift tests for NULL values, query errors and
       recovery, larger results, parameter schemas, and quoted/empty/UTF-8
       text plus binary edge values.
-- [ ] Expand type and metadata edge coverage for quoted identifiers, numeric
-      boundaries, and other behavior verified against the live Redshift engine.
+- [x] Qualify quoted table and column identifiers through live Redshift
+      `GetTableSchema` and column-filtered `GetObjects`, with fixture cleanup.
+- [ ] Expand type and metadata edge coverage for numeric boundaries and other
+      behavior verified against the live Redshift engine.
 - [ ] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -297,12 +299,18 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Focused run `34754290928` passed all five PostgreSQL 18
+  platform jobs and all 17 live Redshift tests. The new
+  `MetadataQuotesTableAndColumnNames` case passed, the independently installed
+  driver-manager client connected, and exact temporary runner ingress cleanup
+  succeeded. This qualifies the quoted-identifier metadata edge, not broader
+  numeric or cancellation behavior.
 - 2026-09-13: Added a cleanup-safe live metadata case for a quoted table name,
   a spaced column name, and a reserved-word column in `b72d7f696`. It checks
   both `GetTableSchema` and column-filtered `GetObjects`. The pinned formatter,
   local C++ build, and both PostgreSQL suites against local PostgreSQL pass;
-  focused run `34754290928` is pending, so this case is not yet qualified
-  against Redshift. The narrowed path filter correctly avoided another
+  focused run `34754290928` was pending at this checkpoint and later passed,
+  as recorded above. The narrowed path filter correctly avoided another
   seven-platform package rebuild for this test-only change.
 - 2026-09-13: Delayed focused run `34752544871` completed successfully: all
   five PostgreSQL 18 platform jobs passed, followed by 16 live Redshift tests.
