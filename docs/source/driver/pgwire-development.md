@@ -191,6 +191,13 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       `upstream/main`: use checked epoch arithmetic and a non-retryable range
       error, with an offline boundary regression. This is a fork branch, not an
       Apache PR.
+- [x] Publish a seventh isolated PostgreSQL array-shape guard from local
+      `upstream/main`: report unsupported multidimensional arrays instead of
+      silently flattening them. This is a fork branch, not an Apache PR.
+- [x] Publish an eighth isolated PostgreSQL JSONB binary-validation fix from
+      local `upstream/main`: reject unknown versions and zero-length non-null
+      fields without consuming another field. This is a fork branch, not an
+      Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -447,7 +454,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Seven
+the CSV buffer; none is selected by the active driver ingest path. Eight
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -464,6 +471,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-13: Corrected two shared PostgreSQL binary-COPY JSONB failure paths:
+  an unknown binary version previously set an error but returned success, and
+  a zero-length non-null field could read the following field's first byte.
+  Both now return `EINVAL` without appending a value; the zero-length case
+  leaves the input cursor unchanged. Two new regressions and all 26 offline
+  reader cases pass locally. No AWS call was needed.
+- 2026-09-13: Published the generic JSONB validation fix on isolated fork
+  branch [`feature/upstream-pg-jsonb-validation`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-jsonb-validation)
+  from `upstream/main` at `4d50e2e30`. Its one-commit diff changes only the
+  PostgreSQL COPY reader and test; an isolated source build and all 24 offline
+  reader cases pass. No Apache PR has been opened.
 - 2026-09-13: Hardened the private Redshift CSV writer against a malformed
   Arrow child array with no buffer list. It now returns `kMalformedArrow`
   without touching the caller's output instead of reaching a nanoarrow null
