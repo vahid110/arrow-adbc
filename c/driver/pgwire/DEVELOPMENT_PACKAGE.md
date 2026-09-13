@@ -25,7 +25,9 @@ distribution and CPU: Ubuntu 24.04 x86-64 or ARM64, or Debian Bookworm x86-64.
 The archive contains the installed ADBC Redshift and PostgreSQL driver
 libraries, the ADBC driver manager, public
 headers, CMake and pkg-config metadata, and license notices. The CI job builds
-and loads a client against the archive after extracting it to a different path.
+a client against the archive after extracting it to a different path, loads
+the Redshift driver, and connects through the extracted PostgreSQL driver to
+PostgreSQL 18. It does not connect the packaged Redshift driver to Redshift.
 Only the shared-library client path is qualified; bundled static archives may
 require dependencies that are not included here.
 

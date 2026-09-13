@@ -187,6 +187,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
+- [x] Connect an independent client built from each extracted Linux archive
+      through its PostgreSQL driver to PostgreSQL 18 on the matching CI target.
 - [x] Publish short-retention Windows x64/ARM64 development ZIPs only after
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
@@ -198,19 +200,20 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 ### Platform and architecture qualification
 
-The current evidence proves source builds, not prebuilt binary support. A release
-claim requires an installed-artifact smoke test on each target plus appropriate
-database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
+The current evidence proves source builds and short-lived development archives,
+not production prebuilt-binary support. A release claim requires an
+installed-artifact smoke test on each target plus appropriate database-backed
+behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive | Production release artifact and compatibility guarantee |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive with extracted-client PostgreSQL 18 connection | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
 | Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention ARM64 development ZIP | Production release artifact and database-backed installed-client test |
-| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
-| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
+| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
+| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
 - [x] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
@@ -306,16 +309,23 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Isolated package run `34756083906` completed successfully on
+  all seven targets, including its final archive/checksum download gate. All
+  three Linux jobs logged an independent client loading the extracted
+  Redshift driver and then connecting to PostgreSQL 18 through the extracted
+  PostgreSQL driver. This establishes database-backed archive use on Ubuntu
+  x86-64/ARM64 and Debian x86-64, but not packaged-client Redshift use or a
+  production release guarantee.
 - 2026-09-13: Extended the Linux development-archive workflow to start a
   PostgreSQL 18 service and compile a driver-manager client against the
   extracted archive that connects through its PostgreSQL driver. This closes
   a gap left by load-only archive smoke tests, without involving Redshift or
   AWS. The same independent client compiled and connected through a fresh
   local CMake installation against PostgreSQL 18; `actionlint` passed.
-  Isolated package workflow `34756083906` is pending across all seven
-  platforms, so downloaded-archive connection qualification is not yet
-  claimed. The commit used `[skip ci]` and manually dispatched only package
-  CI to avoid an unnecessary live Redshift rerun for client-test code.
+  Isolated package workflow `34756083906` was pending at this checkpoint and
+  later passed, as recorded above. The commit used `[skip ci]` and manually
+  dispatched only package CI to avoid an unnecessary live Redshift rerun for
+  client-test code.
 - 2026-09-13: Focused run `34755613857` passed all five PostgreSQL 18
   platform jobs and 19 live Redshift smoke tests. The new
   `ReadsExplicitlySerializedSuperAsText` case passed for a small JSON array;
