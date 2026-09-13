@@ -246,14 +246,18 @@ jobs:
       - name: Build Redshift tests
         run: cmake --build build/pgwire-ci --parallel 4
 
-      - name: Install Redshift client artifact
+      - name: Package and relocate Redshift client artifact
         run: |
           cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/pgwire-live.tar.gz" .
+          mkdir "$RUNNER_TEMP/pgwire-relocated"
+          tar -C "$RUNNER_TEMP/pgwire-relocated" -xzf "$RUNNER_TEMP/pgwire-live.tar.gz"
+          test -f "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
           cc -std=c11 -Wall -Wextra -Werror \
-            -I "$RUNNER_TEMP/pgwire-prefix/include" \
+            -I "$RUNNER_TEMP/pgwire-relocated/include" \
             c/driver/pgwire/redshift_install_smoke.c \
-            -L "$RUNNER_TEMP/pgwire-prefix/lib" \
-            -Wl,-rpath,"$RUNNER_TEMP/pgwire-prefix/lib" \
+            -L "$RUNNER_TEMP/pgwire-relocated/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-relocated/lib" \
             -ladbc_driver_manager \
             -o "$RUNNER_TEMP/redshift-install-smoke"
 
@@ -307,12 +311,12 @@ jobs:
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftCancelTest.*'
 
-      - name: Connect through installed Redshift driver manager
+      - name: Connect through relocated Redshift driver manager
         env:
           ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
         run: >-
           "$RUNNER_TEMP/redshift-install-smoke"
-          "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so"
+          "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
           "$ADBC_REDSHIFT_TEST_URI"
 
       - name: Close temporary Redshift ingress

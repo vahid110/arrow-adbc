@@ -312,6 +312,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Changed the Ubuntu live Redshift job to tar and relocate its
+  existing installed CMake build before compiling and connecting the
+  independent driver-manager client. This is a relocated Debug CI build, not
+  the separate Release development archive, but it tests path-independent
+  packaged-driver loading against live Redshift without a second build or
+  additional database query. `actionlint` passed; focused CI is pending.
 - 2026-09-13: Isolated package run `34756455835` completed successfully on
   all seven targets and the final archive/checksum download gate. Both macOS
   jobs logged an independent client loading the extracted Redshift driver,
