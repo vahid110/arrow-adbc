@@ -98,9 +98,9 @@ Every structural milestone must:
 
 Post-MVP work should be driven by concrete use cases: IAM/Identity Center credential
 helpers, Redshift-native staged `COPY`/`UNLOAD`, additional Redshift types such as
-`SUPER` and spatial values, richer external/materialized-view metadata, and a
-multi-row or pipeline insert optimization that preserves the current atomic/error
-semantics. These do not belong in the core until a second implementation or a
+`SUPER` and spatial values, richer external/materialized-view metadata, and
+faster large-scale transfer strategies beyond the now-tested multi-row insert
+path. These do not belong in the core until a second implementation or a
 measured Redshift requirement demonstrates the extension point.
 
 ## Production-readiness roadmap
@@ -257,6 +257,12 @@ qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: Built both PostgreSQL and Redshift C++ drivers locally with
+  AddressSanitizer and UndefinedBehaviorSanitizer enabled on macOS Apple Silicon.
+  The PostgreSQL driver and binary-COPY suites passed against local PostgreSQL,
+  and the Redshift artifact/unit suite passed without a live AWS connection.
+  This is an additional local memory/undefined-behavior check, not a substitute
+  for sanitizer-qualified live Redshift or all-platform release testing.
 - 2026-09-13: Created `feature/pgwire-libpq-raii-upstream` directly from
   `upstream/main` with only the libpq RAII/result-helper cleanup (commit
   `d8dc6a7c9`), leaving the project roadmap and all Redshift code out of the
