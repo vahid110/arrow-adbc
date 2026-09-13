@@ -1990,6 +1990,20 @@ TEST_F(PostgresStatementTest, UpdateInExecuteQuery) {
   }
 }
 
+TEST_F(PostgresStatementTest, GetParameterSchema) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1::integer", &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_THAT(AdbcStatementGetParameterSchema(&statement, schema.get(), &error),
+              IsOkStatus(&error));
+  ASSERT_EQ(schema->n_children, 1);
+  ASSERT_STREQ(schema->children[0]->format, "i");
+
+  ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+}
+
 TEST_F(PostgresStatementTest, ExecuteSchemaParameterizedQuery) {
   nanoarrow::UniqueSchema schema_bind;
   ArrowSchemaInit(schema_bind.get());

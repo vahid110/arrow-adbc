@@ -869,10 +869,13 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
   RAISE_STATUS(error,
                helper.ResolveParamTypes(*connection_->type_resolver(), &param_types));
 
-  ArrowSchemaInit(schema);
+  nanoarrow::UniqueSchema tmp;
+  ArrowSchemaInit(tmp.get());
+  CHECK_NA(INTERNAL,
+           param_types.SetSchema(tmp.get(), std::string(connection_->VendorName())),
+           error);
 
-  RAISE_NA(param_types.SetSchema(schema, std::string(connection_->VendorName())));
-
+  tmp.move(schema);
   return ADBC_STATUS_OK;
 }
 

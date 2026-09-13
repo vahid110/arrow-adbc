@@ -291,6 +291,17 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Initial Windows ZIP workflow `34751390419` built all five
+  existing Linux/macOS archive targets but both native Windows Release jobs
+  exposed a previously inherited `GetParameterSchema` bug: a nanoarrow
+  `ArrowErrorCode` could be returned as an ADBC status, which MSVC rejects
+  under warnings-as-errors. Changed that path to report a proper ADBC internal
+  error and use a scoped temporary schema, and added a PostgreSQL parameter
+  schema regression test. The pinned formatter, local macOS Apple Silicon
+  build, both PostgreSQL suites against local PostgreSQL, and the Redshift
+  artifact suite pass. Windows requalification is pending. Package CI now
+  triggers for changes to driver, manager, and core CMake sources too, so
+  downloadable artifacts cannot silently lag behind code changes.
 - 2026-09-13: The third Apache-facing COPY-stream result-handle branch passed
   Dev, Integration, Rust, Native Windows, native vcpkg, and Native Unix fork
   workflows; its added diff remains limited to two PostgreSQL statement

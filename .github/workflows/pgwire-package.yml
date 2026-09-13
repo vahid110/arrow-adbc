@@ -24,9 +24,11 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-package.yml"
-      - "c/driver/pgwire/DEVELOPMENT_PACKAGE.md"
-      - "c/driver/pgwire/DEVELOPMENT_PACKAGE_MACOS.md"
-      - "c/driver/pgwire/DEVELOPMENT_PACKAGE_WINDOWS.md"
+      - "c/driver/postgresql/**"
+      - "c/driver/pgwire/**"
+      - "c/driver_manager/**"
+      - "c/CMakeLists.txt"
+      - "c/cmake_modules/**"
 
 permissions:
   contents: read
