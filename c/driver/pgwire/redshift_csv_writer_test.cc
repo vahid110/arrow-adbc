@@ -177,6 +177,22 @@ TEST(RedshiftCsvWriterTest, RejectsMalformedOffsets) {
   EXPECT_EQ(csv, "original");
 }
 
+TEST(RedshiftCsvWriterTest, RejectsMissingChildBufferListWithoutChangingOutput) {
+  auto batch = MakeBatch();
+  batch.AppendRow(1, 2, "three");
+  batch.Finish();
+
+  ArrowArray* child = batch.array()->children[0];
+  const void** buffers = child->buffers;
+  child->buffers = nullptr;
+  std::string csv = "original";
+  const auto status = Write(&batch, &csv);
+  child->buffers = buffers;
+
+  EXPECT_EQ(status, RedshiftCsvWriteStatus::kMalformedArrow);
+  EXPECT_EQ(csv, "original");
+}
+
 TEST(RedshiftCsvWriterTest, RejectsPayloadLargerThanCoordinatorBound) {
   auto batch = MakeBatch();
   constexpr std::size_t kMaxRowBytes = 4'000'000;

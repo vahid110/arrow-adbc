@@ -108,7 +108,8 @@ RedshiftCsvWriteStatus WriteRedshiftCsv(
     return RedshiftCsvWriteStatus::kInvalidInput;
   }
   for (std::size_t i = 0; i < ordered_columns.size(); ++i) {
-    if (!schema->children[i] || !schema->children[i]->format || !array->children[i]) {
+    if (!schema->children[i] || !schema->children[i]->format || !array->children[i] ||
+        !array->children[i]->buffers) {
       return RedshiftCsvWriteStatus::kMalformedArrow;
     }
   }
