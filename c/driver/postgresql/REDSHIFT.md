@@ -89,7 +89,9 @@ On macOS use `libadbc_driver_redshift.dylib` instead of `.so`. The live smoke
 connection is opt-in; do not set the URI in shared logs. CI runs this client
 against PostgreSQL on Linux and macOS and requires Redshift's driver to reject
 that server. It also connects through the independently installed client during
-the existing Ubuntu x86-64 live Redshift gate.
+the existing Ubuntu x86-64 live Redshift gate, after relocating its installed
+Debug CI build through a tarball. The separate Release development archive
+has not yet been connected to live Redshift.
 
 On Windows, the [standalone CMake client](../pgwire/install_smoke/CMakeLists.txt)
 builds from the installed ADBC driver-manager package. Its `--load-only` mode

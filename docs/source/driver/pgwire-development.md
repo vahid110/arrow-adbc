@@ -210,7 +210,7 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive with extracted-client PostgreSQL 18 connection | Production release artifact and compatibility guarantee |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug tarball/client connection to live Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 connection | Production release artifact, live Redshift connection from the separate Release archive, and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
@@ -312,12 +312,20 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Focused run `34756822553` passed all five PostgreSQL 18
+  platform jobs and 19 live Redshift smoke tests. The Ubuntu job tarred and
+  relocated its Debug CI installation, compiled the independent client
+  against that extracted tree, connected to live Redshift, and revoked exact
+  temporary runner ingress. This proves relocation in the live test path,
+  but does not yet connect the separate Release development archive to
+  Redshift or qualify a production package.
 - 2026-09-13: Changed the Ubuntu live Redshift job to tar and relocate its
   existing installed CMake build before compiling and connecting the
   independent driver-manager client. This is a relocated Debug CI build, not
   the separate Release development archive, but it tests path-independent
   packaged-driver loading against live Redshift without a second build or
-  additional database query. `actionlint` passed; focused CI is pending.
+  additional database query. `actionlint` passed; focused CI later passed as
+  recorded above.
 - 2026-09-13: Isolated package run `34756455835` completed successfully on
   all seven targets and the final archive/checksum download gate. Both macOS
   jobs logged an independent client loading the extracted Redshift driver,
