@@ -318,6 +318,13 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Initial Windows archive run `34758013851` passed the new native
+  ARM64 extracted-client PostgreSQL connection/rejection gate. Its x64 job
+  built and loaded the ZIP but failed before database startup because the
+  UCRT64 PostgreSQL package's executables were not on the existing MINGW64
+  compiler PATH. The workflow now resolves `initdb` and `pg_ctl` through each
+  architecture's explicit MSYS2 package bin directory; x64 requalification
+  is pending.
 - 2026-09-13: Added a native PostgreSQL 18 package dependency to both Windows
   archive jobs and a post-extraction database-backed smoke gate. Each job
   builds the independent CMake client against its extracted ZIP, then should

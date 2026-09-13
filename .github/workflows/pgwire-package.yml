@@ -253,6 +253,7 @@ jobs:
             environment: x86_64
             compiler-package: mingw-w64-x86_64-gcc
             postgres-package: mingw-w64-ucrt-x86_64-postgresql
+            postgres-bin: ucrt64
             triplet: x64-windows-static-release
           - arch: arm64
             runner: windows-11-arm
@@ -261,6 +262,7 @@ jobs:
             environment: clang-aarch64
             compiler-package: mingw-w64-clang-aarch64-gcc-compat
             postgres-package: mingw-w64-clang-aarch64-postgresql
+            postgres-bin: clangarm64
             triplet: arm64-windows-static-release
     defaults:
       run:
@@ -383,16 +385,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to load extracted Redshift DLL" }
 
       - name: Connect extracted clients to temporary PostgreSQL 18
+        env:
+          MSYS_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+          POSTGRES_BIN: ${{ matrix.postgres-bin }}
         run: |
           $extract = Join-Path $env:RUNNER_TEMP "pgwire-package-test"
           $smokeExe = Join-Path $env:RUNNER_TEMP "redshift-smoke-build\Release\adbc_redshift_install_smoke.exe"
           $data = Join-Path $env:RUNNER_TEMP "pgwire-pgdata"
           $log = Join-Path $env:RUNNER_TEMP "pgwire-postgres.log"
           $uri = "postgresql://127.0.0.1:55433/postgres?user=postgres"
-          & initdb.exe -D $data -A trust -U postgres --no-instructions
+          $pgBin = Join-Path $env:MSYS_LOCATION "$($env:POSTGRES_BIN)\bin"
+          $env:PATH = "$pgBin;$env:PATH"
+          $initdb = Join-Path $pgBin "initdb.exe"
+          $pgCtl = Join-Path $pgBin "pg_ctl.exe"
+          if (-not (Test-Path $initdb) -or -not (Test-Path $pgCtl)) {
+            throw "PostgreSQL server executables missing"
+          }
+          & $initdb -D $data -A trust -U postgres --no-instructions
           if ($LASTEXITCODE -ne 0) { throw "failed to initialize PostgreSQL" }
           try {
-            & pg_ctl.exe -D $data -o "-h 127.0.0.1 -p 55433" -l $log -w start
+            & $pgCtl -D $data -o "-h 127.0.0.1 -p 55433" -l $log -w start
             if ($LASTEXITCODE -ne 0) { throw "failed to start PostgreSQL" }
             $env:PATH = "$(Join-Path $extract 'bin');$env:PATH"
             $postgresDriver = Join-Path $extract "bin\adbc_driver_postgresql.dll"
@@ -404,7 +416,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "extracted Redshift driver did not reject PostgreSQL" }
           } finally {
             if (Test-Path (Join-Path $data "postmaster.pid")) {
-              & pg_ctl.exe -D $data -m immediate -w stop
+              & $pgCtl -D $data -m immediate -w stop
               if ($LASTEXITCODE -ne 0) { throw "failed to stop PostgreSQL" }
             }
           }
