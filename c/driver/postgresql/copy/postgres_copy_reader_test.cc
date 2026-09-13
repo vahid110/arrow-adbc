@@ -798,6 +798,37 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadArray) {
   ASSERT_EQ(data_buffer[4], 123);
 }
 
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectMultidimensionalArray) {
+  // COPY (SELECT ARRAY[[1, 2], [3, 4]]::int4[]) TO STDOUT WITH (FORMAT binary);
+  static const uint8_t kTwoDimensionalArray[] = {
+      0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // COPY header
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x3c,              // One 60-byte field
+      0x00, 0x00, 0x00, 0x02,  // Two dimensions
+      0x00, 0x00, 0x00, 0x00,  // No NULLs
+      0x00, 0x00, 0x00, 0x17,  // int4 element OID
+      0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01,  // First dimension
+      0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01,  // Second dimension
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01,
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02,
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03,
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04,
+      0xff, 0xff};  // COPY trailer
+
+  ArrowBufferView data;
+  data.data.as_uint8 = kTwoDimensionalArray;
+  data.size_bytes = sizeof(kTwoDimensionalArray);
+
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kInt4).Array());
+
+  PostgresCopyStreamTester tester;
+  ArrowError error;
+  ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
+  ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
+  ASSERT_STREQ(error.message, "Multidimensional Postgres arrays are not supported");
+}
+
 TEST(PostgresCopyUtilsTest, PostgresCopyReadInt2vector) {
   ArrowBufferView data;
   data.data.as_uint8 = kTestPgCopyInt2vector;

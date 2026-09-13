@@ -582,6 +582,13 @@ class PostgresCopyArrayFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    // The output schema is a single Arrow list, so flattening multiple
+    // Postgres dimensions would silently discard the array shape.
+    if (n_dim > 1) {
+      ArrowErrorSet(error, "Multidimensional Postgres arrays are not supported");
+      return EINVAL;
+    }
+
     // This is apparently allowed
     if (n_dim == 0) {
       NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(array));
