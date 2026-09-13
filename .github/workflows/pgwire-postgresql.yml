@@ -129,6 +129,44 @@ jobs:
             "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so" \
             "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
 
+      - name: Package and recheck Ubuntu x86-64 development install
+        if: matrix.platform == 'Ubuntu x86-64'
+        run: |
+          cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
+          cp c/driver/pgwire/DEVELOPMENT_PACKAGE.md \
+            "$RUNNER_TEMP/pgwire-prefix/README.md"
+          archive="adbc-redshift-dev-ubuntu24-x86_64-${GITHUB_SHA}.tar.gz"
+          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/$archive" .
+          (cd "$RUNNER_TEMP" && sha256sum "$archive" > "$archive.sha256")
+          (cd "$RUNNER_TEMP" && sha256sum -c "$archive.sha256")
+          mkdir "$RUNNER_TEMP/pgwire-package-test"
+          tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$RUNNER_TEMP/$archive"
+          test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
+            pkg-config \
+            --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
+            --variable=libdir adbc-driver-redshift)" = \
+            "$RUNNER_TEMP/pgwire-package-test/lib"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-package-test/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-package-test/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-package-test/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-package-smoke"
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.platform == 'Ubuntu x86-64'
+        with:
+          name: adbc-redshift-dev-ubuntu24-x86_64
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz
+            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz.sha256
+
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}

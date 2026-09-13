@@ -31,7 +31,8 @@ transaction behavior, authentication preparation, and supported transfer paths.
 
 - Repository: `apache/arrow-adbc`
 - Baseline branch: `main`
-- Baseline commit: `150528f0fb9f1117fecce1da6a27fb548ddc6d0f`
+- Original baseline commit: `150528f0fb9f1117fecce1da6a27fb548ddc6d0f`
+- Current rebased baseline commit: `4d50e2e30f9e96905a64644defe964447d54cbe7`
 - Development branch: `feature/pgwire-core-redshift`
 - Historical references: PR #2219 (experimental Redshift support) and PR #4365
   (removal of that support)
@@ -157,6 +158,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       changes and with both PostgreSQL C++ test suites passing locally.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
+- [ ] Start with a short-retention Ubuntu x86-64 development archive containing
+      licenses, install guide, and SHA-256 checksum; compile and load a client
+      against the extracted archive before publishing it as a CI artifact.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
@@ -262,12 +266,12 @@ requesting short-lived AWS credentials, opens TCP 5439 for only the current GitH
 runner `/32`, runs only the focused Redshift suite, and revokes that exact rule in
 an `always()` cleanup step. The AWS role can modify ingress on only the dedicated
 Redshift security group and its OIDC trust is pinned to this repository's immutable
-owner/repository IDs plus the development branch. Current development is the
-bounded multi-row INSERT path described above; the account-scoped staged `COPY`
-test proved the mechanism but a production trust/uploader design is not yet
-implemented or verified. The first backend-neutral cleanup is now isolated on
-`feature/pgwire-libpq-raii-upstream`; production hardening and remaining release
-qualification continue on the core/Redshift branch.
+owner/repository IDs plus the development branch. The bounded multi-row INSERT
+path is live-tested, while account-scoped staged `COPY` proved the mechanism but
+still lacks a safe operational trust/uploader design. Two backend-neutral libpq
+cleanup patches are published on separate Apache-facing fork branches; a third
+is locally validated. Current work is a checked Ubuntu development archive and
+continued production hardening and platform qualification.
 
 ## Progress log
 
