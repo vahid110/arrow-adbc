@@ -115,6 +115,17 @@ void ExecuteSql(struct AdbcConnection* connection, std::string_view sql,
   ASSERT_THAT(AdbcStatementRelease(&statement, error), IsOkStatus(error));
 }
 
+struct ScopedSqlCleanup {
+  struct AdbcConnection* connection;
+  std::string sql;
+
+  ~ScopedSqlCleanup() {
+    struct AdbcError error = {};
+    ExecuteSql(connection, sql, &error);
+    if (error.release != nullptr) error.release(&error);
+  }
+};
+
 TEST_F(RedshiftSmokeTest, DetectsVendorAndExecutesTextResultQuery) {
   const std::string version = adbc_validation::GetDriverVendorVersion(&connection_);
   EXPECT_FALSE(version.empty());
@@ -413,6 +424,43 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   EXPECT_EQ(std::string_view(filtered_column.data, filtered_column.size_bytes), "label");
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_metadata", &error_);
+}
+
+TEST_F(RedshiftSmokeTest, MetadataQuotesTableAndColumnNames) {
+  constexpr const char* kTableName = "adbc redshift metadata edge";
+  constexpr const char* kDropSql = "DROP TABLE IF EXISTS \"adbc redshift metadata edge\"";
+  ExecuteSql(&connection_, kDropSql, &error_);
+  ScopedSqlCleanup cleanup{&connection_, kDropSql};
+  ExecuteSql(&connection_,
+             "CREATE TABLE \"adbc redshift metadata edge\" ("
+             "\"spaced column\" INTEGER, \"order\" VARCHAR(16))",
+             &error_);
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_THAT(AdbcConnectionGetTableSchema(&connection_, nullptr, "public", kTableName,
+                                           schema.get(), &error_),
+              IsOkStatus(&error_));
+  ASSERT_EQ(schema->n_children, 2);
+  EXPECT_STREQ(schema->children[0]->name, "spaced column");
+  EXPECT_STREQ(schema->children[0]->format, "i");
+  EXPECT_STREQ(schema->children[1]->name, "order");
+  EXPECT_STREQ(schema->children[1]->format, "u");
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcConnectionGetObjects(&connection_, ADBC_OBJECT_DEPTH_COLUMNS, nullptr,
+                                       "public", kTableName, nullptr, "spaced column",
+                                       &reader.stream.value, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  auto objects = adbc_validation::GetObjectsReader{&reader.array_view.value};
+  ASSERT_NE(*objects, nullptr);
+  auto* table =
+      InternalAdbcGetObjectsDataGetTableByName(*objects, "dev", "public", kTableName);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->n_table_columns, 1);
+  const ArrowStringView column_name = table->table_columns[0]->column_name;
+  EXPECT_EQ(std::string_view(column_name.data, column_name.size_bytes), "spaced column");
 }
 
 TEST_F(RedshiftSmokeTest, ReportsMissingTableSchema) {
