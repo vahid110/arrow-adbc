@@ -252,6 +252,10 @@ implemented or verified.
 
 ## Progress log
 
+- 2026-09-13: The native Windows vcpkg Release build exposed Windows' `min`
+  macro expanding the new batch-size cap. Parenthesized the `std::min` call;
+  local build passes and Windows requalification is pending. The concurrently
+  running push checks may be superseded by this correction.
 - 2026-09-13: Implemented a bounded 16-row parameterized INSERT path selected
   by Redshift's backend capability; PostgreSQL retains its binary `COPY`
   path. The driver caps each SQL statement at 32,767 parameters and preserves
