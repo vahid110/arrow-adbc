@@ -26,6 +26,7 @@ on:
       - ".github/workflows/pgwire-package.yml"
       - "c/driver/pgwire/DEVELOPMENT_PACKAGE.md"
       - "c/driver/pgwire/DEVELOPMENT_PACKAGE_MACOS.md"
+      - "c/driver/pgwire/DEVELOPMENT_PACKAGE_WINDOWS.md"
 
 permissions:
   contents: read
@@ -197,22 +198,169 @@ jobs:
             ${{ runner.temp }}/adbc-redshift-dev-macos-${{ matrix.arch }}-*.tar.gz
             ${{ runner.temp }}/adbc-redshift-dev-macos-${{ matrix.arch }}-*.tar.gz.sha256
 
+  windows:
+    name: Windows ${{ matrix.arch }} development archive
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            msystem: UCRT64
+            msysbin: mingw64
+            environment: x86_64
+            compiler-package: mingw-w64-x86_64-gcc
+            triplet: x64-windows-static-release
+          - arch: arm64
+            runner: windows-11-arm
+            msystem: CLANGARM64
+            msysbin: clangarm64
+            environment: clang-aarch64
+            compiler-package: mingw-w64-clang-aarch64-gcc-compat
+            triplet: arm64-windows-static-release
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TARGET_ARCH: ${{ matrix.arch }}
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        id: msys2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: |
+            mingw-w64-${{ matrix.environment }}-tools
+            ${{ matrix.compiler-package }}
+
+      - name: Add msys2 toolchain to PATH
+        env:
+          MSYS_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          "$($env:MSYS_LOCATION)\${{ matrix.msysbin }}\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Ensure vcpkg binary cache directory
+        run: |
+          New-Item -ItemType Directory -Force `
+            $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+      - name: Restore vcpkg package cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.env', 'ci/vcpkg/**', 'c/**/vcpkg.json', '.github/workflows/native-vcpkg.yml') }}
+
+      - name: Install vcpkg
+        shell: bash
+        run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"
+
+      - name: Install libpq and its static-link dependencies
+        working-directory: c
+        run: |
+          & "$($env:VCPKG_ROOT)\vcpkg.exe" install libpq `
+            --overlay-triplets "$pwd\..\ci\vcpkg\triplets"
+          if ($LASTEXITCODE -ne 0) { throw "failed to install libpq" }
+
+      - name: Build and install drivers and manager
+        run: |
+          cmake .\c\ --preset windows-release `
+            -DADBC_BUILD_TESTS=OFF `
+            -DADBC_DRIVER_FLIGHTSQL=OFF `
+            -DADBC_DRIVER_SQLITE=OFF `
+            -DVCPKG_OVERLAY_TRIPLETS="$pwd\ci\vcpkg\triplets" `
+            "-DVCPKG_TARGET_TRIPLET=$($env:VCPKG_DEFAULT_TRIPLET)"
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure CMake" }
+          cmake --build .\build\release --target install --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "failed to install drivers" }
+
+      - name: Package, verify, and load from extracted ZIP
+        run: |
+          $prefix = Join-Path $pwd "local\release"
+          $artifactDir = Join-Path $pwd "pgwire-artifacts"
+          $licenseDir = Join-Path $prefix "THIRD_PARTY_LICENSES"
+          New-Item -Path $artifactDir, $licenseDir `
+            -ItemType Directory -Force | Out-Null
+          Copy-Item LICENSE.txt, NOTICE.txt -Destination $prefix
+          Copy-Item c\driver\pgwire\DEVELOPMENT_PACKAGE_WINDOWS.md `
+            -Destination (Join-Path $prefix "README.md")
+          $portShare = Join-Path $env:VCPKG_ROOT `
+            "installed\$($env:VCPKG_DEFAULT_TRIPLET)\share"
+          $copyrights = @(Get-ChildItem $portShare -Filter copyright -File -Recurse)
+          if ($copyrights.Count -eq 0) { throw "no vcpkg license texts found" }
+          if (-not (Test-Path (Join-Path $portShare "libpq\copyright"))) {
+            throw "libpq license text missing"
+          }
+          foreach ($copyright in $copyrights) {
+            Copy-Item -LiteralPath $copyright.FullName `
+              -Destination (Join-Path $licenseDir "$($copyright.Directory.Name).txt")
+          }
+          $archive = "adbc-redshift-dev-windows-$($env:TARGET_ARCH)-$($env:GITHUB_SHA).zip"
+          $archivePath = Join-Path $artifactDir $archive
+          Compress-Archive -Path (Join-Path $prefix "*") `
+            -DestinationPath $archivePath
+          $sha = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$archivePath.sha256" `
+            -Value "$sha  $archive" -Encoding ascii
+          $expected = (Get-Content -LiteralPath "$archivePath.sha256").Split(' ')[0]
+          $actual = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "archive checksum mismatch" }
+          $extract = Join-Path $env:RUNNER_TEMP "pgwire-package-test"
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $extract
+          $driverDll = Join-Path $extract "bin\adbc_driver_redshift.dll"
+          if (-not (Test-Path $driverDll)) { throw "Redshift DLL missing" }
+          if (-not (Test-Path (Join-Path $extract "README.md"))) {
+            throw "README missing"
+          }
+          if (-not (Test-Path (Join-Path $extract "THIRD_PARTY_LICENSES\libpq.txt"))) {
+            throw "libpq license missing from ZIP"
+          }
+          $cmakeArch = if ($env:TARGET_ARCH -eq "arm64") { "ARM64" } else { "x64" }
+          $smokeBuild = Join-Path $env:RUNNER_TEMP "redshift-smoke-build"
+          cmake -S .\c\driver\pgwire\install_smoke -B $smokeBuild `
+            -A $cmakeArch "-DCMAKE_PREFIX_PATH=$extract"
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure extracted client" }
+          cmake --build $smokeBuild --config Release
+          if ($LASTEXITCODE -ne 0) { throw "failed to build extracted client" }
+          $smokeExe = Join-Path $smokeBuild "Release\adbc_redshift_install_smoke.exe"
+          $env:PATH = "$(Join-Path $extract 'bin');$env:PATH"
+          & $smokeExe $driverDll --load-only
+          if ($LASTEXITCODE -ne 0) { throw "failed to load extracted Redshift DLL" }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-dev-windows-${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: error
+          path: pgwire-artifacts/
+
   verify-downloads:
     name: Verify downloadable archive and checksum pairs
     runs-on: ubuntu-24.04
-    needs: [linux, macos]
+    needs: [linux, macos, windows]
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: adbc-redshift-dev-*
           path: downloaded
 
-      - name: Verify all five published archive pairs
+      - name: Verify all seven published archive pairs
         run: |
           for platform in ubuntu24-x86_64 debian12-x86_64 ubuntu24-arm64 \
-                          macos-x86_64 macos-arm64; do
+                          macos-x86_64 macos-arm64 windows-x64 windows-arm64; do
             package_dir="downloaded/adbc-redshift-dev-$platform"
-            archive="adbc-redshift-dev-$platform-${GITHUB_SHA}.tar.gz"
+            extension=tar.gz
+            case "$platform" in windows-*) extension=zip ;; esac
+            archive="adbc-redshift-dev-$platform-${GITHUB_SHA}.$extension"
             test -f "$package_dir/$archive"
             test -f "$package_dir/$archive.sha256"
             (cd "$package_dir" && sha256sum -c "$archive.sha256")
