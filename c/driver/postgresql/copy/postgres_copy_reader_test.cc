@@ -56,6 +56,68 @@ class PostgresCopyStreamTester {
   PostgresCopyStreamReader reader_;
 };
 
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectCriticalHeaderFlags) {
+  for (const uint32_t flags : {0x00010000u, 0x80000000u}) {
+    SCOPED_TRACE(flags);
+    uint8_t header[] = {0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+                        0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,  // Flags
+                        0x00, 0x00, 0x00, 0x00,                    // No extension
+                        0xff, 0xff};                               // COPY trailer
+    header[11] = static_cast<uint8_t>(flags >> 24);
+    header[12] = static_cast<uint8_t>(flags >> 16);
+    header[13] = static_cast<uint8_t>(flags >> 8);
+    header[14] = static_cast<uint8_t>(flags);
+
+    ArrowBufferView data;
+    data.data.as_uint8 = header;
+    data.size_bytes = sizeof(header);
+    PostgresCopyStreamReader reader;
+    ArrowError error{};
+    EXPECT_EQ(reader.ReadHeader(&data, &error), EINVAL);
+    EXPECT_NE(std::string(error.message).find("Unsupported critical binary COPY flags"),
+              std::string::npos);
+    EXPECT_EQ(data.data.as_uint8, header + 15);
+    EXPECT_EQ(data.size_bytes, 6);
+  }
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyAcceptNoncriticalHeaderFlagAndExtension) {
+  static const uint8_t kHeader[] = {
+      0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+      0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x01,  // Noncritical flag
+      0x00, 0x00, 0x00, 0x02,                    // Two-byte extension
+      0x42, 0x43,                                // Extension metadata
+      0xff, 0xff};                               // COPY trailer
+
+  ArrowBufferView data;
+  data.data.as_uint8 = kHeader;
+  data.size_bytes = sizeof(kHeader);
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  ASSERT_EQ(reader.ReadHeader(&data, &error), NANOARROW_OK) << error.message;
+  EXPECT_EQ(data.data.as_uint8, kHeader + 21);
+  EXPECT_EQ(data.size_bytes, 2);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectTruncatedHeaderExtension) {
+  static const uint8_t kHeader[] = {0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff,
+                                    0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,  // No flags
+                                    0x00, 0x00, 0x00, 0x03,  // Three-byte extension
+                                    0x42, 0x43};             // Only two bytes available
+
+  ArrowBufferView data;
+  data.data.as_uint8 = kHeader;
+  data.size_bytes = sizeof(kHeader);
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  EXPECT_EQ(reader.ReadHeader(&data, &error), EINVAL);
+  EXPECT_STREQ(error.message,
+               "Expected 3 bytes of extension metadata at start of stream but found 2 "
+               "bytes of input");
+  EXPECT_EQ(data.data.as_uint8, kHeader + 19);
+  EXPECT_EQ(data.size_bytes, 2);
+}
+
 TEST(PostgresCopyUtilsTest, PostgresCopyReadBoolean) {
   ArrowBufferView data;
   data.data.as_uint8 = kTestPgCopyBoolean;
