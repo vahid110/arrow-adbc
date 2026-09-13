@@ -1,0 +1,98 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire Development Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-package.yml"
+      - "c/driver/pgwire/DEVELOPMENT_PACKAGE.md"
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-x86-64:
+    name: Ubuntu 24.04 x86-64 development archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
+
+      - name: Build and install drivers and manager
+        run: |
+          cmake -S c -B build/pgwire-package -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DADBC_BUILD_TESTS=OFF \
+            -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_MANAGER=ON \
+            -DADBC_DRIVER_SQLITE=OFF \
+            -DADBC_DRIVER_FLIGHTSQL=OFF
+          cmake --build build/pgwire-package --parallel 4
+          cmake --install build/pgwire-package --prefix "$RUNNER_TEMP/pgwire-prefix"
+
+      - name: Package, verify, and load from extracted archive
+        run: |
+          cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
+          cp c/driver/pgwire/DEVELOPMENT_PACKAGE.md \
+            "$RUNNER_TEMP/pgwire-prefix/README.md"
+          archive="adbc-redshift-dev-ubuntu24-x86_64-${GITHUB_SHA}.tar.gz"
+          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/$archive" .
+          (cd "$RUNNER_TEMP" && sha256sum "$archive" > "$archive.sha256")
+          (cd "$RUNNER_TEMP" && sha256sum -c "$archive.sha256")
+          mkdir "$RUNNER_TEMP/pgwire-package-test"
+          tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$RUNNER_TEMP/$archive"
+          test -f "$RUNNER_TEMP/pgwire-package-test/README.md"
+          test -f "$RUNNER_TEMP/pgwire-package-test/LICENSE.txt"
+          test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
+          test -f "$RUNNER_TEMP/pgwire-package-test/include/arrow-adbc/driver/redshift.h"
+          test -f "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so"
+          test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
+            pkg-config \
+            --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
+            --variable=libdir adbc-driver-redshift)" = \
+            "$RUNNER_TEMP/pgwire-package-test/lib"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-package-test/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-package-test/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-package-test/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-package-smoke"
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
+            --load-only
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-dev-ubuntu24-x86_64
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz
+            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz.sha256
