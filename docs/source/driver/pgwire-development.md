@@ -471,6 +471,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Hardened shared PostgreSQL binary-COPY decoding against malformed
+  field lengths before invoking primitive readers. Tuple, nested-record, and
+  array-element readers now reject lengths below `-1` or beyond the remaining
+  buffer. Fixed-width scalars and arrays treat only `-1` as NULL; arrays reject
+  negative dimensions and require the exact 12-byte payload for zero dimensions.
+  Seven new malformed-input tests bring the AWS-free reader suite to 33/33 under
+  ASan/UBSan. This is not complete field framing: nested readers are not yet
+  confined to their declared parent subview, so exact consumption and
+  cross-field isolation remain a separate hardening step. No AWS run was used.
 - 2026-09-13: Corrected two shared PostgreSQL binary-COPY JSONB failure paths:
   an unknown binary version previously set an error but returned success, and
   a zero-length non-null field could read the following field's first byte.
@@ -486,7 +495,12 @@ necessary; this is not a claim of automatic orphan reconciliation.
   PostgreSQL COPY reader and test; an isolated source build and all 24 offline
   reader cases pass. The fork's
   [repository-wide pre-commit check](https://github.com/vahid110/arrow-adbc/actions/runs/34784028374)
-  passed. No Apache PR has been opened.
+  and [Unix](https://github.com/vahid110/arrow-adbc/actions/runs/34784028344),
+  [Windows](https://github.com/vahid110/arrow-adbc/actions/runs/34784028474),
+  [vcpkg](https://github.com/vahid110/arrow-adbc/actions/runs/34784028373),
+  [integration](https://github.com/vahid110/arrow-adbc/actions/runs/34784028350),
+  and [Rust](https://github.com/vahid110/arrow-adbc/actions/runs/34784028348)
+  workflows all passed on the isolated branch. No Apache PR has been opened.
 - 2026-09-13: Hardened the private Redshift CSV writer against a malformed
   Arrow child array with no buffer list. It now returns `kMalformedArrow`
   without touching the caller's output instead of reaching a nanoarrow null
