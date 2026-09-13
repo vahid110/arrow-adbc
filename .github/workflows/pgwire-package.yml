@@ -40,6 +40,18 @@ jobs:
     name: Linux ${{ matrix.platform }} development archive
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image }}
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -101,6 +113,7 @@ jobs:
           test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
           test -f "$RUNNER_TEMP/pgwire-package-test/include/arrow-adbc/driver/redshift.h"
           test -f "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so"
+          test -f "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.so"
           test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
             pkg-config \
             --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
@@ -116,6 +129,9 @@ jobs:
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
             --load-only
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.so" \
+            'postgresql://postgres:5432/postgres?user=postgres&password=password'
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

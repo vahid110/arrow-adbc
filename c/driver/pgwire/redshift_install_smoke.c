@@ -16,7 +16,7 @@
 // under the License.
 
 // Compile this client against only an installed ADBC driver manager. It does not
-// link to the Redshift driver, so loading the installed artifact is exercised.
+// link to a database driver, so loading the installed artifact is exercised.
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -45,13 +45,13 @@ int main(int argc, char** argv) {
     AdbcStatusCode status =
         AdbcLoadDriver(argv[1], "AdbcDriverInit", ADBC_VERSION_1_1_0, &driver, &error);
     if (status != ADBC_STATUS_OK) {
-      fprintf(stderr, "installed Redshift driver could not load (status %d): %s\n",
+      fprintf(stderr, "installed ADBC driver could not load (status %d): %s\n",
               (int)status, error.message == NULL ? "no error message" : error.message);
     }
     if (driver.release != NULL) {
       AdbcStatusCode release_status = driver.release(&driver, &error);
       if (status == ADBC_STATUS_OK && release_status != ADBC_STATUS_OK) {
-        fprintf(stderr, "installed Redshift driver could not release (status %d): %s\n",
+        fprintf(stderr, "installed ADBC driver could not release (status %d): %s\n",
                 (int)release_status,
                 error.message == NULL ? "no error message" : error.message);
         status = release_status;
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     }
     ReleaseError(&error);
     if (status != ADBC_STATUS_OK) return 1;
-    puts("installed Redshift driver loaded successfully");
+    puts("installed ADBC driver loaded successfully");
     return 0;
   }
 
@@ -103,13 +103,13 @@ int main(int argc, char** argv) {
   }
   const bool connected = status == ADBC_STATUS_OK;
   if (!connected) {
-    fprintf(stderr, "installed Redshift driver could not connect (status %d): %s\n",
+    fprintf(stderr, "installed ADBC driver could not connect (status %d): %s\n",
             (int)status, error.message == NULL ? "no error message" : error.message);
   }
   if (connection.private_data != NULL) AdbcConnectionRelease(&connection, &error);
   if (database.private_data != NULL) AdbcDatabaseRelease(&database, &error);
   ReleaseError(&error);
   if (!connected) return 1;
-  puts("installed Redshift driver connected successfully");
+  puts("installed ADBC driver connected successfully");
   return 0;
 }
