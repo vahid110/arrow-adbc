@@ -239,6 +239,12 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   query-disabling threshold without an agreed budget. AWS documents that idle
   Serverless workgroups are not billed for compute, while managed storage is
   still charged.
+- A read-only dashboard check after the Release-archive and repeat-cancellation
+  live runs on 2026-09-13 showed $297.51 of $300.00 trial credit remaining,
+  with no snapshots or active alarms. This is $0.57 less than the previous
+  recorded balance, but the dashboard balance is not a per-run cost breakdown.
+  The compute-usage panel was not opened because the console warns that
+  retrieving it may consume workgroup capacity.
 - Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
 - Avoid keepalive connections, polling queries, and idle open transactions so that
   Serverless can return to its non-compute-billed idle state promptly.
@@ -330,6 +336,10 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Confirmed the AWS Serverless dashboard's free-trial balance
+  after the live qualification runs: $297.51/$300.00 remained, versus $298.08
+  at the previous recorded check. No snapshots or alarms were present; no
+  capacity, IAM, or billing settings were changed.
 - 2026-09-13: Rechecked AWS's current Redshift confused-deputy example and
   Serverless ARN reference against the unsuccessful scoped `COPY` attempts.
   The example's name-based workgroup ARN differs from the ID-based ARN
