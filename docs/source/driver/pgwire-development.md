@@ -471,8 +471,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
   the repository-pinned clang-format 18.1.7. Fixed the first two separately
   from a formatting-only commit. Local PostgreSQL reader tests (23/23),
   Redshift artifact tests (39/39), and both AWS-free safety mock suites
-  (34/34) pass after the changes. A fresh general pre-commit run is pending;
+  (34/34) pass after the changes. A docs-only push then passed the
+  [repository-wide pre-commit gate](https://github.com/vahid110/arrow-adbc/actions/runs/34779120566);
   no live Redshift test was dispatched for formatting.
+- 2026-09-13: The broader native Unix CI exposed a CMake unity-build collision
+  between three independent Redshift fixture tests sharing anonymous-namespace
+  names. Only `adbc-driver-redshift-test` now opts out of unity compilation;
+  production libraries remain unity-enabled. With `CMAKE_UNITY_BUILD=ON`, the
+  full local CMake build and the 39-case Redshift suite pass. A fresh native
+  CI run is pending; no AWS test was required.
 - 2026-09-13: Corrected a shared PostgreSQL-wire result conversion edge: the
   binary-encoded `TIMESTAMP`/`TIMESTAMPTZ` epoch adjustment now checks for
   overflow and reports a non-retryable range error instead of wrapping a valid
