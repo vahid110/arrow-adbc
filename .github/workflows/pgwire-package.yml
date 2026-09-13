@@ -311,8 +311,11 @@ jobs:
           Compress-Archive -Path (Join-Path $prefix "*") `
             -DestinationPath $archivePath
           $sha = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "$archivePath.sha256" `
-            -Value "$sha  $archive" -Encoding ascii
+          [System.IO.File]::WriteAllText("$archivePath.sha256", `
+            "$sha  $archive`n", [System.Text.Encoding]::ASCII)
+          if ([System.IO.File]::ReadAllText("$archivePath.sha256").Contains("`r")) {
+            throw "checksum file must use LF line endings"
+          }
           $expected = (Get-Content -LiteralPath "$archivePath.sha256").Split(' ')[0]
           $actual = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "archive checksum mismatch" }
