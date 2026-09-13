@@ -198,6 +198,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       local `upstream/main`: reject unknown versions and zero-length non-null
       fields without consuming another field. This is a fork branch, not an
       Apache PR.
+- [x] Publish a ninth isolated PostgreSQL binary-COPY field-bounds fix from
+      local `upstream/main`: reject truncated tuple, nested-record, and array
+      element payloads before primitive decoding. This is a fork branch, not
+      an Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -454,7 +458,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Eight
+the CSV buffer; none is selected by the active driver ingest path. Nine
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -480,6 +484,12 @@ necessary; this is not a claim of automatic orphan reconciliation.
   ASan/UBSan. This is not complete field framing: nested readers are not yet
   confined to their declared parent subview, so exact consumption and
   cross-field isolation remain a separate hardening step. No AWS run was used.
+- 2026-09-14: Published the generic bounds fix on isolated fork branch
+  [`feature/upstream-pg-copy-bounds`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-bounds)
+  from `upstream/main` at `4d50e2e30`. Its one-commit diff contains only the
+  PostgreSQL COPY reader and test. After resolving test-only context from
+  earlier standalone fixes, an isolated source build and all 29 offline reader
+  cases pass. No Apache PR has been opened.
 - 2026-09-13: Corrected two shared PostgreSQL binary-COPY JSONB failure paths:
   an unknown binary version previously set an error but returned success, and
   a zero-length non-null field could read the following field's first byte.
