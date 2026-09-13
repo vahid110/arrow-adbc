@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -245,6 +246,52 @@ TEST_F(RedshiftSmokeTest, PreservesTextAndBinaryEdges) {
   EXPECT_EQ(bytes.data.as_uint8[0], 0);
   EXPECT_EQ(bytes.data.as_uint8[1], 0xff);
   EXPECT_EQ(bytes.data.as_uint8[2], 0x5c);
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
+TEST_F(RedshiftSmokeTest, PreservesNumericBoundaries) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement,
+                  "SELECT '-2147483648'::INTEGER, 2147483647::INTEGER, "
+                  "'-9223372036854775808'::BIGINT, 9223372036854775807::BIGINT, "
+                  "'99999999999999999999999999999999999999'::DECIMAL(38, 0), "
+                  "'-99999999999999999999999999999999999999'::DECIMAL(38, 0)",
+                  &error_),
+              IsOkStatus(&error_));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 6U);
+  EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_INT32);
+  EXPECT_EQ(reader.fields[1].type, NANOARROW_TYPE_INT32);
+  EXPECT_EQ(reader.fields[2].type, NANOARROW_TYPE_INT64);
+  EXPECT_EQ(reader.fields[3].type, NANOARROW_TYPE_INT64);
+  EXPECT_EQ(reader.fields[4].type, NANOARROW_TYPE_STRING);
+  EXPECT_EQ(reader.fields[5].type, NANOARROW_TYPE_STRING);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0),
+            std::numeric_limits<int32_t>::min());
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[1], 0),
+            std::numeric_limits<int32_t>::max());
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[2], 0),
+            std::numeric_limits<int64_t>::min());
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0),
+            std::numeric_limits<int64_t>::max());
+  const ArrowStringView positive =
+      ArrowArrayViewGetStringUnsafe(reader.array_view->children[4], 0);
+  const ArrowStringView negative =
+      ArrowArrayViewGetStringUnsafe(reader.array_view->children[5], 0);
+  EXPECT_EQ(std::string_view(positive.data, positive.size_bytes),
+            "99999999999999999999999999999999999999");
+  EXPECT_EQ(std::string_view(negative.data, negative.size_bytes),
+            "-99999999999999999999999999999999999999");
 
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
