@@ -187,8 +187,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
         some_tables_(conn, TablesQuery()),
         all_columns_(conn, kColumnsQueryAll),
         some_columns_(conn, ColumnsQuery()),
-        all_constraints_(conn, kConstraintsQueryAll),
-        some_constraints_(conn, ConstraintsQuery()) {}
+        all_constraints_(conn, kConstraintsQueryAll) {}
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -284,14 +283,10 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
       next_column_ = all_columns_.Row(-1);
     }
 
-    if (column_filter.has_value()) {
-      UNWRAP_STATUS(some_constraints_.Execute(
-          {std::string(schema), std::string(table), std::string(*column_filter)}))
-      next_constraint_ = some_constraints_.Row(-1);
-    } else {
-      UNWRAP_STATUS(all_constraints_.Execute({std::string(schema), std::string(table)}));
-      next_constraint_ = all_constraints_.Row(-1);
-    }
+    // The column filter applies only to table_columns.  Table constraints still
+    // describe the complete table, even when their columns are not listed.
+    UNWRAP_STATUS(all_constraints_.Execute({std::string(schema), std::string(table)}));
+    next_constraint_ = all_constraints_.Row(-1);
 
     return Status::Ok();
   };
@@ -373,7 +368,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   PqResultHelper all_columns_;
   PqResultHelper some_columns_;
   PqResultHelper all_constraints_;
-  PqResultHelper some_constraints_;
 
   // Iterator state for the catalogs/schema/table/column queries
   PqResultRow next_catalog_;
@@ -411,11 +405,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   // Parameterized on schema_name, table_name, column_name
   static std::string ColumnsQuery() {
     return std::string(kColumnsQueryAll) + " AND attr.attname LIKE $3";
-  }
-
-  // Parameterized on schema_name, table_name, column_name
-  static std::string ConstraintsQuery() {
-    return std::string(kConstraintsQueryAll) + " WHERE conname LIKE $3";
   }
 
   std::string TableTypesArrayLiteral(const std::vector<std::string_view>& table_types) {
