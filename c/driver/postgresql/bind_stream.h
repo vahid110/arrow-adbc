@@ -476,7 +476,7 @@ struct BindStream {
     if (columns == 0 || columns > kMaxParameters || max_batch_rows == 0) {
       return Status::InvalidArgument("Invalid parameterized ingest dimensions");
     }
-    max_batch_rows = std::min(max_batch_rows, kMaxParameters / columns);
+    max_batch_rows = (std::min)(max_batch_rows, kMaxParameters / columns);
     const std::string one_row_query =
         BuildParameterizedInsertQuery(table, fields, columns, 1);
 
