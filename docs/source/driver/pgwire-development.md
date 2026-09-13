@@ -408,8 +408,11 @@ short-lived evaluation archives.
   list, rejecting invalid or duplicate names so a future reordered append
   cannot silently load the wrong table fields. The focused plan tests and
   combined C++ build passed locally. Added `postgresql_only=true` manual CI
-  dispatch to qualify both patches across the PostgreSQL matrix without AWS;
-  that CI run is pending. Neither change selects staged ingestion in the driver.
+  dispatch to qualify both patches across the PostgreSQL matrix without AWS.
+  Run [`34771025810`](https://github.com/vahid110/arrow-adbc/actions/runs/34771025810)
+  passed Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon;
+  both AWS-backed jobs were skipped. Neither change selects staged ingestion
+  in the driver.
 - 2026-09-13: The approved, separate `RedshiftCiIngressInspect` IAM policy now
   grants `ec2:DescribeSecurityGroupRules` only in `eu-central-1` (the action
   requires `Resource: "*"`); IAM simulation allowed Frankfurt and denied
