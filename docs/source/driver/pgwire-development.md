@@ -202,6 +202,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       local `upstream/main`: reject truncated tuple, nested-record, and array
       element payloads before primitive decoding. This is a fork branch, not
       an Apache PR.
+- [x] Publish a tenth isolated PostgreSQL binary-COPY header fix from local
+      `upstream/main`: reject unsupported critical format flags while accepting
+      advisory flags and bounded extensions. This is a fork branch, not an
+      Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -458,7 +462,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Nine
+the CSV buffer; none is selected by the active driver ingest path. Ten
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -475,6 +479,25 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: The prior COPY-bounds head passed the
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34786999583)
+  and [seven-platform development archive and checksum matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34787001908)
+  with AWS jobs skipped. The isolated branch's Dev check caught three
+  formatting-only hunks; the pinned-format correction passed
+  [replacement Dev CI](https://github.com/vahid110/arrow-adbc/actions/runs/34788686676)
+  and its 29 offline reader tests pass again. The broader replacement CI is
+  still running.
+- 2026-09-14: Reject high-order critical binary-COPY header flags, including
+  the OID-row variant unsupported by our tuple reader, as required by the
+  [PostgreSQL binary format](https://www.postgresql.org/docs/current/sql-copy.html).
+  Continue to tolerate low-order advisory flags and skip a bounded header
+  extension. Three new offline checks bring the development reader suite to
+  36/36 under ASan/UBSan. Published the one-commit generic fix on isolated
+  [`feature/upstream-pg-copy-header`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-header)
+  from `upstream/main` at `4d50e2e30`; its source build and 25 offline reader
+  tests pass. Trailer framing and exact parent-field consumption are separate
+  outstanding hardening work. No Redshift/AWS run was used for this fix and
+  no Apache PR has been opened.
 - 2026-09-14: Hardened shared PostgreSQL binary-COPY decoding against malformed
   field lengths before invoking primitive readers. Tuple, nested-record, and
   array-element readers now reject lengths below `-1` or beyond the remaining
