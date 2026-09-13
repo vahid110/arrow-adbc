@@ -152,6 +152,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Resolve the scoped IAM role-assumption failure for the dedicated non-root
       test identity; the two-row fixture succeeded with exact IAMR External ID
       trust. This does not enable staged ingestion in the driver.
+- [x] Add a Redshift-private, AWS-free exact-object staging coordinator with
+      failure-path tests, without selecting it from the active ingest path.
 - [x] Add and live-test a bounded multi-row parameterized INSERT path for
       Redshift, preserving whole-bind atomicity, as an intermediate improvement
       that requires no AWS uploader or broader IAM trust.
@@ -365,6 +367,19 @@ or lost runner can bypass in-job cleanup, and no ingress TTL exists. Remove
 only a verified rule ID belonging to that run if one remains. A future
 push-triggered COPY gate would need automatic independent reconciliation.
 
+The optional driver ingest path remains unimplemented. Its first internal
+coordinator accepts caller-supplied serialized data, an exact mandatory manifest,
+and a tiny conditional object-store interface. It never deletes a collided or
+unconfirmed object. A lost response or unsettled COPY can require independent
+owned-object reconciliation; `cleanup_complete` is reported separately from
+whether COPY succeeded. The coordinator is not selected by `ExecuteIngest`.
+Before enabling it, implement and qualify an Arrow-to-CSV serializer (including
+null versus empty string), an optional S3 adapter with short-lived credentials,
+an explicit transaction boundary, and exact cleanup. An uploader may need
+`s3:GetObject` for `HeadObject` ownership checks; no such IAM expansion or SDK
+dependency has been added. Keep automatic COPY disabled until a lost runner can
+also be reconciled independently.
+
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
 `34744399423` inserted and verified 1,000 rows in 186.081 seconds, or 5.374
@@ -391,16 +406,26 @@ path is live-tested, while two-row staged `COPY` probes proved the AWS mechanism
 with reduced trust conditions, including an exact database-user External ID.
 The dedicated IAMR role trust and uploader permissions are narrowly configured
 and live-qualified by a non-root two-row `COPY` fixture, with independent
-cleanup checks. A private, offline-tested
-preparation helper now builds a mandatory exact-object manifest and validates
-`COPY` SQL with an explicit, ordered ingest column list, but is not selected by
-the driver. Five PostgreSQL-only fixes are published on separate
+cleanup checks. A private, offline-tested preparation helper builds a mandatory
+exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
+column list. An AWS-free staging coordinator now tests conditional creation and
+owned-object cleanup; neither is selected by the active driver ingest path.
+Five PostgreSQL-only fixes are published on separate
 Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a Redshift-only, AWS-free coordinator for the already
+  validated one-object `COPY` plan. It accepts bounded pre-serialized data and
+  a store that conditionally creates and deletes only proven-owned exact keys;
+  16 fake-store tests cover collisions, ambiguous uploads, SQL outcomes,
+  exception deferral, and cleanup errors. CMake built the Redshift library and
+  PostgreSQL targets, and the Redshift suite passed locally. CMake/Meson source
+  lists are aligned, but Meson execution and cross-platform CI remain pending.
+  No S3 SDK, IAM change, actual CSV serializer, or ADBC ingest selection was
+  added; no AWS call was made for this checkpoint.
 - 2026-09-13: Published standalone fork branch
   [`feature/upstream-pg-getobjects-column-constraints`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-getobjects-column-constraints)
   from the current Apache `main` at `4d50e2e30`. Its diff is only PostgreSQL
