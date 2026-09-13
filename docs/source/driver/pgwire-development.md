@@ -394,8 +394,10 @@ owned-object reconciliation; `cleanup_complete` is reported separately from
 whether COPY succeeded. The coordinator is not selected by `ExecuteIngest`.
 An AWS-free Redshift-private Arrow-to-CSV writer now serializes only non-null
 INT32, INT64, and validated UTF-8 strings, with an exact ordered field match
-and an 8 MiB payload cap. It rejects literal `\\N` pending a live check of
-quoted null-marker behavior. Before enabling staged ingestion, qualify null
+and an 8 MiB payload cap plus a conservative 4,000,000-byte serialized row cap
+below Redshift's documented 4 MB COPY row limit. It rejects literal `\\N`
+pending a live check of quoted null-marker behavior. Before enabling staged
+ingestion, qualify null
 versus empty string and the remaining Arrow type mappings, an optional S3
 adapter with short-lived credentials, an explicit transaction boundary, and
 exact cleanup. An uploader may need `s3:GetObject` for `HeadObject` ownership
@@ -443,8 +445,32 @@ PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
+Ordinary live Redshift CI now marks each temporary runner `/32` ingress rule
+with a run-specific `adbc-pgwire-live-<run-id>-<attempt>` description. It refuses
+to alter a pre-existing exact-CIDR rule, saves the authorization attempt before
+the AWS call, and revokes only a verified owned rule ID even if the authorize
+response is lost. Cleanup runs after any successful AWS credential step and
+reports unresolved ambiguity as a failure. A lost runner or force-canceled job
+can still bypass in-job cleanup, so independent post-run rule inspection remains
+necessary; this is not a claim of automatic orphan reconciliation.
+
 ## Progress log
 
+- 2026-09-13: Hardened ordinary live Redshift CI ingress ownership and failure
+  recovery. Ten AWS-free mocks cover pre-existing foreign ingress, ambiguous or
+  lost authorize/revoke responses, denied reads/revocation, invalid runner CIDR,
+  and idempotent cleanup; all ten and the 22 existing COPY fixture mocks passed
+  locally. A read-only regional security-group audit found no run-scoped CI
+  ingress; an existing narrow developer rule was left untouched. The live
+  Redshift workflow was not dispatched for this safety-only change, and the
+  hard-lost-runner limitation above remains.
+- 2026-09-13: Prevented an offline-preparable Redshift `COPY` failure: the
+  private CSV writer now rejects any serialized row exceeding 4,000,000 bytes,
+  conservatively below [Redshift's 4 MB input-row limit](https://docs.aws.amazon.com/redshift/latest/dg/r_COPY.html),
+  while retaining the separate 8 MiB object cap. New writer/adapter tests
+  prove an oversized row causes no S3 or COPY call and that exact row/object
+  boundaries still pass; both local CMake and Meson Redshift suites passed
+  39/39. No AWS call or active ingest-path change was made.
 - 2026-09-13: Prepared a separate, opt-in nine-row CSV semantics probe reusing
   the exact-key staging fixture and transaction rollback. It checks quoted and
   bare empty text, bare `\\N` NULL, comma/quote/newline escaping, and BIGINT
