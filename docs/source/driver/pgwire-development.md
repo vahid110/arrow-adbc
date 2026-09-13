@@ -287,6 +287,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: First Linux-matrix package run `34750508662` passed its build,
+  checksum, extracted-client, and upload steps on Ubuntu x86-64/ARM64 and
+  Debian x86-64, and both macOS jobs also passed. A separate download audit
+  found the containerized Linux artifacts omitted the adjacent `.sha256` file:
+  `runner.temp` resolved to a host path while the shell wrote under the
+  container's `$RUNNER_TEMP`. These Linux downloads are incomplete and must
+  not be treated as qualified. The workflow is being corrected to upload from
+  a workspace-relative directory and to download/verify all five artifact
+  pairs in a final CI job.
 - 2026-09-13: Published the third Apache-facing branch,
   `feature/pgwire-libpq-stream-upstream`, stacked on the cancel-handle branch.
   Its added commit `c45517428` changes only PostgreSQL statement COPY-stream
