@@ -393,6 +393,14 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added an AWS-free manual dispatch path for the staged-`COPY`
+  cleanup mocks; `copy_fixture_selftest=true` is configured to skip the
+  PostgreSQL and AWS-backed jobs, even if another manual probe input is also
+  selected. Expanded the offline fixture from six to ten scenarios, covering
+  an unexpected database identity, denied `ASSUMEROLE`, a lost manifest-upload
+  response, and a failed `COPY` query after ingress and staging. All ten mocks,
+  shell syntax, workflow YAML parsing, and diff checks passed locally on macOS.
+  Ubuntu CI qualification remains pending; no live AWS call or `COPY` was made.
 - 2026-09-13: Published a manual, opt-in two-row `COPY` fixture, separate from
   the ADBC driver path. It requires read-only ingress discovery before any
   network/S3 mutation, uses an exact run-owned security-group rule ID and

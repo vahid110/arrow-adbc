@@ -76,6 +76,7 @@ aws() {
           .[0].url == "s3://bucket-test/staging/ci/12345-2/data.csv"' \
           "$body" > /dev/null || return 46
         : > "$MOCK_DIR/manifest-object"
+        if [[ "$MOCK_CASE" == manifest_upload_response_lost ]]; then return 255; fi
       else
         return 41
       fi
@@ -97,15 +98,24 @@ psql() {
   local sql
   [[ "${PGSSLMODE:-}" == verify-full && "${PGSSLROOTCERT:-}" == system ]] || return 47
   if [[ "$*" == *'SELECT current_user'* ]]; then
-    printf 'IAMR:adbc-redshift-ci\n'
+    if [[ "$MOCK_CASE" == identity_mismatch ]]; then
+      printf 'someone-else\n'
+    else
+      printf 'IAMR:adbc-redshift-ci\n'
+    fi
     return
   fi
   sql="$(cat)"
   if [[ "$sql" == *'has_assumerole_privilege'* ]]; then
-    printf 't\n'
+    if [[ "$MOCK_CASE" == assumerole_denied ]]; then
+      printf 'f\n'
+    else
+      printf 't\n'
+    fi
   elif [[ "$sql" == *'COPY pgwire_copy_ci_fixture'* ]]; then
     [[ "$sql" == *"id = 1 AND name = 'alpha'"* &&
        "$sql" == *"id = 2 AND name = 'beta'"* ]] || return 48
+    if [[ "$MOCK_CASE" == copy_query_failed ]]; then return 49; fi
     printf '2|1|1\n'
   else
     return 44
@@ -153,6 +163,11 @@ run_case() {
         excludes "$MOCK_DIR/aws-calls" 'put-object'
         [[ ! -f "$MOCK_DIR/rule" ]] || fail 'Owned ingress rule remained after lost response'
         ;;
+      identity_mismatch|assumerole_denied)
+        contains "$MOCK_DIR/aws-calls" '--security-group-rule-ids sgr-owned-test'
+        excludes "$MOCK_DIR/aws-calls" 'put-object'
+        [[ ! -f "$MOCK_DIR/rule" ]] || fail "$scenario ingress rule remained"
+        ;;
       revoke_response_lost)
         contains "$MOCK_DIR/aws-calls" '--security-group-rule-ids sgr-owned-test'
         [[ ! -f "$MOCK_DIR/rule" ]] || fail 'Owned ingress rule remained after lost revoke response'
@@ -162,6 +177,12 @@ run_case() {
         contains "$MOCK_DIR/aws-calls" '/data.csv'
         excludes "$MOCK_DIR/aws-calls" 'delete-object --bucket bucket-test --key staging/ci/12345-2/manifest.json'
         [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/rule" ]] || fail 'Partial upload was not cleaned up'
+        ;;
+      manifest_upload_response_lost|copy_query_failed)
+        contains "$MOCK_DIR/aws-calls" 'delete-object --bucket bucket-test --key staging/ci/12345-2/data.csv'
+        contains "$MOCK_DIR/aws-calls" 'delete-object --bucket bucket-test --key staging/ci/12345-2/manifest.json'
+        contains "$MOCK_DIR/aws-calls" '--security-group-rule-ids sgr-owned-test'
+        [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/manifest-object" && ! -f "$MOCK_DIR/rule" ]] || fail "$scenario resources remained"
         ;;
       success)
         contains "$MOCK_DIR/output" 'Two-row staged COPY fixture passed.'
@@ -181,6 +202,10 @@ run_case() {
 run_case describe_denied failure
 run_case existing_other_owner failure
 run_case authorize_response_lost failure
+run_case identity_mismatch failure
+run_case assumerole_denied failure
 run_case revoke_response_lost success
 run_case partial_upload failure
+run_case manifest_upload_response_lost failure
+run_case copy_query_failed failure
 run_case success success
