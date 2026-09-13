@@ -186,6 +186,12 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 ## Redshift test-cost discipline
 
 - Use the `eu-central-1` Serverless workgroup `pgwire-ci`, capped at 4 RPUs.
+- On 2026-09-13 the AWS dashboard showed $298.08 of $300.00 Redshift trial
+  credit remaining, expiring 2026-12-11. The workgroup has a 4-RPU maximum
+  capacity but no RPU-hour usage limit or alarm; do not choose an arbitrary
+  query-disabling threshold without an agreed budget. AWS documents that idle
+  Serverless workgroups are not billed for compute, while managed storage is
+  still charged.
 - Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
 - Avoid keepalive connections, polling queries, and idle open transactions so that
   Serverless can return to its non-compute-billed idle state promptly.
@@ -194,6 +200,9 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 - Do not purchase reservations or increase capacity without explicit approval.
 - When Redshift testing is no longer active, evaluate deleting the workgroup and
   namespace; recreate them when needed rather than carrying avoidable storage cost.
+
+See [AWS Serverless billing and cost controls](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing-on-demand.html)
+for the distinction between idle compute, storage, RPU ceilings, and usage limits.
 
 ### Staged `COPY` test fixture (not driver support)
 
@@ -262,6 +271,14 @@ qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: Rebased-core vcpkg workflow `34747963136` passed x64 Debug,
+  x64 Release, and native ARM64 Release, including installed-driver checks.
+  The same rebased commit passed the repository-wide Integration, C#, Rust,
+  Dev/pre-commit, Native Windows, and focused PostgreSQL/Redshift workflows.
+  Native Unix and Java workflows remain queued, so their final results are
+  not yet claimed. The AWS dashboard showed $298.08 of $300.00 Redshift trial
+  credit remaining through 2026-12-11; no RPU-hour limit or alarms are
+  configured, and no AWS setting was changed during this inspection.
 - 2026-09-13: Published stacked `feature/pgwire-libpq-cancel-upstream` from the
   Apache-ready RAII branch. Its only additional patch, `dccef94bc`, changes
   `PGcancel` ownership in the PostgreSQL connection to the same RAII helper;
