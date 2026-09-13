@@ -40,6 +40,11 @@ on:
         required: false
         type: boolean
         default: false
+      copy_probe:
+        description: Manually run a two-row non-root staged COPY fixture with exact cleanup
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -49,26 +54,28 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
 
 concurrency:
-  group: pgwire-postgresql-${{ github.ref }}
-  cancel-in-progress: true
+  group: pgwire-${{ inputs.copy_probe && 'copy-dispatch' || 'postgresql' }}-${{ github.ref }}
+  cancel-in-progress: ${{ !inputs.copy_probe }}
 
 permissions:
   contents: read
 
 jobs:
   redshift-credential-probe:
-    name: Redshift OIDC credential identity (manual only)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.credential_probe }}
+    name: Redshift OIDC credential/COPY fixture (manual only)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.credential_probe || inputs.copy_probe) }}
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/pgwire-redshift-copy.yml
+    with:
+      copy: ${{ inputs.copy_probe }}
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
   cpp-postgresql:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
-    if: ${{ !inputs.credential_probe }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.credential_probe && !inputs.copy_probe) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -109,6 +116,12 @@ jobs:
         run: |
           apt-get update -o Acquire::Retries=3
           apt-get install --yes build-essential ca-certificates cmake git libpq-dev ninja-build pkg-config
+
+      - name: Test staged COPY cleanup without AWS
+        if: ${{ matrix.platform == 'Ubuntu x86-64' }}
+        run: |
+          apt-get install --yes jq python3
+          bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
 
       - name: Configure
         run: >-
@@ -157,7 +170,7 @@ jobs:
 
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
-    if: ${{ !inputs.credential_probe }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.credential_probe && !inputs.copy_probe) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

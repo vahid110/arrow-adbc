@@ -351,7 +351,12 @@ not the normal cleanup path. Isolate the non-canceling CI run from push-driven
 jobs so a push cannot interrupt cleanup. Ownership-safe recovery of an
 ambiguous ingress authorization additionally needs the proposed read-only
 `ec2:DescribeSecurityGroupRules` grant; it has not been added. Do not run the
-two-row fixture until its ingress preflight and cleanup are qualified.
+two-row fixture until its ingress preflight and cleanup are qualified. After
+each manual run, independently inspect the security group for its unique
+`adbc-pgwire-copy-<run-id>-<attempt>` rule description; a force-canceled job
+or lost runner can bypass in-job cleanup, and no ingress TTL exists. Remove
+only a verified rule ID belonging to that run if one remains. A future
+push-triggered COPY gate would need automatic independent reconciliation.
 
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
