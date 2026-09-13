@@ -338,6 +338,24 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   EXPECT_EQ(table->n_table_columns, 4);
   EXPECT_EQ(table->n_table_constraints, 0);
 
+  adbc_validation::StreamReader filtered_reader;
+  ASSERT_THAT(AdbcConnectionGetObjects(&connection_, ADBC_OBJECT_DEPTH_COLUMNS, nullptr,
+                                       "public", kTableName.data(), nullptr, "label",
+                                       &filtered_reader.stream.value, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(filtered_reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(filtered_reader.Next());
+  auto filtered_objects =
+      adbc_validation::GetObjectsReader{&filtered_reader.array_view.value};
+  ASSERT_NE(*filtered_objects, nullptr);
+  auto* filtered_table = InternalAdbcGetObjectsDataGetTableByName(
+      *filtered_objects, "dev", "public", kTableName.data());
+  ASSERT_NE(filtered_table, nullptr);
+  ASSERT_EQ(filtered_table->n_table_columns, 1);
+  const ArrowStringView filtered_column =
+      filtered_table->table_columns[0]->column_name;
+  EXPECT_EQ(std::string_view(filtered_column.data, filtered_column.size_bytes), "label");
+
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_metadata", &error_);
 }
 
