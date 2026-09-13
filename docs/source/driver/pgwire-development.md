@@ -130,7 +130,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 - [ ] Add optional, short-lived IAM credential preparation without changing the
       common libpq authentication path.
-- [ ] Benchmark prepared-insert throughput before choosing an optimization.
+- [x] Benchmark prepared-insert throughput before choosing an optimization.
 - [x] Add an opt-in, one-shot 1,000-row prepared-insert benchmark with an exact
       row-count check and guaranteed test-table cleanup.
 - [x] Provision a private, short-retention S3 fixture and a namespace-attached,
@@ -206,17 +206,26 @@ In AWS account `149112076833`, region `eu-central-1`:
   workgroup/namespace ARN variants. A database privilege check returned
   `has_assumerole_privilege(..., 'copy') = true`, so database `ASSUMEROLE` is
   not the apparent cause. No `AssumeRole` event for this role was visible in
-  CloudTrail event history. Keep the exact-resource trust restriction until
-  the actual source context is identified or an explicit decision is made to
-  relax it. The failed batches rolled back their temporary tables; the exact
-  staging object was deleted after the test.
+  CloudTrail event history. The failed batches rolled back their temporary
+  tables; the exact staging object was deleted after the test.
+- On 2026-09-13, temporarily removing only `aws:SourceArn` while retaining
+  `aws:SourceAccount` and the narrow read-only S3 policy let the same two-row
+  `COPY` succeed. The Data API batch finished all three statements and its
+  count query returned 2. CloudTrail event history in `eu-central-1` and
+  `us-east-1` did not expose an `AssumeRole` event for this role, so the actual
+  source ARN remains unknown. The exact test object was deleted and the
+  original three-ARN trust condition was restored and verified. Thus the
+  current test role is intentionally not usable for `COPY`; choose and verify
+  a least-privilege operational trust policy before enabling staged ingestion.
 - This fixture alone does not enable ADBC staged ingestion. An uploader needs
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
 
 The benchmark is available through manual dispatch of the `PgWire Drivers`
-workflow with `benchmark=true`. Push-triggered CI does not run it. Its measured
-result must be recorded before deciding whether staged `COPY` is justified.
+workflow with `benchmark=true`. Push-triggered CI does not run it. Run
+`34744399423` inserted and verified 1,000 rows in 186.081 seconds, or 5.374
+rows/second, on the 4-RPU `pgwire-ci` workgroup. This is one measurement, not a
+capacity estimate, but it justifies an opt-in staged `COPY` investigation.
 
 See the AWS documentation on [Serverless namespace IAM roles](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-security-other-services.html),
 [minimum S3 permissions for `COPY`](https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-access-permissions.html),
@@ -234,6 +243,21 @@ owner/repository IDs plus the development branch.
 
 ## Progress log
 
+- 2026-09-13: Manual benchmark CI run `34744399423` passed all PostgreSQL and
+  live Redshift gates. Its one-shot prepared-insert measurement was 1,000 rows
+  in 186.081 seconds (5.374 rows/second), with the exact database row count
+  checked. A two-row S3 `COPY` succeeded only after removing the exact
+  `aws:SourceArn` trust condition; its count query returned 2. The object was
+  deleted and the original trust condition restored. This proves feasibility
+  but does not yet establish a safe permanent role trust or an ADBC uploader.
+- 2026-09-13: Push-triggered CI run `34744044155` passed PostgreSQL 18 and
+  installed-client checks on Ubuntu x86-64/ARM64, Debian x86-64, and macOS
+  Intel/Apple Silicon, followed by the focused live Redshift suite. Added a
+  local regression test for empty Redshift query results retaining their Arrow
+  schema; local build passes and live verification is pending. Refreshed Apache
+  `main`: it is four commits ahead of the pinned baseline, limited to Go, Java,
+  and C# dependency updates; defer a history rewrite until the active CI run
+  completes.
 - 2026-09-13: Added a manually dispatched, one-shot Redshift prepared-insert
   benchmark. It prepares 1,000 Arrow integer rows, times bind plus ingest,
   checks both reported and queried row counts, and drops its uniquely named
