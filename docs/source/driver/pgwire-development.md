@@ -164,6 +164,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
       licenses, install guide, and SHA-256 checksum; compile and load a client
       against the extracted archive before publishing it as a CI artifact.
+- [ ] Extend the same short-retention, extracted-client archive check to macOS
+      Intel and Apple Silicon, with architecture-specific artifacts and runtime
+      dependency instructions.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
