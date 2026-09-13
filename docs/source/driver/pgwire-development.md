@@ -291,6 +291,18 @@ In AWS account `149112076833`, region `eu-central-1`:
   original three-ARN trust condition was restored and verified. Thus the
   current test role is intentionally not usable for `COPY`; choose and verify
   a least-privilege operational trust policy before enabling staged ingestion.
+- On 2026-09-13, a second temporary probe replaced the failing `aws:SourceArn`
+  condition with the exact `sts:ExternalId` for the `IAM:RootIdentity` Redshift
+  database-user ARN, retaining `aws:SourceAccount`, both Redshift service
+  principals, and the read-only S3 policy. Data API batch
+  `7d8fb5c1-d7c6-430a-b369-396a6364f3da` created a temporary table, loaded
+  the two-row SSE-S3 object, and returned a count of 2. The original
+  three-ARN trust policy was restored (verified by semantic comparison), and
+  the exact staging object was deleted (verified by a 404). This validates
+  role assumption and `COPY` for this database identity only; it does not
+  enable staged ingestion in the ADBC driver or establish a permanent CI trust
+  policy. AWS documents [database-user-scoped `sts:ExternalId` trust](https://docs.aws.amazon.com/redshift/latest/mgmt/authorizing-redshift-service-database-users.html)
+  as a way to restrict Redshift role access.
 - AWS's [Redshift confused-deputy guidance](https://docs.aws.amazon.com/redshift/latest/mgmt/cross-service-confused-deputy-prevention.html)
   recommends both `aws:SourceAccount` and a Serverless workgroup
   `aws:SourceArn`. Its example uses a workgroup *name* in the ARN, while the
@@ -299,9 +311,9 @@ In AWS account `149112076833`, region `eu-central-1`:
   including its actual UUID, so this documentation difference alone does not
   explain the failed assumption. The observed success when only `SourceArn`
   was removed suggests the request's source ARN was absent or different, but
-  that is an inference, not a verified value. Do not widen the role again to
-  test guesses; obtain an authoritative source-context trace or AWS Support
-  guidance before changing the trust condition.
+  that is an inference, not a verified value. The exact `sts:ExternalId` probe
+  above is a verified alternative for `IAM:RootIdentity`; qualify a dedicated
+  non-root test identity and its narrow trust before any permanent change.
 - This fixture alone does not enable ADBC staged ingestion. An uploader needs
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
@@ -328,14 +340,22 @@ runner `/32`, runs only the focused Redshift suite, and revokes that exact rule 
 an `always()` cleanup step. The AWS role can modify ingress on only the dedicated
 Redshift security group and its OIDC trust is pinned to this repository's immutable
 owner/repository IDs plus the development branch. The bounded multi-row INSERT
-path is live-tested, while account-scoped staged `COPY` proved the mechanism but
-still lacks a safe operational trust/uploader design. Four PostgreSQL-only
+path is live-tested, while two-row staged `COPY` probes proved the AWS mechanism
+with reduced trust conditions, including an exact database-user External ID.
+Operational trust for a dedicated non-root identity and an uploader remain
+unfinished. Four PostgreSQL-only
 cleanup patches are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Verified a database-user-scoped `sts:ExternalId` trust candidate
+  for the two-row Redshift Serverless `COPY` fixture. The Data API batch
+  returned count 2. Restored and semantically verified the original
+  `aws:SourceArn`-scoped trust, then deleted the exact S3 object and confirmed
+  its absence. This is an AWS-side feasibility result, not driver support or a
+  permanent trust-policy change.
 - 2026-09-13: Confirmed the AWS Serverless dashboard's free-trial balance
   after the live qualification runs: $297.51/$300.00 remained, versus $298.08
   at the previous recorded check. No snapshots or alarms were present; no
