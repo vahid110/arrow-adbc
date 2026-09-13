@@ -41,6 +41,7 @@ adbc_postgres_driver_lib = library(
 adbc_redshift_driver_lib = library(
     'adbc_driver_redshift',
     sources: pgwire_driver_sources + [
+        'redshift_csv_writer.cc',
         'redshift_staged_copy.cc',
         'redshift_staged_copy_coordinator.cc',
     ],
@@ -119,8 +120,10 @@ redshift_exc = executable(
     'adbc-driver-redshift-test',
     sources: [
         '../pgwire/redshift_driver_test.cc',
+        '../pgwire/redshift_csv_writer_test.cc',
         '../pgwire/redshift_staged_copy_test.cc',
         '../pgwire/redshift_staged_copy_coordinator_test.cc',
+        'redshift_csv_writer.cc',
         'redshift_staged_copy.cc',
         'redshift_staged_copy_coordinator.cc',
     ],
