@@ -198,7 +198,21 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
-    T value = kOffset + ReadUnsafe<T>(data);
+    T value = ReadUnsafe<T>(data);
+    if constexpr (kOffset != 0) {
+      T adjusted;
+      bool in_range;
+      if constexpr (sizeof(T) == sizeof(int64_t)) {
+        in_range = psnip_safe_int64_add(&adjusted, value, kOffset);
+      } else {
+        in_range = psnip_safe_int32_add(&adjusted, value, kOffset);
+      }
+      if (!in_range) {
+        ArrowErrorSet(error, "Value overflows Arrow type when adjusting Postgres epoch");
+        return EOVERFLOW;
+      }
+      value = adjusted;
+    }
     NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &value, sizeof(T)));
     return AppendValid(array);
   }

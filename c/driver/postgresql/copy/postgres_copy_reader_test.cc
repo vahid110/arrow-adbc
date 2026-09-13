@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -496,6 +498,48 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadTimestamp) {
 
   ASSERT_EQ(data_buffer[0], -2208943504000000);
   ASSERT_EQ(data_buffer[1], 4102490096000000);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyReadTimestampEpochOffsetBoundary) {
+  const auto read_timestamp = [](uint64_t pg_microseconds, int64_t* arrow_microseconds,
+                                 ArrowError* error) {
+    // Reuse the standard binary COPY header, then append one timestamp row.
+    std::vector<uint8_t> bytes(kTestPgCopyTimestamp, kTestPgCopyTimestamp + 19);
+    bytes.insert(bytes.end(), {0x00, 0x01, 0x00, 0x00, 0x00, 0x08});
+    for (int shift = 56; shift >= 0; shift -= 8) {
+      bytes.push_back(static_cast<uint8_t>(pg_microseconds >> shift));
+    }
+    bytes.insert(bytes.end(), {0xff, 0xff});
+
+    ArrowBufferView data;
+    data.data.as_uint8 = bytes.data();
+    data.size_bytes = bytes.size();
+
+    PostgresType input_type(PostgresTypeId::kRecord);
+    input_type.AppendChild("col", PostgresType(PostgresTypeId::kTimestamp));
+    PostgresCopyStreamTester tester;
+    if (tester.Init(input_type, error) != NANOARROW_OK) return EINVAL;
+    const int result = tester.ReadAll(&data, error);
+    if (result == ENODATA && arrow_microseconds != nullptr) {
+      nanoarrow::UniqueArray array;
+      if (tester.GetArray(array.get(), error) != NANOARROW_OK) return EINVAL;
+      *arrow_microseconds =
+          reinterpret_cast<const int64_t*>(array->children[0]->buffers[1])[0];
+    }
+    return result;
+  };
+
+  // PostgreSQL's 2000 epoch is 946684800000000 microseconds after Arrow's 1970 epoch.
+  constexpr uint64_t kLargestRepresentable = 0x7ffca2fec4c81fff;
+  int64_t arrow_microseconds = 0;
+  ArrowError error;
+  ArrowErrorInit(&error);
+  EXPECT_EQ(read_timestamp(kLargestRepresentable, &arrow_microseconds, &error), ENODATA);
+  EXPECT_EQ(arrow_microseconds, (std::numeric_limits<int64_t>::max)());
+
+  ArrowErrorInit(&error);
+  EXPECT_EQ(read_timestamp(kLargestRepresentable + 1, nullptr, &error), EOVERFLOW);
+  EXPECT_NE(std::string(error.message).find("overflows"), std::string::npos);
 }
 
 TEST(PostgresCopyUtilsTest, PostgresCopyReadInterval) {
