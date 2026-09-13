@@ -187,6 +187,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Publish a fifth standalone Apache-facing PostgreSQL `GetObjects` fix:
       column filtering retains table constraints, with a focused regression
       test and no Redshift-specific code. This is a fork branch, not an Apache PR.
+- [x] Publish a sixth isolated PostgreSQL timestamp range fix from local
+      `upstream/main`: use checked epoch arithmetic and a non-retryable range
+      error, with an offline boundary regression. This is a fork branch, not an
+      Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -265,8 +269,11 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   separate `RedshiftCiIngressInspect` policy grants read-only
   [`ec2:DescribeSecurityGroupRules`](https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-security-group-rules.html)
   with `Resource: "*"` and `aws:RequestedRegion=eu-central-1`. IAM simulation
-  allowed the Frankfurt request and denied `us-east-1`. Ten cleanup mocks
-  passed on Ubuntu and one live two-row run cleaned up its rule. A lost runner
+  allowed the Frankfurt request and denied `us-east-1`. Twenty-three COPY
+  fixture mocks and eleven ordinary-ingress mocks passed; an earlier live
+  two-row run cleaned its rule before these latest changes. An ambiguous
+  revoke response now stays a visible audit failure, even when an eventually
+  consistent `DescribeSecurityGroupRules` reports an empty list. A lost runner
   can still bypass all in-job cleanup, so manually audit each opt-in run;
   automatic push-triggered COPY remains gated on independent reconciliation.
 - [x] Make S3 fixture uploads conditional (`If-None-Match: *`) and cleanup
@@ -450,12 +457,44 @@ with a run-specific `adbc-pgwire-live-<run-id>-<attempt>` description. It refuse
 to alter a pre-existing exact-CIDR rule, saves the authorization attempt before
 the AWS call, and revokes only a verified owned rule ID even if the authorize
 response is lost. Cleanup runs after any successful AWS credential step and
-reports unresolved ambiguity as a failure. A lost runner or force-canceled job
+reports unresolved ambiguity as a failure, including a lost revoke response
+followed by a stale empty read. A lost runner or force-canceled job
 can still bypass in-job cleanup, so independent post-run rule inspection remains
 necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-13: Corrected a shared PostgreSQL-wire result conversion edge: the
+  binary-encoded `TIMESTAMP`/`TIMESTAMPTZ` epoch adjustment now checks for
+  overflow and reports a non-retryable range error instead of wrapping a valid
+  server value outside Arrow's signed 64-bit microsecond range. A new boundary and
+  first-overflow reader test passes with 23 offline reader tests and 39 Redshift
+  artifact tests locally. Redshift documents timestamp values through
+  [year 294276](https://docs.aws.amazon.com/redshift/latest/dg/r_Datetime_types.html),
+  beyond Arrow's 1970-epoch microsecond range. No AWS test was needed; the
+  corrected head passed the
+  [five-target PostgreSQL 18 and Redshift artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34778289135)
+  and [seven-platform development archive/checksum run](https://github.com/vahid110/arrow-adbc/actions/runs/34778281078),
+  with all AWS-backed jobs skipped.
+- 2026-09-13: Published the generic range fix separately on fork branch
+  [`feature/upstream-pg-timestamp-range`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-timestamp-range)
+  from `upstream/main` at `4d50e2e30`. Its two-commit diff contains only the
+  PostgreSQL COPY reader and its test. An isolated source build passed 21/21
+  offline reader cases. No Apache PR has been opened.
+- 2026-09-13: Fixed a false-success cleanup edge in both ordinary Redshift CI
+  ingress and the opt-in COPY fixture: a failed or response-lost EC2 revoke
+  cannot be certified by one stale empty Describe result. It leaves the rule
+  pending independent audit and fails the job. The new stale-read/denied-revoke
+  regressions bring the local mock suites to 11 ordinary-ingress and 23 COPY
+  cases. The [AWS-free cleanup selftest](https://github.com/vahid110/arrow-adbc/actions/runs/34777883620)
+  passed; no IAM grant, live COPY, or Redshift compute was used. A genuinely
+  lost runner still needs independent post-run rule inspection.
+- 2026-09-13: Added a separate, push-triggered
+  [AWS-free cleanup workflow](https://github.com/vahid110/arrow-adbc/actions/runs/34778632907)
+  for edits to either ingress/COPY script or its mock tests. Its first run
+  passed Bash syntax plus all 34 safety scenarios with only read access to
+  repository contents; it has no AWS credential or live Redshift job. The
+  existing paid live workflow's script path filter stays unchanged.
 - 2026-09-13: Hardened ordinary live Redshift CI ingress ownership and failure
   recovery. Ten AWS-free mocks cover pre-existing foreign ingress, ambiguous or
   lost authorize/revoke responses, denied reads/revocation, invalid runner CIDR,
