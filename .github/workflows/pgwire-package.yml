@@ -252,6 +252,7 @@ jobs:
             msysbin: mingw64
             environment: x86_64
             compiler-package: mingw-w64-x86_64-gcc
+            postgres-package: mingw-w64-ucrt-x86_64-postgresql
             triplet: x64-windows-static-release
           - arch: arm64
             runner: windows-11-arm
@@ -259,6 +260,7 @@ jobs:
             msysbin: clangarm64
             environment: clang-aarch64
             compiler-package: mingw-w64-clang-aarch64-gcc-compat
+            postgres-package: mingw-w64-clang-aarch64-postgresql
             triplet: arm64-windows-static-release
     defaults:
       run:
@@ -281,6 +283,7 @@ jobs:
           install: |
             mingw-w64-${{ matrix.environment }}-tools
             ${{ matrix.compiler-package }}
+            ${{ matrix.postgres-package }}
 
       - name: Add msys2 toolchain to PATH
         env:
@@ -378,6 +381,33 @@ jobs:
           $env:PATH = "$(Join-Path $extract 'bin');$env:PATH"
           & $smokeExe $driverDll --load-only
           if ($LASTEXITCODE -ne 0) { throw "failed to load extracted Redshift DLL" }
+
+      - name: Connect extracted clients to temporary PostgreSQL 18
+        run: |
+          $extract = Join-Path $env:RUNNER_TEMP "pgwire-package-test"
+          $smokeExe = Join-Path $env:RUNNER_TEMP "redshift-smoke-build\Release\adbc_redshift_install_smoke.exe"
+          $data = Join-Path $env:RUNNER_TEMP "pgwire-pgdata"
+          $log = Join-Path $env:RUNNER_TEMP "pgwire-postgres.log"
+          $uri = "postgresql://127.0.0.1:55433/postgres?user=postgres"
+          & initdb.exe -D $data -A trust -U postgres --no-instructions
+          if ($LASTEXITCODE -ne 0) { throw "failed to initialize PostgreSQL" }
+          try {
+            & pg_ctl.exe -D $data -o "-h 127.0.0.1 -p 55433" -l $log -w start
+            if ($LASTEXITCODE -ne 0) { throw "failed to start PostgreSQL" }
+            $env:PATH = "$(Join-Path $extract 'bin');$env:PATH"
+            $postgresDriver = Join-Path $extract "bin\adbc_driver_postgresql.dll"
+            $redshiftDriver = Join-Path $extract "bin\adbc_driver_redshift.dll"
+            if (-not (Test-Path $postgresDriver)) { throw "PostgreSQL DLL missing" }
+            & $smokeExe $postgresDriver $uri
+            if ($LASTEXITCODE -ne 0) { throw "extracted PostgreSQL driver could not connect" }
+            & $smokeExe $redshiftDriver $uri --expect-postgresql-rejection
+            if ($LASTEXITCODE -ne 0) { throw "extracted Redshift driver did not reject PostgreSQL" }
+          } finally {
+            if (Test-Path (Join-Path $data "postmaster.pid")) {
+              & pg_ctl.exe -D $data -m immediate -w stop
+              if ($LASTEXITCODE -ne 0) { throw "failed to stop PostgreSQL" }
+            }
+          }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

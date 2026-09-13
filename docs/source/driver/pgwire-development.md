@@ -196,6 +196,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
       Windows architecture.
+- [ ] Connect independent clients built from each extracted Windows ZIP to a
+      temporary native PostgreSQL 18 server: the packaged PostgreSQL driver
+      must connect, and the packaged Redshift driver must reject that server.
 - [x] Download a checked, same-commit Ubuntu x86-64 Release development
       archive in the live Redshift job and connect an independent client from
       that extracted archive without treating it as a production release.
@@ -315,6 +318,13 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a native PostgreSQL 18 package dependency to both Windows
+  archive jobs and a post-extraction database-backed smoke gate. Each job
+  builds the independent CMake client against its extracted ZIP, then should
+  connect through the packaged PostgreSQL DLL and verify that the packaged
+  Redshift DLL rejects PostgreSQL. The temporary server is stopped in a
+  `finally` block. `actionlint` passed with only the two known newer GitHub
+  runner labels suppressed; native CI evidence is pending.
 - 2026-09-13: Package run `34757277976` passed all seven native archive jobs
   and its final downloadable archive/checksum gate at commit `9c20745f69`.
   Manually dispatched focused run `34757555359` at that exact commit passed
