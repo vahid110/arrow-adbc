@@ -53,11 +53,13 @@ Static-library consumers should inspect the generated package metadata and
 link transitive dependencies; the clean-client check below uses shared libraries.
 There are no release packages or platform-support guarantees yet.
 
-For Ubuntu 24.04 x86-64, macOS Intel, or macOS Apple Silicon evaluation, the
+For Ubuntu 24.04 x86-64/ARM64, Debian Bookworm x86-64, or macOS Intel/Apple
+Silicon evaluation, the
 [development-package workflow](https://github.com/vahid110/arrow-adbc/actions/workflows/pgwire-package.yml)
 publishes architecture-specific seven-day archives and SHA-256 files. Each
 embedded `README.md` explains extraction and runtime requirements. CI checks
-each extracted archive with an independent client, but these artifacts are not
+each extracted archive with an independent client and separately downloads
+every artifact to verify its archive/checksum pair. These artifacts are not
 production releases and their packaged binaries have not yet passed a live
 Redshift connection test.
 

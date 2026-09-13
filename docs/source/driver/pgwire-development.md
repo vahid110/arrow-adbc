@@ -170,7 +170,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Extend the same short-retention, extracted-client archive check to macOS
       Intel and Apple Silicon, with architecture-specific artifacts and runtime
       dependency instructions.
-- [ ] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
+- [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
@@ -191,8 +191,8 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
 | Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
-| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
-| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
+| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
+| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
 - [x] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
@@ -287,6 +287,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Corrected package workflow `34750754477` passed all five build,
+  extracted-client, and upload jobs plus a final job that downloaded every
+  archive/checksum pair and verified each SHA-256. Separately downloaded the
+  Debian x86-64 and Ubuntu ARM64 replacements, verified their checksums, and
+  confirmed their ELF architectures. Removed only the four older Linux
+  artifacts known to omit checksums (three from `34750508662` and one from the
+  earlier driver workflow); the corrected replacements remain available.
+  This still does not qualify packaged binaries against live Redshift or make
+  a production release claim.
 - 2026-09-13: First Linux-matrix package run `34750508662` passed its build,
   checksum, extracted-client, and upload steps on Ubuntu x86-64/ARM64 and
   Debian x86-64, and both macOS jobs also passed. A separate download audit
