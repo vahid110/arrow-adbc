@@ -93,22 +93,20 @@ int TupleReader::GetCopyData() {
 
   if (get_copy_res == -1) {
     // Check the server-side response
-    PQclear(result_);
-    result_ = PQgetResult(conn_);
-    const ExecStatusType pq_status = PQresultStatus(result_);
+    result_.reset(PQgetResult(conn_));
+    const ExecStatusType pq_status = PQresultStatus(result_.get());
     int errno_result = ENODATA;
     if (pq_status != PGRES_COMMAND_OK) {
-      status_ = MakeStatus(result_, "[libpq] Execution error [{}]: {}",
-                           PQresStatus(pq_status), PQresultErrorMessage(result_))
+      status_ = MakeStatus(result_.get(), "[libpq] Execution error [{}]: {}",
+                           PQresStatus(pq_status), PQresultErrorMessage(result_.get()))
                     .ToAdbc(&error_);
       errno_result = InternalAdbcStatusCodeToErrno(status_);
     }
 
     // Drain remaining responses
-    PQclear(result_);
-    while ((result_ = PQgetResult(conn_)) != nullptr) {
-      PQclear(result_);
-    }
+    do {
+      result_.reset(PQgetResult(conn_));
+    } while (result_);
     return errno_result;
   }
 
@@ -216,10 +214,7 @@ void TupleReader::Release() {
   error_ = ADBC_ERROR_INIT;
   status_ = ADBC_STATUS_OK;
 
-  if (result_) {
-    PQclear(result_);
-    result_ = nullptr;
-  }
+  result_.reset();
 
   if (pgbuf_) {
     PQfreemem(pgbuf_);
@@ -649,7 +644,7 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
   RAISE_STATUS(error, helper.ExecuteCopy());
 
   // We need the PQresult back for the reader
-  reader_->result_ = helper.ReleaseResult();
+  reader_->result_.reset(helper.ReleaseResult());
 
   // Export to stream
   reader_->ExportTo(stream);
