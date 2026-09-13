@@ -152,6 +152,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Add and live-test a bounded multi-row parameterized INSERT path for
       Redshift, preserving whole-bind atomicity, as an intermediate improvement
       that requires no AWS uploader or broader IAM trust.
+- [x] Qualify a small, explicit `JSON_SERIALIZE(SUPER)` query as Arrow text,
+      while documenting that its `VARCHAR` limit makes it unsuitable as an
+      automatic general `SUPER` mapping.
 - [ ] If justified, add staged S3 `COPY` ingestion with least-privilege IAM,
       deterministic object cleanup, and a separate opt-in live test. Consider
       `UNLOAD` only after a measured read-path need.
@@ -303,12 +306,19 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Focused run `34755613857` passed all five PostgreSQL 18
+  platform jobs and 19 live Redshift smoke tests. The new
+  `ReadsExplicitlySerializedSuperAsText` case passed for a small JSON array;
+  the independently installed client connected, and the exact temporary
+  ingress was revoked. This does not qualify native or large-value `SUPER`
+  mapping.
 - 2026-09-13: Added a read-only live test for explicit
   `JSON_SERIALIZE(JSON_PARSE(...))` as Arrow text and documented why this
   cannot be an automatic, arbitrary-size `SUPER` mapping: Redshift's
   serialized `VARCHAR` limit is smaller than its `SUPER` value limit. The
-  pinned formatter, local C++ build, and PostgreSQL suites pass; live Redshift
-  qualification is pending. Native `SUPER` mapping remains unsupported.
+  pinned formatter, local C++ build, and PostgreSQL suites pass; the live
+  qualification was pending at this checkpoint and later passed as recorded
+  above. Native `SUPER` mapping remains unsupported.
 - 2026-09-13: Manual focused run `34755153065` passed all five PostgreSQL 18
   platform jobs, the 18 existing live Redshift smoke tests, and the separate
   opt-in `RedshiftCancelTest.CancelsBoundedAnalyticQuery` (5.52 seconds
