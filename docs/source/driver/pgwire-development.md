@@ -210,6 +210,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       the isolated field-bounds branch: constrain tuple, record, and array
       children to their declared byte ranges, including exact consumption.
       This is a fork branch, not an Apache PR.
+- [x] Publish a twelfth standalone PostgreSQL binary-COPY trailer fix from
+      local `upstream/main`: reject trailing data and missing or truncated
+      trailers while retaining server-error precedence. This is a fork
+      branch, not an Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -466,7 +470,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Eleven
+the CSV buffer; none is selected by the active driver ingest path. Twelve
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -483,6 +487,24 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Enforced the binary-COPY trailer at parser and libpq physical
+  end-of-stream boundaries. A trailer with bytes after it, additional COPY
+  data after a trailer, a truncated trailer, and a successful physical EOF
+  without a trailer are now rejected; a server-reported error retains
+  precedence. Four new offline regressions bring the development reader
+  suite to 45/45 under ASan/UBSan. Published the standalone PostgreSQL-only
+  [`feature/upstream-pg-copy-trailer`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-trailer)
+  from `upstream/main` at `4d50e2e30`, with its source build and 26 offline
+  reader tests passing. The libpq EOF branch is covered through a testable
+  decoder validation method, not a synthetic libpq integration test; the
+  broader fork CI is pending. No AWS run or Apache PR was used.
+- 2026-09-14: The header-validation development head passed the
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34789014071)
+  and [seven-platform development package/checksum matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34789021228)
+  without AWS. The isolated bounds branch's sole Integration failure came
+  from AlloyDB Omni closing all connections during validation; its failed-job
+  [retry passed](https://github.com/vahid110/arrow-adbc/actions/runs/34788686718).
+  The other isolated platform checks may still be in progress.
 - 2026-09-14: Bounded each binary-COPY tuple, nested-record, and array child
   decoder to its own declared field view and reject successful decodes that
   leave bytes unconsumed. Five new regressions cover cross-field array,
