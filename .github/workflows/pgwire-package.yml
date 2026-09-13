@@ -29,6 +29,8 @@ on:
       - "c/driver_manager/**"
       - "c/CMakeLists.txt"
       - "c/cmake_modules/**"
+      - "!c/**/*.md"
+      - "!c/**/*_test.cc"
 
 permissions:
   contents: read
