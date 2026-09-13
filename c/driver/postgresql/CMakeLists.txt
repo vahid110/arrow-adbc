@@ -128,6 +128,7 @@ if(ADBC_BUILD_TESTS)
                 SOURCES
                 ../pgwire/redshift_driver_test.cc
                 ../pgwire/redshift_staged_copy_test.cc
+                redshift_staged_copy.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common
                 ${REDSHIFT_TEST_LINK_LIBS})

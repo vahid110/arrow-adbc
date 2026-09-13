@@ -117,6 +117,7 @@ redshift_exc = executable(
     sources: [
         '../pgwire/redshift_driver_test.cc',
         '../pgwire/redshift_staged_copy_test.cc',
+        'redshift_staged_copy.cc',
     ],
     include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_redshift_driver_lib],
