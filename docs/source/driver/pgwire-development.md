@@ -152,6 +152,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Prepare and publish the first isolated Apache-ready libpq RAII cleanup
       branch from current `upstream/main`, with no Redshift code or project
       roadmap in its diff; build and run both PostgreSQL C++ test suites locally.
+- [x] Prepare and publish a second small Apache-ready cancellation-handle
+      cleanup stacked on the first, again without Redshift code or roadmap
+      changes and with both PostgreSQL C++ test suites passing locally.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
@@ -259,6 +262,16 @@ qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: Published stacked `feature/pgwire-libpq-cancel-upstream` from the
+  Apache-ready RAII branch. Its only additional patch, `dccef94bc`, changes
+  `PGcancel` ownership in the PostgreSQL connection to the same RAII helper;
+  it does not include Redshift behavior or the project roadmap. The pinned
+  clang-format check, local build, and both PostgreSQL C++ suites passed.
+  The rebased core branch's workflow `34747963110` also passed all five
+  PostgreSQL 18 platform jobs and all 14 live Redshift tests, including the
+  stronger persisted-data commit/rollback assertion; AWS runner ingress was
+  revoked. Its Dev/pre-commit workflow `34747963180` passed. Windows and
+  broader downstream jobs from that push are still running.
 - 2026-09-13: All three Windows vcpkg jobs for workflow `34747059182`
   completed successfully: x64 Debug, x64 Release, and native ARM64 Release.
   Their installed Redshift DLL/client checks passed; this is still not a
