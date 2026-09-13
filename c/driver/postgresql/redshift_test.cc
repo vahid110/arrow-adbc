@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
@@ -38,10 +39,10 @@ using adbc_validation::IsOkStatus;
 namespace {
 
 TEST(ParameterizedInsertQueryTest, NumbersParametersAcrossRows) {
-  EXPECT_EQ(adbcpq::BuildParameterizedInsertQuery("\"target\"", "\"id\", \"label\"",
-                                                  2, 3),
-            "INSERT INTO \"target\" (\"id\", \"label\") VALUES "
-            "($1, $2), ($3, $4), ($5, $6)");
+  EXPECT_EQ(
+      adbcpq::BuildParameterizedInsertQuery("\"target\"", "\"id\", \"label\"", 2, 3),
+      "INSERT INTO \"target\" (\"id\", \"label\") VALUES "
+      "($1, $2), ($3, $4), ($5, $6)");
 }
 
 TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {
@@ -284,8 +285,8 @@ TEST_F(RedshiftSmokeTest, ReturnsLargerResultCompletely) {
 TEST_F(RedshiftSmokeTest, ReturnsSchemaForEmptyResult) {
   struct AdbcStatement statement = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &statement, "SELECT 1::INTEGER AS id WHERE 1 = 0", &error_),
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 1::INTEGER AS id WHERE 1 = 0",
+                                       &error_),
               IsOkStatus(&error_));
 
   adbc_validation::StreamReader reader;
@@ -352,8 +353,7 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
       *filtered_objects, "dev", "public", kTableName.data());
   ASSERT_NE(filtered_table, nullptr);
   ASSERT_EQ(filtered_table->n_table_columns, 1);
-  const ArrowStringView filtered_column =
-      filtered_table->table_columns[0]->column_name;
+  const ArrowStringView filtered_column = filtered_table->table_columns[0]->column_name;
   EXPECT_EQ(std::string_view(filtered_column.data, filtered_column.size_bytes), "label");
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_metadata", &error_);
@@ -481,17 +481,17 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesBatchedParameterizedInsert) {
   std::vector<std::optional<int32_t>> first_ids(ids.begin(), ids.begin() + 10);
   std::vector<std::optional<int32_t>> second_ids(ids.begin() + 10, ids.end());
   std::vector<std::optional<std::string>> first_labels(labels.begin(),
-                                                        labels.begin() + 10);
+                                                       labels.begin() + 10);
   std::vector<std::optional<std::string>> second_labels(labels.begin() + 10,
-                                                         labels.end());
-  ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
-                  bind_schema.get(), first_batch.get(), nullptr, first_ids,
-                  first_labels)),
-              adbc_validation::IsOkErrno());
-  ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
-                  bind_schema.get(), second_batch.get(), nullptr, second_ids,
-                  second_labels)),
-              adbc_validation::IsOkErrno());
+                                                        labels.end());
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t, std::string>(
+          bind_schema.get(), first_batch.get(), nullptr, first_ids, first_labels)),
+      adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t, std::string>(
+          bind_schema.get(), second_batch.get(), nullptr, second_ids, second_labels)),
+      adbc_validation::IsOkErrno());
   std::vector<struct ArrowArray> batches(2);
   ArrowArrayMove(first_batch.get(), &batches[0]);
   ArrowArrayMove(second_batch.get(), &batches[1]);
@@ -503,8 +503,7 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesBatchedParameterizedInsert) {
   ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
                                      kTableName.data(), &error_),
               IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementBindStream(&ingest, bind.get(), &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementBindStream(&ingest, bind.get(), &error_), IsOkStatus(&error_));
   int64_t rows_affected = -1;
   ASSERT_THAT(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
               IsOkStatus(&error_));
@@ -525,8 +524,8 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesBatchedParameterizedInsert) {
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_NO_FATAL_FAILURE(
       adbc_validation::CompareArray<int32_t>(reader.array_view->children[0], ids));
-  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
-      reader.array_view->children[1], labels));
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<std::string>(reader.array_view->children[1], labels));
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest", &error_);
@@ -553,9 +552,9 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
   for (int32_t i = 1; i <= 17; i++) ids.emplace_back(i);
   ids.emplace_back(std::nullopt);
   nanoarrow::UniqueArray bind;
-  ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(
-                  bind_schema.get(), bind.get(), nullptr, ids)),
-              adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t>(bind_schema.get(), bind.get(), nullptr, ids)),
+      adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
@@ -619,8 +618,9 @@ class RedshiftBenchmarkTest : public RedshiftSmokeTest {
 
 TEST_F(RedshiftBenchmarkTest, ParameterizedInsertThroughput) {
   constexpr int32_t kRows = 1000;
-  table_name_ = "adbc_redshift_insert_benchmark_" + std::to_string(
-      std::chrono::steady_clock::now().time_since_epoch().count());
+  table_name_ =
+      "adbc_redshift_insert_benchmark_" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
   nanoarrow::UniqueSchema schema;
   ArrowSchemaInit(schema.get());
@@ -634,9 +634,9 @@ TEST_F(RedshiftBenchmarkTest, ParameterizedInsertThroughput) {
   ids.reserve(kRows);
   for (int32_t i = 0; i < kRows; ++i) ids.emplace_back(i);
   nanoarrow::UniqueArray array;
-  ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(schema.get(), array.get(), nullptr,
-                                                   ids)),
-              adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      (adbc_validation::MakeBatch<int32_t>(schema.get(), array.get(), nullptr, ids)),
+      adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));

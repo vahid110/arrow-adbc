@@ -41,8 +41,8 @@ constexpr int kPgBinaryFormat = 1;
 
 // table and fields must be SQL identifiers escaped by CreateBulkTable().
 inline std::string BuildParameterizedInsertQuery(const std::string& table,
-                                                  const std::string& fields,
-                                                  size_t columns, size_t rows) {
+                                                 const std::string& fields,
+                                                 size_t columns, size_t rows) {
   std::string query = "INSERT INTO " + table + " (" + fields + ") VALUES ";
   for (size_t row = 0; row < rows; row++) {
     if (row > 0) query += ", ";
@@ -389,8 +389,8 @@ struct BindStream {
   }
 
   Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,
-                                const std::string& fields, size_t max_rows,
-                                int64_t* executed_rows) {
+                                 const std::string& fields, size_t max_rows,
+                                 int64_t* executed_rows) {
     *executed_rows = 0;
     param_buffer->size_bytes = 0;
     std::vector<Oid> batch_types;
@@ -422,10 +422,9 @@ struct BindStream {
         if (is_null) {
           UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
         } else {
-          UNWRAP_NANOARROW(
-              na_error, Internal,
-              bind_field_writers[col]->Write(&param_buffer.value, current_row,
-                                             &na_error));
+          UNWRAP_NANOARROW(na_error, Internal,
+                           bind_field_writers[col]->Write(&param_buffer.value,
+                                                          current_row, &na_error));
         }
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {
@@ -514,8 +513,8 @@ struct BindStream {
         if (rows_affected) (*rows_affected)++;
       } else {
         int64_t executed_rows = 0;
-        execution_status = BindAndExecuteNextBatch(
-            pg_conn, table, fields, max_batch_rows, &executed_rows);
+        execution_status = BindAndExecuteNextBatch(pg_conn, table, fields, max_batch_rows,
+                                                   &executed_rows);
         if (!execution_status.ok() || executed_rows == 0) break;
         if (rows_affected) *rows_affected += executed_rows;
       }
