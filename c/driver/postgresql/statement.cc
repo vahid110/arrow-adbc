@@ -759,17 +759,12 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   }));
 
   if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kParameterizedInsert) {
-    std::string query =
-        "INSERT INTO " + escaped_table + " (" + escaped_field_list + ") VALUES (";
-    for (int64_t i = 0; i < bind_stream.bind_schema->n_children; i++) {
-      if (i > 0) query += ", ";
-      query += "$" + std::to_string(i + 1);
-    }
-    query += ")";
-
     RAISE_STATUS(error, bind_stream.ExecutePreparedRows(
-                            connection_->conn(), query, *connection_->type_resolver(),
-                            connection_->autocommit(), rows_affected));
+                            connection_->conn(), escaped_table, escaped_field_list,
+                            *connection_->type_resolver(), connection_->autocommit(),
+                            connection_->backend_profile()
+                                .capabilities.parameterized_ingest_batch_rows,
+                            rows_affected));
     return ADBC_STATUS_OK;
   }
 

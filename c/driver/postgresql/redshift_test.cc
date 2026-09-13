@@ -29,12 +29,20 @@
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow.hpp>
 
+#include "bind_stream.h"
 #include "driver/framework/objects.h"
 #include "validation/adbc_validation_util.h"
 
 using adbc_validation::IsOkStatus;
 
 namespace {
+
+TEST(ParameterizedInsertQueryTest, NumbersParametersAcrossRows) {
+  EXPECT_EQ(adbcpq::BuildParameterizedInsertQuery("\"target\"", "\"id\", \"label\"",
+                                                  2, 3),
+            "INSERT INTO \"target\" (\"id\", \"label\") VALUES "
+            "($1, $2), ($3, $4), ($5, $6)");
+}
 
 TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {
   const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
@@ -427,7 +435,7 @@ TEST_F(RedshiftSmokeTest, ExecutesBoundParameterQuery) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
-TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
+TEST_F(RedshiftSmokeTest, BulkIngestUsesBatchedParameterizedInsert) {
   constexpr std::string_view kTableName = "adbc_redshift_mvp_ingest";
   ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_ingest", &error_);
 
@@ -444,9 +452,15 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
   ASSERT_THAT(ArrowSchemaSetName(bind_schema->children[1], "label"),
               adbc_validation::IsOkErrno());
 
+  std::vector<std::optional<int32_t>> ids;
+  std::vector<std::optional<std::string>> labels;
+  for (int32_t i = 1; i <= 18; i++) {
+    ids.emplace_back(i);
+    labels.emplace_back(std::to_string(i));
+  }
   nanoarrow::UniqueArray bind;
   ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
-                  bind_schema.get(), bind.get(), nullptr, {1, 2}, {"one", "two"})),
+                  bind_schema.get(), bind.get(), nullptr, ids, labels)),
               adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
@@ -459,7 +473,7 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
   int64_t rows_affected = -1;
   ASSERT_THAT(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
               IsOkStatus(&error_));
-  EXPECT_EQ(rows_affected, 2);
+  EXPECT_EQ(rows_affected, 18);
   EXPECT_THAT(AdbcStatementRelease(&ingest, &error_), IsOkStatus(&error_));
 
   struct AdbcStatement query = {};
@@ -475,9 +489,9 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesParameterizedInsert) {
   ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_NO_FATAL_FAILURE(
-      adbc_validation::CompareArray<int32_t>(reader.array_view->children[0], {1, 2}));
+      adbc_validation::CompareArray<int32_t>(reader.array_view->children[0], ids));
   ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
-      reader.array_view->children[1], {"one", "two"}));
+      reader.array_view->children[1], labels));
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest", &error_);
@@ -500,10 +514,12 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
   ASSERT_THAT(ArrowSchemaSetName(bind_schema->children[0], "id"),
               adbc_validation::IsOkErrno());
 
+  std::vector<std::optional<int32_t>> ids;
+  for (int32_t i = 1; i <= 17; i++) ids.emplace_back(i);
+  ids.emplace_back(std::nullopt);
   nanoarrow::UniqueArray bind;
   ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(
-                  bind_schema.get(), bind.get(), nullptr,
-                  std::vector<std::optional<int32_t>>{1, std::nullopt})),
+                  bind_schema.get(), bind.get(), nullptr, ids)),
               adbc_validation::IsOkErrno());
 
   struct AdbcStatement ingest = {};
@@ -566,7 +582,7 @@ class RedshiftBenchmarkTest : public RedshiftSmokeTest {
   std::string table_name_;
 };
 
-TEST_F(RedshiftBenchmarkTest, PreparedInsertThroughput) {
+TEST_F(RedshiftBenchmarkTest, ParameterizedInsertThroughput) {
   constexpr int32_t kRows = 1000;
   table_name_ = "adbc_redshift_insert_benchmark_" + std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count());
@@ -621,7 +637,7 @@ TEST_F(RedshiftBenchmarkTest, PreparedInsertThroughput) {
   ASSERT_GT(seconds, 0.0);
   const double rows_per_second = static_cast<double>(kRows) / seconds;
   RecordProperty("rows_per_second", rows_per_second);
-  std::cout << "Redshift prepared-insert benchmark: " << kRows << " rows in "
+  std::cout << "Redshift parameterized-insert benchmark: " << kRows << " rows in "
             << seconds << " s (" << rows_per_second << " rows/s)\n";
 }
 

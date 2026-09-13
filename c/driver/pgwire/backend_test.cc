@@ -103,6 +103,10 @@ TEST(BackendProfileTest, BulkIngestModeIsCapabilityDriven) {
             BulkIngestMode::kBinaryCopy);
   EXPECT_EQ(SelectBulkIngestMode(BackendProfile::Redshift()),
             BulkIngestMode::kParameterizedInsert);
+  EXPECT_EQ(BackendProfile::PostgreSQL().capabilities.parameterized_ingest_batch_rows,
+            1);
+  EXPECT_EQ(BackendProfile::Redshift().capabilities.parameterized_ingest_batch_rows,
+            16);
 }
 
 TEST(BackendProfileTest, DetectsRedshiftFromServerVersion) {
