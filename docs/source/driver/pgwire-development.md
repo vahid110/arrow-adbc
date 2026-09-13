@@ -257,6 +257,17 @@ qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: Added a live `GetObjects` column-filter assertion to the Redshift
+  metadata test. Workflow `34747059209` passed all five PostgreSQL 18 platform
+  jobs, the installed-client checks, and all 14 focused Redshift tests. Its
+  temporary runner ingress rule was revoked. The same commit passed local
+  macOS Apple Silicon PostgreSQL and Redshift unit suites with ASan/UBSan.
+  Applied the repository's pinned clang-format version and the missing
+  `<utility>` include; the Apache-ready RAII branch's Dev/pre-commit workflow
+  `34746962492` passed. The core branch's repository-wide Dev workflow
+  `34747059190` failed only in C# `dotnet format` dependency restore, outside
+  the C++ driver checks; investigate it separately when rebasing or preparing
+  a broader PR.
 - 2026-09-13: Built both PostgreSQL and Redshift C++ drivers locally with
   AddressSanitizer and UndefinedBehaviorSanitizer enabled on macOS Apple Silicon.
   The PostgreSQL driver and binary-COPY suites passed against local PostgreSQL,
