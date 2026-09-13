@@ -39,27 +39,39 @@ mkdir -p "$state_dir"
 
 cleanup() {
   local failed=0 ingress_failed=0 cidr rules ids rule_id result attempt verify_rules
+  local object_label object_key object_etag
 
-  # Marker files are written before each PutObject. An ambiguous upload gets
-  # cleaned up, while a preflight failure does not touch any S3 key.
-  if [[ -f "$state_dir/manifest-upload-attempted" && ! -f "$state_dir/manifest-deleted" ]]; then
-    if aws s3api delete-object --bucket "$REDSHIFT_COPY_BUCKET" \
-        --key "$manifest_key" > /dev/null; then
-      : > "$state_dir/manifest-deleted"
+  # A failed or response-lost conditional PutObject may have created an object,
+  # or may have collided with someone else's object. Without GetObject, neither
+  # case can be distinguished safely. Delete only after a successful PUT gave
+  # us its ETag, and condition the DELETE on that same ETag. An unresolved key
+  # requires an independent exact-prefix audit, not a blind DELETE. An ETag
+  # detects changed content, not a same-content replacement; unique run keys
+  # and independent post-run audit remain necessary.
+  for object_label in manifest data; do
+    if [[ ! -f "$state_dir/${object_label}-upload-attempted" ||
+          -f "$state_dir/${object_label}-deleted" ]]; then
+      continue
+    fi
+    if [[ "$object_label" == manifest ]]; then
+      object_key="$manifest_key"
     else
-      echo '::error::Could not delete the exact COPY manifest object.'
+      object_key="$data_key"
+    fi
+    if [[ ! -s "$state_dir/${object_label}-owned-etag" ]]; then
+      echo "::error::COPY $object_label upload ownership is unconfirmed; do not delete s3://${REDSHIFT_COPY_BUCKET}/${object_key}. Independently audit this exact key."
+      failed=1
+      continue
+    fi
+    object_etag="$(< "$state_dir/${object_label}-owned-etag")"
+    if aws s3api delete-object --bucket "$REDSHIFT_COPY_BUCKET" \
+        --key "$object_key" --if-match "$object_etag" > /dev/null; then
+      : > "$state_dir/${object_label}-deleted"
+    else
+      echo "::error::Could not confirm ETag-conditional deletion of s3://${REDSHIFT_COPY_BUCKET}/${object_key}; independently audit this exact key."
       failed=1
     fi
-  fi
-  if [[ -f "$state_dir/data-upload-attempted" && ! -f "$state_dir/data-deleted" ]]; then
-    if aws s3api delete-object --bucket "$REDSHIFT_COPY_BUCKET" \
-        --key "$data_key" > /dev/null; then
-      : > "$state_dir/data-deleted"
-    else
-      echo '::error::Could not delete the exact COPY data object.'
-      failed=1
-    fi
-  fi
+  done
 
   if [[ -f "$state_dir/authorize-attempted" && ! -f "$state_dir/ingress-revoked" ]]; then
     cidr="$(< "$state_dir/cidr")"
@@ -138,6 +150,16 @@ run_fixture() {
   local runner_ip cidr rules existing credentials db_user password
   local permissions response identity can_copy row_count data_uri manifest_uri
 
+  # ETag-matched DeleteObject requires BOTH s3:DeleteObject and s3:GetObject
+  # (unlike If-Match:*). The CI role currently lacks GetObject. Keep every
+  # live run gated until that exact-prefix grant is separately reviewed and
+  # this assertion is deliberately enabled in the workflow. This is an
+  # operator approval flag, not a substitute for IAM verification.
+  if [[ "${PGWIRE_COPY_GETOBJECT_VERIFIED:-}" != true ]]; then
+    echo '::error::Staged COPY is gated: ETag-matched cleanup needs reviewed s3:GetObject on staging/ci/*; set PGWIRE_COPY_GETOBJECT_VERIFIED=true only after verifying that grant.'
+    return 1
+  fi
+
   # This is also the exact tag for the required post-run security-group audit.
   # Do not log the runner IP or temporary database password.
   printf 'COPY ingress audit description: %s\n' "$rule_description"
@@ -206,13 +228,31 @@ SQL
   jq -n --arg url "$data_uri" \
     '{entries:[{url:$url,mandatory:true}]}' > "$state_dir/manifest.json"
   : > "$state_dir/data-upload-attempted"
-  aws s3api put-object --bucket "$REDSHIFT_COPY_BUCKET" \
+  if ! aws s3api put-object --bucket "$REDSHIFT_COPY_BUCKET" \
     --key "$data_key" --body "$state_dir/data.csv" \
-    --server-side-encryption AES256 > /dev/null
+    --server-side-encryption AES256 --if-none-match '*' \
+    --output json > "$state_dir/data-put.json"; then
+    echo '::error::Conditional COPY data upload failed or its response was lost; object ownership is unconfirmed.'
+    return 1
+  fi
+  if ! jq -er '.ETag | select(type == "string" and length > 0)' \
+      "$state_dir/data-put.json" > "$state_dir/data-owned-etag"; then
+    echo '::error::COPY data upload returned no usable ETag; object ownership is unconfirmed.'
+    return 1
+  fi
   : > "$state_dir/manifest-upload-attempted"
-  aws s3api put-object --bucket "$REDSHIFT_COPY_BUCKET" \
+  if ! aws s3api put-object --bucket "$REDSHIFT_COPY_BUCKET" \
     --key "$manifest_key" --body "$state_dir/manifest.json" \
-    --server-side-encryption AES256 > /dev/null
+    --server-side-encryption AES256 --if-none-match '*' \
+    --output json > "$state_dir/manifest-put.json"; then
+    echo '::error::Conditional COPY manifest upload failed or its response was lost; object ownership is unconfirmed.'
+    return 1
+  fi
+  if ! jq -er '.ETag | select(type == "string" and length > 0)' \
+      "$state_dir/manifest-put.json" > "$state_dir/manifest-owned-etag"; then
+    echo '::error::COPY manifest upload returned no usable ETag; object ownership is unconfirmed.'
+    return 1
+  fi
 
   row_count="$(psql -X -A -t -q -v ON_ERROR_STOP=1 \
     -v manifest_uri="$manifest_uri" \
