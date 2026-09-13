@@ -192,7 +192,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
 - [x] Connect an independent client built from each extracted Linux archive
-      through its PostgreSQL driver to PostgreSQL 18 on the matching CI target.
+      through its PostgreSQL driver to PostgreSQL 18 on the matching CI target;
+      require the packaged Redshift driver to reject the same server.
 - [x] Publish short-retention Windows x64/ARM64 development ZIPs only after
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
@@ -217,13 +218,13 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug client query against Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 query and earlier live Redshift connection | Production release artifact and compatibility guarantee |
-| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
-| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug client query against Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 query, Redshift-driver PostgreSQL rejection, and earlier live Redshift connection | Production release artifact and compatibility guarantee |
+| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Windows x86-64 | C++/vcpkg Release build; checked, short-retention x64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Windows ARM64 | Native vcpkg Release build; checked, short-retention ARM64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
-| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
-| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query | Production release artifact and live Redshift installed-client test |
+| Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 
 - [x] Add a Linux x86-64 clean-prefix installation test first.
 - [x] Add macOS Intel/Apple Silicon and Windows x86-64/ARM64 installation tests.
@@ -381,7 +382,8 @@ short-lived evaluation archives.
 - 2026-09-13: Extended the extracted-archive client check on Linux and macOS
   to require the packaged Redshift driver to reject PostgreSQL, matching the
   existing Windows check. Workflow YAML, shell syntax, and diff checks passed;
-  seven-platform package CI is pending. Separately documented an ambiguous
+  package CI run `34767036919` passed all seven platform jobs plus the final
+  archive-and-checksum gate. Separately documented an ambiguous
   ingress-authorize cleanup gap and its ownership-safe remediation; no AWS IAM
   or security-group change was made.
 - 2026-09-13: Strengthened the independent installed-client smoke test to
