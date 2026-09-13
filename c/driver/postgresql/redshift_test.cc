@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <chrono>
 #include <cstdlib>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -521,6 +523,86 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest_atomic", &error_);
+}
+
+class RedshiftBenchmarkTest : public RedshiftSmokeTest {
+ protected:
+  void SetUp() override {
+    if (std::getenv("ADBC_REDSHIFT_BENCHMARK") == nullptr) {
+      GTEST_SKIP() << "ADBC_REDSHIFT_BENCHMARK is not configured";
+    }
+    RedshiftSmokeTest::SetUp();
+  }
+
+  void TearDown() override {
+    if (!table_name_.empty() && connection_.private_data != nullptr) {
+      struct AdbcError cleanup_error = {};
+      ExecuteSql(&connection_, "DROP TABLE IF EXISTS " + table_name_, &cleanup_error);
+      if (cleanup_error.release != nullptr) cleanup_error.release(&cleanup_error);
+    }
+    RedshiftSmokeTest::TearDown();
+  }
+
+  std::string table_name_;
+};
+
+TEST_F(RedshiftBenchmarkTest, PreparedInsertThroughput) {
+  constexpr int32_t kRows = 1000;
+  table_name_ = "adbc_redshift_insert_benchmark_" + std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+
+  std::vector<std::optional<int32_t>> ids;
+  ids.reserve(kRows);
+  for (int32_t i = 0; i < kRows; ++i) ids.emplace_back(i);
+  nanoarrow::UniqueArray array;
+  ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(schema.get(), array.get(), nullptr,
+                                                   ids)),
+              adbc_validation::IsOkErrno());
+
+  struct AdbcStatement ingest = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     table_name_.c_str(), &error_),
+              IsOkStatus(&error_));
+  const auto start = std::chrono::steady_clock::now();
+  ASSERT_THAT(AdbcStatementBind(&ingest, array.get(), schema.get(), &error_),
+              IsOkStatus(&error_));
+  int64_t rows_affected = -1;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
+              IsOkStatus(&error_));
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_EQ(rows_affected, kRows);
+  EXPECT_THAT(AdbcStatementRelease(&ingest, &error_), IsOkStatus(&error_));
+
+  struct AdbcStatement verify = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &verify, &error_), IsOkStatus(&error_));
+  const std::string count_query = "SELECT COUNT(*) FROM " + table_name_;
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&verify, count_query.c_str(), &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&verify, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), kRows);
+  EXPECT_THAT(AdbcStatementRelease(&verify, &error_), IsOkStatus(&error_));
+
+  const double seconds = std::chrono::duration<double>(elapsed).count();
+  ASSERT_GT(seconds, 0.0);
+  const double rows_per_second = static_cast<double>(kRows) / seconds;
+  RecordProperty("rows_per_second", rows_per_second);
+  std::cout << "Redshift prepared-insert benchmark: " << kRows << " rows in "
+            << seconds << " s (" << rows_per_second << " rows/s)\n";
 }
 
 }  // namespace

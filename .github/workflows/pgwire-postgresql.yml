@@ -19,6 +19,12 @@ name: PgWire Drivers
 
 on:
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Run the one-shot Redshift prepared-insert benchmark
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -277,6 +283,15 @@ jobs:
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftSmokeTest.*'
+
+      - name: Benchmark prepared inserts (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
+        env:
+          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_BENCHMARK: "1"
+        run: >-
+          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
+          --gtest_filter='RedshiftBenchmarkTest.*'
 
       - name: Connect through installed Redshift driver manager
         env:
