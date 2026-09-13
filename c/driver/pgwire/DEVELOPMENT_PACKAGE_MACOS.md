@@ -46,8 +46,10 @@ option to the absolute path of `lib/libadbc_driver_redshift.dylib` and the `uri`
 option to a libpq-style Redshift connection URI. Do not store passwords in
 scripts, logs, or committed configuration.
 
-CI compiles an independent client against the extracted archive and loads the
-driver, but it does not connect this packaged binary to Redshift. The driver
+CI compiles an independent client against the extracted archive, loads the
+Redshift driver, and connects through the extracted PostgreSQL driver to a
+temporary PostgreSQL 18 server on both macOS architectures. It does not
+connect the packaged Redshift binary to Redshift. The driver
 supports the tested query, metadata, transaction, and bounded
 parameterized-ingest MVP; built-in IAM token generation, S3-staged
 `COPY`/`UNLOAD`, and qualified `SUPER`/spatial mappings remain unavailable. See

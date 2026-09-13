@@ -184,6 +184,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Extend the same short-retention, extracted-client archive check to macOS
       Intel and Apple Silicon, with architecture-specific artifacts and runtime
       dependency instructions.
+- [x] Connect an independent client built from each extracted macOS archive
+      through its PostgreSQL driver to a temporary PostgreSQL 18 server, then
+      stop that server in an unconditional cleanup step.
 - [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
@@ -208,8 +211,8 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive with extracted-client PostgreSQL 18 connection | Production release artifact and compatibility guarantee |
-| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
-| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
+| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
+| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
 | Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention ARM64 development ZIP | Production release artifact and database-backed installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
@@ -309,13 +312,20 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Isolated package run `34756455835` completed successfully on
+  all seven targets and the final archive/checksum download gate. Both macOS
+  jobs logged an independent client loading the extracted Redshift driver,
+  connecting through the extracted PostgreSQL driver to local PostgreSQL 18,
+  and stopping that temporary server. This qualifies database-backed archive
+  use on macOS Intel/Apple Silicon, not packaged-client Redshift connections
+  or production release compatibility.
 - 2026-09-13: Extended macOS Intel and Apple Silicon development-archive jobs
   to start temporary PostgreSQL 18 servers, connect an independent client
   through each extracted PostgreSQL driver, and stop the servers in an
   unconditional cleanup step. A separately extracted archive connected to
   local PostgreSQL 18 on Apple Silicon, and `actionlint` passed. Isolated
-  seven-platform package run `34756455835` is pending; do not claim macOS
-  archive database qualification until it and the final download gate pass.
+  seven-platform package run `34756455835` was pending at this checkpoint and
+  later passed, as recorded above.
 - 2026-09-13: Isolated package run `34756083906` completed successfully on
   all seven targets, including its final archive/checksum download gate. All
   three Linux jobs logged an independent client loading the extracted
