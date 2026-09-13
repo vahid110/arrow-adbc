@@ -197,6 +197,62 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
+TEST_F(RedshiftSmokeTest, PreservesTextAndBinaryEdges) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(&statement,
+                               "SELECT 'O''Reilly'::VARCHAR(16), ''::VARCHAR(16), "
+                               "'Grüße'::VARCHAR(16), TO_VARBYTE('00FF5C', 'hex')",
+                               &error_),
+      IsOkStatus(&error_));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 4U);
+  EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_STRING);
+  EXPECT_EQ(reader.fields[1].type, NANOARROW_TYPE_STRING);
+  EXPECT_EQ(reader.fields[2].type, NANOARROW_TYPE_STRING);
+  EXPECT_EQ(reader.fields[3].type, NANOARROW_TYPE_BINARY);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+
+  const auto text_at = [&](int column) {
+    const ArrowStringView value =
+        ArrowArrayViewGetStringUnsafe(reader.array_view->children[column], 0);
+    return std::string_view(value.data, value.size_bytes);
+  };
+  EXPECT_EQ(text_at(0), "O'Reilly");
+  EXPECT_EQ(text_at(1), "");
+  EXPECT_EQ(text_at(2), "Grüße");
+  const ArrowBufferView bytes =
+      ArrowArrayViewGetBytesUnsafe(reader.array_view->children[3], 0);
+  ASSERT_EQ(bytes.size_bytes, 3);
+  EXPECT_EQ(bytes.data.as_uint8[0], 0);
+  EXPECT_EQ(bytes.data.as_uint8[1], 0xff);
+  EXPECT_EQ(bytes.data.as_uint8[2], 0x5c);
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
+TEST_F(RedshiftSmokeTest, DiscoversParameterSchema) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1::INTEGER", &error_),
+              IsOkStatus(&error_));
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_THAT(AdbcStatementGetParameterSchema(&statement, schema.get(), &error_),
+              IsOkStatus(&error_));
+  ASSERT_EQ(schema->n_children, 1);
+  EXPECT_STREQ(schema->children[0]->format, "i");
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
 TEST_F(RedshiftSmokeTest, PreservesNullResults) {
   struct AdbcStatement statement = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
