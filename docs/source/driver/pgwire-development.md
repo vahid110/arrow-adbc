@@ -331,19 +331,27 @@ In AWS account `149112076833`, region `eu-central-1`:
   strict option validation, safe SQL construction, and deterministic cleanup.
 
 The next gated AWS checkpoint is a *manual*, two-row non-root test, not an
-automatic push job. Reuse the branch-scoped GitHub OIDC role `adbc-redshift-ci`
-as the test identity rather than creating a long-lived key. Before changing the
-COPY role's trust, grant only workgroup-scoped Serverless credential access to
-that identity and verify its actual `IAMR:` database username. Then evaluate
-an exact database-user `sts:ExternalId` alongside `aws:SourceAccount` and the
-two Redshift service principals; keep the COPY role's S3 access read-only.
-Restrict the uploader identity to `PutObject`/`DeleteObject` for
-`staging/ci/*`. Use unique run-specific data and manifest keys, require
-`mandatory: true`, verify exactly two rows, and delete both exact objects in
-failure-safe cleanup. The one-day lifecycle remains a backstop, not the normal
-cleanup path. An isolated non-canceling CI concurrency group is needed so a
-push cannot interrupt cleanup. No permanent IAM change or new CI path has been
-made for this checkpoint; qualify the policy and database privileges first.
+automatic push job. A manual, credential-only OIDC run `34767827101` verified
+that the branch-scoped GitHub role `adbc-redshift-ci` receives the database
+username `IAMR:adbc-redshift-ci`, without opening ingress or querying Redshift.
+Its separate inline policy `RedshiftCiCopyFixture` grants only
+`redshift-serverless:GetCredentials` on the actual `pgwire-ci` workgroup ARN
+and `s3:PutObject`/`s3:DeleteObject` under `staging/ci/*`. An IAM simulation
+allowed those exact resources and denied a sibling staging prefix. The COPY
+role's trust now uses the exact Serverless database-user `sts:ExternalId`
+alongside `aws:SourceAccount` and both Redshift service principals; its S3
+policy remains read-only. This trust is configured but not yet validated by
+a non-root database connection or `COPY`.
+
+The manual COPY qualification must first check the actual connected user and
+database `ASSUMEROLE` privilege. Use unique run-specific data and manifest
+keys, require `mandatory: true`, verify exactly two rows, and delete both exact
+objects in failure-safe cleanup. The one-day lifecycle remains a backstop,
+not the normal cleanup path. Isolate the non-canceling CI run from push-driven
+jobs so a push cannot interrupt cleanup. Ownership-safe recovery of an
+ambiguous ingress authorization additionally needs the proposed read-only
+`ec2:DescribeSecurityGroupRules` grant; it has not been added. Do not run the
+two-row fixture until its ingress preflight and cleanup are qualified.
 
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
@@ -369,16 +377,26 @@ Redshift security group and its OIDC trust is pinned to this repository's immuta
 owner/repository IDs plus the development branch. The bounded multi-row INSERT
 path is live-tested, while two-row staged `COPY` probes proved the AWS mechanism
 with reduced trust conditions, including an exact database-user External ID.
-Operational trust for a dedicated non-root identity and an uploader remain
-unfinished. A private, offline-tested preparation helper now builds a mandatory
-exact-object manifest and validates `COPY` SQL, but is not selected by the
-driver. Four PostgreSQL-only cleanup patches are published on separate
+The dedicated IAMR role trust and uploader permissions are narrowly configured
+but not yet live-qualified by a non-root `COPY`. A private, offline-tested
+preparation helper now builds a mandatory exact-object manifest and validates
+`COPY` SQL, but is not selected by the driver. Four PostgreSQL-only cleanup
+patches are published on separate
 Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Manual OIDC credential run `34767827101` succeeded and returned
+  `IAMR:adbc-redshift-ci`; PostgreSQL and live Redshift jobs were skipped. Added
+  an isolated CI inline policy for workgroup-specific temporary credentials and
+  write/delete only under `staging/ci/*`, verifying allowed and denied IAM
+  simulations. Replaced the COPY role's failing source-ARN trust condition with
+  the exact observed IAMR database-user External ID, retaining SourceAccount,
+  both Redshift principals, and read-only S3 access. No non-root connection,
+  S3 upload, or COPY has been run with this new trust; the ownership-safe
+  ingress-read grant and two-row cleanup gate remain pending.
 - 2026-09-13: Extended the extracted-archive client check on Linux and macOS
   to require the packaged Redshift driver to reject PostgreSQL, matching the
   existing Windows check. Workflow YAML, shell syntax, and diff checks passed;
