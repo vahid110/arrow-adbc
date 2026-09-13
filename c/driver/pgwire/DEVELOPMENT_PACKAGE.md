@@ -27,7 +27,9 @@ libraries, the ADBC driver manager, public
 headers, CMake and pkg-config metadata, and license notices. The CI job builds
 a client against the archive after extracting it to a different path, loads
 the Redshift driver, and connects through the extracted PostgreSQL driver to
-PostgreSQL 18. It does not connect the packaged Redshift driver to Redshift.
+PostgreSQL 18. A separate opt-in CI run connected the checked Ubuntu 24.04
+x86-64 Release development archive to live Redshift; Debian and ARM64 archives
+have not passed that live packaged-driver check.
 Only the shared-library client path is qualified; bundled static archives may
 require dependencies that are not included here.
 

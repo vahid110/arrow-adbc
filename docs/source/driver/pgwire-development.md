@@ -196,7 +196,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
       Windows architecture.
-- [ ] Download a checked, same-commit Ubuntu x86-64 Release development
+- [x] Download a checked, same-commit Ubuntu x86-64 Release development
       archive in the live Redshift job and connect an independent client from
       that extracted archive without treating it as a production release.
 - [x] Rebase on a newer Apache baseline after checking upstream changes and
@@ -213,7 +213,7 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug tarball/client connection to live Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 connection | Production release artifact, live Redshift connection from the separate Release archive, and compatibility guarantee |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug tarball/client connection to live Redshift; checked, short-retention Release development archive with extracted-client connections to PostgreSQL 18 and live Redshift | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
@@ -315,14 +315,23 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Package run `34757277976` passed all seven native archive jobs
+  and its final downloadable archive/checksum gate at commit `9c20745f69`.
+  Manually dispatched focused run `34757555359` at that exact commit passed
+  all five PostgreSQL 18 platform jobs and all 19 live Redshift smoke tests.
+  Its independent client compiled against the downloaded, SHA-256-checked
+  Ubuntu x86-64 Release development archive connected successfully to live
+  Redshift; the exact temporary runner ingress was revoked. This qualifies
+  that development archive connection, not a production release or the other
+  platforms' live Redshift connectivity.
 - 2026-09-13: Added an opt-in manual live qualification path for the actual
   Ubuntu x86-64 Release development archive. It requires a successful package
   run at the exact current commit, verifies the archive SHA-256, extracts it,
   compiles an independent client against that tree before AWS access, then
   connects to Redshift during the existing short-lived ingress window. The
   workflow token has `actions: read` only for this download. `actionlint` and
-  artifact-name/run-metadata preflight checks pass; end-to-end live evidence
-  is pending and the Release artifact must not yet be claimed as connected.
+  artifact-name/run-metadata preflight checks passed; the end-to-end live run
+  is recorded above.
 - 2026-09-13: Focused run `34756822553` passed all five PostgreSQL 18
   platform jobs and 19 live Redshift smoke tests. The Ubuntu job tarred and
   relocated its Debug CI installation, compiled the independent client
