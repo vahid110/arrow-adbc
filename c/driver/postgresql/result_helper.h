@@ -31,6 +31,7 @@
 
 #include "copy/reader.h"
 #include "driver/framework/status.h"
+#include "driver/pgwire/libpq_raii.h"
 
 using adbc::driver::Result;
 using adbc::driver::Status;
@@ -123,13 +124,14 @@ class PqResultHelper {
   explicit PqResultHelper(PGconn* conn, std::string query)
       : conn_(conn), query_(std::move(query)) {}
 
-  PqResultHelper(PqResultHelper&& other)
-      : PqResultHelper(other.conn_, std::move(other.query_)) {
-    result_ = other.result_;
-    other.result_ = nullptr;
-  }
+  PqResultHelper(PqResultHelper&& other) noexcept
+      : conn_(other.conn_),
+        query_(std::move(other.query_)),
+        result_(std::move(other.result_)),
+        param_format_(other.param_format_),
+        output_format_(other.output_format_) {}
 
-  ~PqResultHelper();
+  ~PqResultHelper() = default;
 
   void set_param_format(Format format) { param_format_ = format; }
   void set_output_format(Format format) { output_format_ = format; }
@@ -147,29 +149,23 @@ class PqResultHelper {
 
   bool HasResult() const { return result_ != nullptr; }
 
-  void SetResult(PGresult* result) {
-    ClearResult();
-    result_ = result;
-  }
+  void SetResult(PGresult* result) { result_.reset(result); }
 
-  PGresult* ReleaseResult();
+  PGresult* ReleaseResult() { return result_.release(); }
 
-  void ClearResult() {
-    PQclear(result_);
-    result_ = nullptr;
-  }
+  void ClearResult() { result_.reset(); }
 
   int64_t AffectedRows() const;
 
-  int NumRows() const { return PQntuples(result_); }
+  int NumRows() const { return PQntuples(result_.get()); }
 
-  int NumColumns() const { return PQnfields(result_); }
+  int NumColumns() const { return PQnfields(result_.get()); }
 
   const char* FieldName(int column_number) const {
-    return PQfname(result_, column_number);
+    return PQfname(result_.get(), column_number);
   }
-  Oid FieldType(int column_number) const { return PQftype(result_, column_number); }
-  PqResultRow Row(int i) const { return PqResultRow(result_, i); }
+  Oid FieldType(int column_number) const { return PQftype(result_.get(), column_number); }
+  PqResultRow Row(int i) const { return PqResultRow(result_.get(), i); }
 
   class iterator {
     const PqResultHelper& outer_;
@@ -188,10 +184,13 @@ class PqResultHelper {
       return retval;
     }
     bool operator==(iterator other) const {
-      return outer_.result_ == other.outer_.result_ && curr_row_ == other.curr_row_;
+      return outer_.result_.get() == other.outer_.result_.get() &&
+             curr_row_ == other.curr_row_;
     }
     bool operator!=(iterator other) const { return !(*this == other); }
-    PqResultRow operator*() const { return PqResultRow(outer_.result_, curr_row_); }
+    PqResultRow operator*() const {
+      return PqResultRow(outer_.result_.get(), curr_row_);
+    }
     using iterator_category = std::forward_iterator_tag;
     using difference_type = std::ptrdiff_t;
     using value_type = std::vector<PqResultRow>;
@@ -203,9 +202,9 @@ class PqResultHelper {
   iterator end() const { return iterator(*this, NumRows()); }
 
  private:
-  PGresult* result_ = nullptr;
   PGconn* conn_;
   std::string query_;
+  adbc::driver::pgwire::UniqueResult result_;
   Format param_format_ = Format::kText;
   Format output_format_ = Format::kText;
 
