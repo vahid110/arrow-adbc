@@ -141,6 +141,10 @@ if(ADBC_BUILD_TESTS)
                 EXTRA_LINK_LIBS
                 adbc_driver_common
                 ${REDSHIFT_TEST_LINK_LIBS})
+  # The independent fixture files intentionally reuse anonymous-namespace names.
+  # Build this test target as separate translation units even when the parent
+  # project enables CMAKE_UNITY_BUILD for production libraries.
+  set_target_properties(adbc-driver-redshift-test PROPERTIES UNITY_BUILD OFF)
   target_compile_features(adbc-driver-redshift-test PRIVATE cxx_std_20)
   target_include_directories(adbc-driver-redshift-test SYSTEM
                              PRIVATE ${REPOSITORY_ROOT}/c/ ${REPOSITORY_ROOT}/c/include/
