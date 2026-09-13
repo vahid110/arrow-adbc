@@ -297,6 +297,13 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a cleanup-safe live metadata case for a quoted table name,
+  a spaced column name, and a reserved-word column in `b72d7f696`. It checks
+  both `GetTableSchema` and column-filtered `GetObjects`. The pinned formatter,
+  local C++ build, and both PostgreSQL suites against local PostgreSQL pass;
+  focused run `34754290928` is pending, so this case is not yet qualified
+  against Redshift. The narrowed path filter correctly avoided another
+  seven-platform package rebuild for this test-only change.
 - 2026-09-13: Delayed focused run `34752544871` completed successfully: all
   five PostgreSQL 18 platform jobs passed, followed by 16 live Redshift tests.
   `PreservesTextAndBinaryEdges` and `DiscoversParameterSchema` both passed;
