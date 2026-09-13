@@ -30,6 +30,11 @@ on:
         required: false
         type: boolean
         default: false
+      package_run_id:
+        description: Successful same-commit package run to connect its Ubuntu Release archive
+        required: false
+        type: string
+        default: ""
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -215,6 +220,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
       id-token: write
 
     env:
@@ -260,6 +266,38 @@ jobs:
             -Wl,-rpath,"$RUNNER_TEMP/pgwire-relocated/lib" \
             -ladbc_driver_manager \
             -o "$RUNNER_TEMP/redshift-install-smoke"
+
+      - name: Prepare downloaded Release archive (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
+        run: |
+          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
+          package_run="$(gh run view "$PACKAGE_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            --json name,conclusion,headSha)"
+          test "$(jq -r '.name' <<< "$package_run")" = 'PgWire Development Package'
+          test "$(jq -r '.conclusion' <<< "$package_run")" = 'success'
+          test "$(jq -r '.headSha' <<< "$package_run")" = "$GITHUB_SHA"
+          archive_dir="$RUNNER_TEMP/pgwire-release-download"
+          mkdir "$archive_dir"
+          gh run download "$PACKAGE_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            -n adbc-redshift-dev-ubuntu24-x86_64 -D "$archive_dir"
+          (cd "$archive_dir" && sha256sum -c ./*.sha256)
+          archive="$archive_dir/adbc-redshift-dev-ubuntu24-x86_64-${GITHUB_SHA}.tar.gz"
+          test -f "$archive"
+          mkdir "$RUNNER_TEMP/pgwire-release-extracted"
+          tar -C "$RUNNER_TEMP/pgwire-release-extracted" -xzf "$archive"
+          test -f "$RUNNER_TEMP/pgwire-release-extracted/LICENSE.txt"
+          test -f "$RUNNER_TEMP/pgwire-release-extracted/NOTICE.txt"
+          test -f "$RUNNER_TEMP/pgwire-release-extracted/lib/libadbc_driver_redshift.so"
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-release-extracted/include" \
+            c/driver/pgwire/redshift_install_smoke.c \
+            -L "$RUNNER_TEMP/pgwire-release-extracted/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-release-extracted/lib" \
+            -ladbc_driver_manager \
+            -o "$RUNNER_TEMP/redshift-release-smoke"
 
       - name: Configure temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
@@ -317,6 +355,15 @@ jobs:
         run: >-
           "$RUNNER_TEMP/redshift-install-smoke"
           "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
+          "$ADBC_REDSHIFT_TEST_URI"
+
+      - name: Connect through downloaded Release archive (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_run_id != '' }}
+        env:
+          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+        run: >-
+          "$RUNNER_TEMP/redshift-release-smoke"
+          "$RUNNER_TEMP/pgwire-release-extracted/lib/libadbc_driver_redshift.so"
           "$ADBC_REDSHIFT_TEST_URI"
 
       - name: Close temporary Redshift ingress

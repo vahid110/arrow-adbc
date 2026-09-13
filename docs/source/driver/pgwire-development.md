@@ -196,6 +196,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
       Windows architecture.
+- [ ] Download a checked, same-commit Ubuntu x86-64 Release development
+      archive in the live Redshift job and connect an independent client from
+      that extracted archive without treating it as a production release.
 - [x] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
@@ -312,6 +315,14 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added an opt-in manual live qualification path for the actual
+  Ubuntu x86-64 Release development archive. It requires a successful package
+  run at the exact current commit, verifies the archive SHA-256, extracts it,
+  compiles an independent client against that tree before AWS access, then
+  connects to Redshift during the existing short-lived ingress window. The
+  workflow token has `actions: read` only for this download. `actionlint` and
+  artifact-name/run-metadata preflight checks pass; end-to-end live evidence
+  is pending and the Release artifact must not yet be claimed as connected.
 - 2026-09-13: Focused run `34756822553` passed all five PostgreSQL 18
   platform jobs and 19 live Redshift smoke tests. The Ubuntu job tarred and
   relocated its Debug CI installation, compiled the independent client
