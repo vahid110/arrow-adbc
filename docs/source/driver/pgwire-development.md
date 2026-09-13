@@ -294,6 +294,14 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Focused run `34752544871` passed its Ubuntu x86-64, Ubuntu
+  ARM64, and Debian PostgreSQL 18 jobs. Both macOS jobs remained queued, so
+  the dependency-gated live Redshift job had not started. GitHub's
+  [status page](https://www.githubstatus.com/) reported degraded Actions
+  performance beginning 09:25 UTC; this may explain the runner delay but is
+  not evidence that the new live cases passed. Keep the current 14-test
+  Redshift qualification as the last completed live result until this run
+  finishes.
 - 2026-09-13: Added live Redshift test cases for parameter-schema discovery
   and quoted/empty/UTF-8 text plus zero/high-byte binary values in
   `3690c591c`. The pinned formatter, local C++ build, both PostgreSQL suites
