@@ -21,6 +21,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace adbc::driver::pgwire {
 namespace {
@@ -131,23 +134,43 @@ std::optional<std::string> QuoteIdentifier(std::string_view identifier) {
 }  // namespace
 
 std::optional<RedshiftStagedCopyPlan> PrepareRedshiftStagedCopy(
-    std::string_view schema, std::string_view table, std::string_view data_s3_url,
+    std::string_view schema, std::string_view table,
+    const std::vector<std::string_view>& columns, std::string_view data_s3_url,
     std::string_view manifest_s3_url, std::string_view iam_role_arn) {
   const auto quoted_schema = QuoteIdentifier(schema);
   const auto quoted_table = QuoteIdentifier(table);
   const auto data = ParseGeneratedS3Object(data_s3_url);
   const auto manifest = ParseGeneratedS3Object(manifest_s3_url);
-  if (!quoted_schema || !quoted_table || !data || !manifest ||
+  if (!quoted_schema || !quoted_table || columns.empty() || !data || !manifest ||
       data->bucket != manifest->bucket || data->key == manifest->key ||
       !IsValidRoleArn(iam_role_arn)) {
     return std::nullopt;
+  }
+
+  std::string quoted_columns;
+  std::unordered_set<std::string> seen_columns;
+  for (const std::string_view column : columns) {
+    const auto quoted_column = QuoteIdentifier(column);
+    if (!quoted_column) return std::nullopt;
+
+    // Case-only duplicates are ambiguous across server identifier-case
+    // settings, so reject them regardless of the current configuration.
+    std::string folded(column);
+    for (char& c : folded) {
+      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    if (!seen_columns.insert(std::move(folded)).second) return std::nullopt;
+
+    if (!quoted_columns.empty()) quoted_columns += ", ";
+    quoted_columns += *quoted_column;
   }
 
   RedshiftStagedCopyPlan plan;
   // Validation above excludes JSON and SQL escape characters from all URLs.
   plan.manifest_json =
       "{\"entries\":[{\"url\":\"" + std::string(data_s3_url) + "\",\"mandatory\":true}]}";
-  plan.copy_sql = "COPY " + *quoted_schema + "." + *quoted_table + " FROM '" +
+  plan.copy_sql = "COPY " + *quoted_schema + "." + *quoted_table + " (" +
+                  quoted_columns + ") FROM '" +
                   std::string(manifest_s3_url) + "' IAM_ROLE '" +
                   std::string(iam_role_arn) + "' MANIFEST CSV";
   return plan;
