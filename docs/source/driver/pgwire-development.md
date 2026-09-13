@@ -287,6 +287,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: After qualifying the five-platform development-package workflow,
+  removed the duplicate Ubuntu archive/upload steps from the PostgreSQL and
+  live-Redshift workflow. That workflow retains its installed-client checks;
+  the isolated package workflow alone now owns downloadable artifacts. The
+  workflow edit passes local Actions syntax validation and does not change
+  driver code; the previous full driver run remains the live-behavior evidence.
 - 2026-09-13: Corrected package workflow `34750754477` passed all five build,
   extracted-client, and upload jobs plus a final job that downloaded every
   archive/checksum pair and verified each SHA-256. Separately downloaded the
