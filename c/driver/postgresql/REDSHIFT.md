@@ -98,8 +98,11 @@ checked Ubuntu x86-64 Release development archive to live Redshift.
 On Windows, the [standalone CMake client](../pgwire/install_smoke/CMakeLists.txt)
 builds from the installed ADBC driver-manager package. Its `--load-only` mode
 checks that the installed Redshift DLL initializes through the driver manager
-without opening a database connection. The Windows x64 and ARM64 vcpkg jobs
-exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
+without opening a database connection. The Windows x64 and ARM64 development
+archive jobs also build an independent client from each extracted ZIP, connect
+through its PostgreSQL driver to PostgreSQL 18, and check that the Redshift
+driver rejects that server. Live Windows-to-Redshift connectivity is still
+unqualified.
 
 ## Current behavior and limits
 
@@ -112,7 +115,7 @@ exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
 | Ingest | Atomic parameterized inserts in bounded 16-row SQL batches; no Redshift S3 `COPY` or `UNLOAD` path |
-| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and checked Release development archive client connections to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 Release builds and installed DLL load checks pass through the public CMake package; checked short-retention development archives are available for all seven CI targets, but production release artifacts and other platforms' database-backed installed-client qualification remain pending |
+| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and checked Release development archive client connections to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 checked development ZIPs pass extracted-client PostgreSQL 18 connection and Redshift-driver rejection checks; checked short-retention development archives are available for all seven CI targets, but production release artifacts and other platforms' live Redshift installed-client qualification remain pending |
 
 `SUPER` is not mapped natively to Arrow. A live test verified that a small
 `SUPER` array explicitly passed through `JSON_SERIALIZE(...)` is read as an

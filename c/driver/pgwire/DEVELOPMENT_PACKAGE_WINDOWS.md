@@ -42,8 +42,9 @@ For an ADBC client using the driver manager, set the database's `driver`
 option to the absolute path of `bin\adbc_driver_redshift.dll` and `uri` to a
 libpq-style Redshift connection URI. Do not store passwords in scripts, logs,
 or committed configuration. The workflow compiles a client against the
-extracted CMake package and loads the Redshift DLL, but does not connect the
-packaged binary to a live Redshift server.
+extracted CMake package, connects through the PostgreSQL DLL to a temporary
+PostgreSQL 18 server, and checks that the Redshift DLL rejects that server.
+It does not connect the packaged binary to a live Redshift server.
 
 The development driver supports the tested query, metadata, transaction, and
 bounded parameterized-ingest MVP. Built-in IAM token generation, S3-staged

@@ -196,7 +196,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
       Windows architecture.
-- [ ] Connect independent clients built from each extracted Windows ZIP to a
+- [x] Connect independent clients built from each extracted Windows ZIP to a
       temporary native PostgreSQL 18 server: the packaged PostgreSQL driver
       must connect, and the packaged Redshift driver must reject that server.
 - [x] Download a checked, same-commit Ubuntu x86-64 Release development
@@ -219,8 +219,8 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug tarball/client connection to live Redshift; checked, short-retention Release development archive with extracted-client connections to PostgreSQL 18 and live Redshift | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
-| Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
-| Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention ARM64 development ZIP | Production release artifact and database-backed installed-client test |
+| Windows x86-64 | C++/vcpkg Release build; checked, short-retention x64 development ZIP; extracted-client PostgreSQL 18 connection and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| Windows ARM64 | Native vcpkg Release build; checked, short-retention ARM64 development ZIP; extracted-client PostgreSQL 18 connection and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 | Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 connection | Production release artifact and live Redshift installed-client test |
 
@@ -318,20 +318,27 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Corrected package run `34758297459` passed all seven native
+  development archive jobs and its final download/checksum gate. Both Windows
+  x64 and ARM64 jobs built an independent client from their extracted ZIPs,
+  connected through the packaged PostgreSQL driver to native PostgreSQL 18,
+  verified the packaged Redshift driver rejected that server, and stopped it.
+  This is database-backed archive qualification on Windows, not a live
+  Windows-to-Redshift or production release claim.
 - 2026-09-13: Initial Windows archive run `34758013851` passed the new native
   ARM64 extracted-client PostgreSQL connection/rejection gate. Its x64 job
   built and loaded the ZIP but failed before database startup because the
   UCRT64 PostgreSQL package's executables were not on the existing MINGW64
   compiler PATH. The workflow now resolves `initdb` and `pg_ctl` through each
-  architecture's explicit MSYS2 package bin directory; x64 requalification
-  is pending.
+  architecture's explicit MSYS2 package bin directory; the successful
+  requalification is recorded above.
 - 2026-09-13: Added a native PostgreSQL 18 package dependency to both Windows
   archive jobs and a post-extraction database-backed smoke gate. Each job
   builds the independent CMake client against its extracted ZIP, then should
   connect through the packaged PostgreSQL DLL and verify that the packaged
   Redshift DLL rejects PostgreSQL. The temporary server is stopped in a
   `finally` block. `actionlint` passed with only the two known newer GitHub
-  runner labels suppressed; native CI evidence is pending.
+  runner labels suppressed; native CI evidence is recorded above.
 - 2026-09-13: Package run `34757277976` passed all seven native archive jobs
   and its final downloadable archive/checksum gate at commit `9c20745f69`.
   Manually dispatched focused run `34757555359` at that exact commit passed
