@@ -309,6 +309,13 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Extended macOS Intel and Apple Silicon development-archive jobs
+  to start temporary PostgreSQL 18 servers, connect an independent client
+  through each extracted PostgreSQL driver, and stop the servers in an
+  unconditional cleanup step. A separately extracted archive connected to
+  local PostgreSQL 18 on Apple Silicon, and `actionlint` passed. Isolated
+  seven-platform package run `34756455835` is pending; do not claim macOS
+  archive database qualification until it and the final download gate pass.
 - 2026-09-13: Isolated package run `34756083906` completed successfully on
   all seven targets, including its final archive/checksum download gate. All
   three Linux jobs logged an independent client loading the extracted
