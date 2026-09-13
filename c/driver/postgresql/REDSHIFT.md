@@ -103,6 +103,7 @@ exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
 | --- | --- |
 | Authentication | Standard libpq URI, TLS, username/password; no built-in IAM or Identity Center credential generation |
 | Queries | Text-result Arrow conversion; prepared statements and binary-bound parameters |
+| Cancellation | A bounded analytic query was canceled successfully in one opt-in live test, with a server-side timeout as a backstop and a post-cancel connection check; repeatability and default-CI qualification remain pending |
 | Types | Tested scalar integers, floats, booleans, strings, decimal-as-string, date/time/timestamp, and `VARBYTE`; `SUPER` and spatial types are not qualified |
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |

@@ -129,9 +129,11 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       `DECIMAL(38,0)` values against the live Redshift engine.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
-- [ ] Qualify Redshift query cancellation with a bounded, cleanup-safe live
+- [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
+- [ ] Repeat the opt-in cancellation case before deciding whether to make it a
+      push-triggered CI gate; one successful run does not establish stability.
 - [ ] Keep PostgreSQL's complete integration suite and downstream client
       compatibility tests green; preserve observed public behavior and ordering.
 - [x] Define a documented support matrix with explicit unsupported features and
@@ -301,6 +303,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Manual focused run `34755153065` passed all five PostgreSQL 18
+  platform jobs, the 18 existing live Redshift smoke tests, and the separate
+  opt-in `RedshiftCancelTest.CancelsBoundedAnalyticQuery` (5.52 seconds
+  including connection setup and the deliberate two-second wait). The
+  assertion required cancellation before the 20-second server backstop and
+  verified the connection remained usable. The independently installed
+  client connected and the exact temporary runner ingress was revoked.
+  Cancellation has one successful live qualification, but remains opt-in
+  until repeatability is established.
 - 2026-09-13: Prepared an opt-in Redshift cancellation experiment using a
   1,024-row recursive CTE crossed three ways, a per-session 20-second
   `statement_timeout` backstop, a separate cancel thread, a 15-second
@@ -308,8 +319,8 @@ short-lived evaluation archives.
   and a post-cancel connection-health check. It is excluded from push-triggered
   Redshift tests and requires manual dispatch with `cancel_test=true`.
   `actionlint`, the pinned formatter, the local C++ build, and both PostgreSQL
-  suites pass. Live behavior remains unqualified until the manual run passes;
-  do not infer it from the existing 18 smoke tests.
+  suites pass. Live behavior was unqualified at this checkpoint; the manual
+  result is recorded above.
 - 2026-09-13: Focused run `34754680798` passed all five PostgreSQL 18
   platform jobs and all 18 live Redshift tests. The new
   `PreservesNumericBoundaries` case passed for integer limits and exact
