@@ -51,7 +51,7 @@ owned_ids() {
 }
 
 cleanup() {
-  local cidr rules ids='' rule_id result verify_rules attempt failed=0
+  local cidr rules ids='' rule_id result attempt failed=0
   [[ -f "$state_dir/authorize-attempted" ]] || return 0
   [[ -f "$state_dir/ingress-revoked" ]] && return 0
   if [[ ! -s "$state_dir/cidr" ]]; then
@@ -84,15 +84,10 @@ cleanup() {
         --group-id "$REDSHIFT_SECURITY_GROUP_ID" \
         --security-group-rule-ids "$rule_id" \
         --query Return --output text)" || [[ "$result" != True ]]; then
-      # A lost revoke response is safe only if a fresh scoped read confirms
-      # the exact ID absent. A failed read must remain a visible failure.
-      if ! verify_rules="$(describe_rules)" ||
-          jq -e --arg id "$rule_id" \
-            '.SecurityGroupRules[] | select(.SecurityGroupRuleId == $id)' \
-            <<< "$verify_rules" > /dev/null; then
-        echo "::error::Could not confirm removal of ingress rule $rule_id ($rule_description)."
-        failed=1
-      fi
+      # Describe may still omit a newly authorized rule, so an empty result
+      # cannot prove that a failed or lost revoke removed it.
+      echo "::error::Could not confirm removal of ingress rule $rule_id ($rule_description)."
+      failed=1
     fi
   done <<< "$ids"
   if (( failed == 0 )); then

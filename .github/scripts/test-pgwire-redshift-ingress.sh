@@ -38,6 +38,10 @@ aws() {
             ( "$MOCK_CASE" == describe_after_auth_denied && -f "$MOCK_DIR/attempted" ) ]]; then
         return 253
       fi
+      if [[ "$MOCK_CASE" == stale_describe_revoke_denied && -f "$MOCK_DIR/attempted" ]]; then
+        printf '{"SecurityGroupRules":[]}\n'
+        return 0
+      fi
       if [[ -f "$MOCK_DIR/rule" ]]; then
         jq -n --arg description "$(< "$MOCK_DIR/rule")" \
           --arg group "$REDSHIFT_SECURITY_GROUP_ID" \
@@ -74,7 +78,8 @@ aws() {
       ;;
     ec2/revoke-security-group-ingress)
       [[ "$*" == *'--security-group-rule-ids sgr-owned-test'* ]] || return 41
-      if [[ "$MOCK_CASE" == revoke_denied ]]; then return 253; fi
+      if [[ "$MOCK_CASE" == revoke_denied ||
+            "$MOCK_CASE" == stale_describe_revoke_denied ]]; then return 253; fi
       rm -- "$MOCK_DIR/rule"
       if [[ "$MOCK_CASE" == revoke_response_lost ]]; then return 255; fi
       printf 'True\n'
@@ -121,13 +126,17 @@ run_case() {
       describe_denied|invalid_cidr)
         ! grep -q 'authorize-security-group-ingress' "$MOCK_DIR/aws-calls" || fail "$scenario attempted authorization"
         ;;
-      revoke_denied|ambiguous_unresolved)
+      revoke_denied|stale_describe_revoke_denied|ambiguous_unresolved)
         [[ -f "$MOCK_DIR/rule" ]] || fail "$scenario removed an unresolved rule"
         if [[ "$scenario" == ambiguous_unresolved ]]; then
           ! grep -q 'revoke-security-group-ingress' "$MOCK_DIR/aws-calls" || fail 'Ambiguous ownership was revoked'
         fi
         ;;
     esac
+    if [[ "$cleanup_status" != 0 ]]; then
+      [[ ! -f "$RUNNER_TEMP/pgwire-redshift-ingress-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/ingress-revoked" ]] ||
+        fail "$scenario recorded a failed cleanup as complete"
+    fi
     if [[ "$cleanup_status" == 0 ]]; then
       cp "$MOCK_DIR/aws-calls" "$MOCK_DIR/before-repeat"
       bash "$helper" cleanup > "$MOCK_DIR/repeat-output" 2>&1 || fail "$scenario repeat cleanup failed"
@@ -143,7 +152,8 @@ run_case describe_denied failure success
 run_case invalid_cidr failure success
 run_case authorize_response_lost failure success
 run_case authorize_no_verified_id failure success
-run_case revoke_response_lost success success
+run_case revoke_response_lost success failure
 run_case describe_after_auth_denied success success
 run_case revoke_denied success failure
+run_case stale_describe_revoke_denied success failure
 run_case ambiguous_unresolved failure failure

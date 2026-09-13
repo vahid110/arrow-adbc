@@ -38,7 +38,7 @@ state_dir="${RUNNER_TEMP}/pgwire-redshift-copy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATT
 mkdir -p "$state_dir"
 
 cleanup() {
-  local failed=0 ingress_failed=0 cidr rules ids rule_id result attempt verify_rules
+  local failed=0 ingress_failed=0 cidr rules ids rule_id result attempt
   local object_label object_key object_etag
 
   # A failed or response-lost conditional PutObject may have created an object,
@@ -110,24 +110,12 @@ cleanup() {
             --group-id "$REDSHIFT_SECURITY_GROUP_ID" \
             --security-group-rule-ids "$rule_id" \
             --query Return --output text)" || [[ "$result" != 'True' ]]; then
-          # EC2 may remove the rule and lose the response. Only treat that as
-          # cleaned up if a fresh Describe confirms the exact owned ID absent.
-          if ! verify_rules="$(aws ec2 describe-security-group-rules \
-              --filters "Name=group-id,Values=$REDSHIFT_SECURITY_GROUP_ID" \
-              --output json)" ||
-              ! jq -e '.SecurityGroupRules | type == "array"' \
-                <<< "$verify_rules" > /dev/null ||
-              jq -e --arg id "$rule_id" --arg group "$REDSHIFT_SECURITY_GROUP_ID" \
-                --arg cidr "$cidr" --arg description "$rule_description" \
-                '.SecurityGroupRules[] | select(.SecurityGroupRuleId == $id and
-                  .GroupId == $group and .IsEgress == false and
-                  .IpProtocol == "tcp" and .FromPort == 5439 and
-                  .ToPort == 5439 and .CidrIpv4 == $cidr and
-                  .Description == $description)' <<< "$verify_rules" > /dev/null; then
-            echo "::error::Could not confirm removal of this run's ingress rule ID $rule_id."
-            failed=1
-            ingress_failed=1
-          fi
+          # EC2 may remove the rule and lose the response, but an eventually
+          # consistent empty Describe cannot prove removal after an error.
+          # Keep this run visible for independent rule-ID audit.
+          echo "::error::Could not confirm removal of this run's ingress rule ID $rule_id; audit it independently."
+          failed=1
+          ingress_failed=1
         fi
       done <<< "$ids"
       if (( ingress_failed == 0 )); then

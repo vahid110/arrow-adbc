@@ -38,6 +38,11 @@ aws() {
   case "$service/$operation" in
     ec2/describe-security-group-rules)
       if [[ "$MOCK_CASE" == describe_denied ]]; then return 253; fi
+      if [[ "$MOCK_CASE" == revoke_denied_stale_describe &&
+            -f "$MOCK_DIR/authorize-attempted" ]]; then
+        printf '{"SecurityGroupRules":[]}\n'
+        return
+      fi
       if [[ -f "$MOCK_DIR/rule" ]]; then
         description="$(< "$MOCK_DIR/rule")"
         jq -n --arg description "$description" \
@@ -50,12 +55,15 @@ aws() {
       fi
       ;;
     ec2/authorize-security-group-ingress)
+      : > "$MOCK_DIR/authorize-attempted"
       printf 'adbc-pgwire-copy-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$MOCK_DIR/rule"
       if [[ "$MOCK_CASE" == authorize_response_lost ]]; then return 255; fi
       printf '{"Return":true,"SecurityGroupRules":[{"SecurityGroupRuleId":"sgr-owned-test"}]}\n'
       ;;
     ec2/revoke-security-group-ingress)
       [[ "$*" == *'--security-group-rule-ids sgr-owned-test'* ]] || return 40
+      if [[ "$MOCK_CASE" == revoke_denied_stale_describe ]]; then return 253; fi
+      [[ -f "$MOCK_DIR/rule" ]] || return 254
       rm -- "$MOCK_DIR/rule"
       if [[ "$MOCK_CASE" == revoke_response_lost ]]; then return 255; fi
       printf 'True\n'
@@ -117,6 +125,7 @@ aws() {
   esac
 }
 curl() { printf '203.0.113.7\n'; }
+sleep() { :; }
 psql() {
   local sql
   [[ "${PGSSLMODE:-}" == verify-full && "${PGSSLROOTCERT:-}" == system ]] || return 47
@@ -167,7 +176,7 @@ psql() {
     return 44
   fi
 }
-export -f aws curl psql
+export -f aws curl psql sleep
 
 run_case() {
   local scenario="$1" expected="$2" case_dir="$test_root/$1" status=0
@@ -237,6 +246,12 @@ run_case() {
       revoke_response_lost)
         contains "$MOCK_DIR/aws-calls" '--security-group-rule-ids sgr-owned-test'
         [[ ! -f "$MOCK_DIR/rule" ]] || fail 'Owned ingress rule remained after lost revoke response'
+        [[ ! -f "$RUNNER_TEMP/pgwire-redshift-copy-12345-2/ingress-revoked" ]] || fail 'Lost revoke response was marked verified'
+        ;;
+      revoke_denied_stale_describe)
+        contains "$MOCK_DIR/output" 'Could not confirm removal of this run'
+        [[ -f "$MOCK_DIR/rule" ]] || fail 'Denied revoke unexpectedly removed the rule'
+        [[ ! -f "$RUNNER_TEMP/pgwire-redshift-copy-12345-2/ingress-revoked" ]] || fail 'Stale Describe concealed denied revoke'
         ;;
       partial_upload)
         contains "$MOCK_DIR/output" 'ownership is unconfirmed'
@@ -292,14 +307,15 @@ run_case() {
     cp "$MOCK_DIR/aws-calls" "$MOCK_DIR/before-final-cleanup"
     bash "$fixture_script" cleanup >> "$MOCK_DIR/output" 2>&1 || cleanup_status=$?
     case "$scenario" in
-      partial_upload|data_collision|data_put_no_etag|manifest_upload_response_lost|manifest_collision|manifest_put_no_etag|object_replaced)
+      partial_upload|data_collision|data_put_no_etag|manifest_upload_response_lost|manifest_collision|manifest_put_no_etag|object_replaced|revoke_response_lost|revoke_denied_stale_describe)
         [[ "$cleanup_status" != 0 ]] || fail "$scenario concealed incomplete cleanup"
         ;;
       *)
         [[ "$cleanup_status" == 0 ]] || fail "$scenario final cleanup failed"
         ;;
     esac
-    if [[ "$scenario" != object_replaced ]]; then
+    if [[ "$scenario" != object_replaced && "$scenario" != revoke_response_lost &&
+          "$scenario" != revoke_denied_stale_describe ]]; then
       cmp "$MOCK_DIR/aws-calls" "$MOCK_DIR/before-final-cleanup" > /dev/null || fail "$scenario repeated a mutation"
     fi
   )
@@ -313,7 +329,8 @@ run_case existing_other_owner failure
 run_case authorize_response_lost failure
 run_case identity_mismatch failure
 run_case assumerole_denied failure
-run_case revoke_response_lost success
+run_case revoke_response_lost failure
+run_case revoke_denied_stale_describe failure
 run_case partial_upload failure
 run_case data_collision failure
 run_case data_put_no_etag failure
