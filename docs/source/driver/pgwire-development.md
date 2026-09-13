@@ -299,6 +299,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a live value-and-schema test in `ceea6f746` for signed
+  32/64-bit integer limits and positive/negative 38-digit `DECIMAL(38,0)`
+  values (Arrow strings under the current lossless numeric policy). The pinned
+  formatter, local C++ build, and both PostgreSQL suites pass; focused run
+  `34754680798` is pending, so this boundary behavior is not yet qualified
+  against Redshift.
 - 2026-09-13: Focused run `34754290928` passed all five PostgreSQL 18
   platform jobs and all 17 live Redshift tests. The new
   `MetadataQuotesTableAndColumnNames` case passed, the independently installed
