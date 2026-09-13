@@ -35,6 +35,11 @@ on:
         required: false
         type: string
         default: ""
+      credential_probe:
+        description: Verify non-root Redshift OIDC database identity only (no database connection)
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -51,8 +56,19 @@ permissions:
   contents: read
 
 jobs:
+  redshift-credential-probe:
+    name: Redshift OIDC credential identity (manual only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.credential_probe }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pgwire-redshift-copy.yml
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
   cpp-postgresql:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
+    if: ${{ !inputs.credential_probe }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -141,6 +157,7 @@ jobs:
 
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
+    if: ${{ !inputs.credential_probe }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
