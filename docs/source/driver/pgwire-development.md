@@ -173,6 +173,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
+- [ ] Publish short-retention Windows x64/ARM64 development ZIPs only after
+      collecting linked vcpkg dependency licenses, verifying SHA-256 after
+      download, and loading the DLL from an extracted archive on each native
+      Windows architecture.
 - [x] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
