@@ -252,6 +252,14 @@ implemented or verified.
 
 ## Progress log
 
+- 2026-09-13: Corrected batch-size code passed full PostgreSQL 18 and live
+  Redshift workflow run `34745845306`, including 14 focused live cases and
+  the two-Arrow-batch ingest test. Native Windows vcpkg Release checks on x64
+  and ARM64 plus x64 Debug passed in run `34745845370`. A read-only Redshift
+  catalog probe found
+  `GEOMETRY` OID 3000, `GEOGRAPHY` OID 3001, and `SUPER` OID 4000. Direct
+  libpq/Arrow value behavior is still unqualified, so no mapping claim is
+  added yet.
 - 2026-09-13: The native Windows vcpkg Release build exposed Windows' `min`
   macro expanding the new batch-size cap. Parenthesized the `std::min` call;
   local build passes and Windows requalification is pending. The concurrently
