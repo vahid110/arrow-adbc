@@ -132,8 +132,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
-- [ ] Repeat the opt-in cancellation case before deciding whether to make it a
-      push-triggered CI gate; one successful run does not establish stability.
+- [x] Repeat the opt-in cancellation case before deciding whether to make it a
+      push-triggered CI gate. Two bounded live successes justify retaining it
+      as an opt-in gate while Redshift CI cost is being minimized.
 - [ ] Keep PostgreSQL's complete integration suite and downstream client
       compatibility tests green; preserve observed public behavior and ordering.
 - [x] Define a documented support matrix with explicit unsupported features and
@@ -318,6 +319,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Manually dispatched focused run `34758596998` passed all five
+  PostgreSQL 18 platform jobs, 19 standard live Redshift cases, and a second
+  bounded cancellation case in 5.816 seconds. The connection remained usable
+  afterward and exact temporary ingress cleanup passed. Cancellation remains
+  opt-in rather than push-triggered to avoid additional paid Redshift windows
+  on routine commits; this is two successes, not a broad reliability claim.
 - 2026-09-13: Corrected package run `34758297459` passed all seven native
   development archive jobs and its final download/checksum gate. Both Windows
   x64 and ARM64 jobs built an independent client from their extracted ZIPs,
