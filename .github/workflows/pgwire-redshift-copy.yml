@@ -17,8 +17,9 @@
 
 name: PgWire Redshift COPY Fixture
 
-# Credentials-only is the safe default. The opt-in COPY path must not be run
-# until the dedicated COPY role has reviewed, database-user-scoped trust.
+# Credentials-only is the safe default. The opt-in COPY path remains gated
+# until the CI role's exact-prefix s3:GetObject permission is reviewed and the
+# fixture's PGWIRE_COPY_GETOBJECT_VERIFIED assertion is deliberately enabled.
 # A hard runner loss can bypass both the shell trap and always() cleanup. After
 # each copy=true run, separately audit the dedicated security group for its
 # printed adbc-pgwire-copy-<run ID>-<attempt> description. Revoke only a rule
@@ -32,9 +33,18 @@ on:
         required: false
         type: boolean
         default: false
+      csv_semantics:
+        description: Stage and COPY nine small CSV semantics rows (requires cleanup grant)
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       copy:
+        required: false
+        type: boolean
+        default: false
+      csv_semantics:
         required: false
         type: boolean
         default: false
@@ -66,14 +76,20 @@ jobs:
       REDSHIFT_COPY_ROLE_ARN: arn:aws:iam::149112076833:role/adbc-pgwire-ci-copy
 
     steps:
+      - name: Validate mutually exclusive COPY modes
+        if: ${{ inputs.copy && inputs.csv_semantics }}
+        run: |
+          echo '::error::Choose either the two-row COPY fixture or CSV semantics probe, not both.'
+          exit 1
+
       - name: Check out COPY fixture script
-        if: ${{ inputs.copy }}
+        if: ${{ inputs.copy || inputs.csv_semantics }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install PostgreSQL client
-        if: ${{ inputs.copy }}
+        if: ${{ inputs.copy || inputs.csv_semantics }}
         run: |
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install --yes postgresql-client
@@ -97,12 +113,19 @@ jobs:
           [[ "$db_user" == IAMR:* ]]
           printf 'Verified temporary Redshift database user: %s\n' "$db_user"
 
-      - name: Qualify two-row staged COPY
-        if: ${{ inputs.copy }}
+      - name: Qualify staged COPY fixture
+        if: ${{ inputs.copy || inputs.csv_semantics }}
         shell: bash
-        run: bash .github/scripts/pgwire-redshift-copy-fixture.sh run
+        env:
+          CSV_SEMANTICS: ${{ inputs.csv_semantics }}
+        run: |
+          if [[ "$CSV_SEMANTICS" == true ]]; then
+            bash .github/scripts/pgwire-redshift-copy-fixture.sh csv-semantics
+          else
+            bash .github/scripts/pgwire-redshift-copy-fixture.sh run
+          fi
 
       - name: Reconcile exact COPY fixture resources
-        if: ${{ always() && inputs.copy && steps.aws-credentials.outcome == 'success' }}
+        if: ${{ always() && (inputs.copy || inputs.csv_semantics) && steps.aws-credentials.outcome == 'success' }}
         shell: bash
         run: bash .github/scripts/pgwire-redshift-copy-fixture.sh cleanup

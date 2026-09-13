@@ -147,8 +147,11 @@ on_exit() {
 }
 
 run_fixture() {
+  local fixture_mode="${1:-two-row}"
   local runner_ip cidr rules existing credentials db_user password
-  local permissions response identity can_copy row_count data_uri manifest_uri
+  local permissions identity can_copy row_count data_uri manifest_uri
+  local rows quoted_empty bare_empty bare_null comma quote newline maximum minimum
+  local quoted_marker_null quoted_marker_literal quoted_marker_class
 
   # ETag-matched DeleteObject requires BOTH s3:DeleteObject and s3:GetObject
   # (unlike If-Match:*). The CI role currently lacks GetObject. Keep every
@@ -222,7 +225,16 @@ SQL
     return 1
   fi
 
-  printf '1,alpha\n2,beta\n' > "$state_dir/data.csv"
+  if [[ "$fixture_mode" == csv-semantics ]]; then
+    # Nine CSV records; the seventh contains a physical newline inside quotes.
+    # Do not reuse this probe as a production NULL encoding policy.
+    printf '%s\n' '1,""' '2,' '3,\N' '4,"\N"' '5,"a,b"' \
+      '6,"a ""quote"""' '7,"line' 'break"' \
+      '9223372036854775807,"max"' '-9223372036854775808,"min"' \
+      > "$state_dir/data.csv"
+  else
+    printf '1,alpha\n2,beta\n' > "$state_dir/data.csv"
+  fi
   data_uri="s3://${REDSHIFT_COPY_BUCKET}/${data_key}"
   manifest_uri="s3://${REDSHIFT_COPY_BUCKET}/${manifest_key}"
   jq -n --arg url "$data_uri" \
@@ -254,9 +266,52 @@ SQL
     return 1
   fi
 
-  row_count="$(psql -X -A -t -q -v ON_ERROR_STOP=1 \
-    -v manifest_uri="$manifest_uri" \
-    -v role_arn="$REDSHIFT_COPY_ROLE_ARN" <<'SQL'
+  if [[ "$fixture_mode" == csv-semantics ]]; then
+    row_count="$(psql -X -A -t -q -v ON_ERROR_STOP=1 \
+      -v manifest_uri="$manifest_uri" \
+      -v role_arn="$REDSHIFT_COPY_ROLE_ARN" <<'SQL'
+BEGIN;
+CREATE TEMP TABLE pgwire_copy_csv_semantics_fixture (id BIGINT, name VARCHAR(64));
+COPY pgwire_copy_csv_semantics_fixture (id, name) FROM :'manifest_uri' IAM_ROLE :'role_arn' MANIFEST CSV;
+SELECT COUNT(*),
+       SUM(CASE WHEN id = 1 AND name = '' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 2 AND name = '' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 3 AND name IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 5 AND name = 'a,b' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 6 AND name = 'a "quote"' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 7 AND name = 'line' || CHR(10) || 'break' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = CAST('9223372036854775807' AS BIGINT) AND name = 'max' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = CAST('-9223372036854775808' AS BIGINT) AND name = 'min' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 4 AND name IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN id = 4 AND name = CHR(92) || 'N' THEN 1 ELSE 0 END)
+  FROM pgwire_copy_csv_semantics_fixture;
+ROLLBACK;
+SQL
+    )"
+    IFS='|' read -r rows quoted_empty bare_empty bare_null comma quote newline \
+      maximum minimum quoted_marker_null quoted_marker_literal <<< "$row_count"
+    if [[ "$rows|$quoted_empty|$bare_empty|$bare_null|$comma|$quote|$newline|$maximum|$minimum" != '9|1|1|1|1|1|1|1|1' ]]; then
+      echo "::error::CSV semantics fixture failed its nine-row aggregate: $row_count."
+      return 1
+    fi
+    if [[ ! "$quoted_marker_null" =~ ^[01]$ ||
+          ! "$quoted_marker_literal" =~ ^[01]$ ||
+          "$quoted_marker_null$quoted_marker_literal" == 11 ]]; then
+      echo "::error::CSV quoted-null-marker classification was malformed: $row_count."
+      return 1
+    fi
+    if [[ "$quoted_marker_null|$quoted_marker_literal" == '1|0' ]]; then
+      quoted_marker_class=null
+    elif [[ "$quoted_marker_null|$quoted_marker_literal" == '0|1' ]]; then
+      quoted_marker_class=literal
+    else
+      quoted_marker_class=other
+    fi
+    printf 'Nine-row CSV semantics fixture passed; quoted \\N classified as %s.\n' "$quoted_marker_class"
+  else
+    row_count="$(psql -X -A -t -q -v ON_ERROR_STOP=1 \
+      -v manifest_uri="$manifest_uri" \
+      -v role_arn="$REDSHIFT_COPY_ROLE_ARN" <<'SQL'
 BEGIN;
 CREATE TEMP TABLE pgwire_copy_ci_fixture (id INTEGER, name VARCHAR(16));
 COPY pgwire_copy_ci_fixture FROM :'manifest_uri' IAM_ROLE :'role_arn' MANIFEST CSV;
@@ -266,12 +321,13 @@ SELECT COUNT(*),
   FROM pgwire_copy_ci_fixture;
 ROLLBACK;
 SQL
-  )"
-  if [[ "$row_count" != '2|1|1' ]]; then
-    echo "::error::Expected exactly the two fixture rows; got aggregate $row_count."
-    return 1
+    )"
+    if [[ "$row_count" != '2|1|1' ]]; then
+      echo "::error::Expected exactly the two fixture rows; got aggregate $row_count."
+      return 1
+    fi
+    echo 'Two-row staged COPY fixture passed.'
   fi
-  echo 'Two-row staged COPY fixture passed.'
 }
 
 case "${1:-}" in
@@ -279,13 +335,19 @@ case "${1:-}" in
     trap 'on_exit $?' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    run_fixture
+    run_fixture two-row
+    ;;
+  csv-semantics)
+    trap 'on_exit $?' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    run_fixture csv-semantics
     ;;
   cleanup)
     cleanup
     ;;
   *)
-    echo 'Usage: pgwire-redshift-copy-fixture.sh run|cleanup' >&2
+    echo 'Usage: pgwire-redshift-copy-fixture.sh run|csv-semantics|cleanup' >&2
     exit 2
     ;;
 esac

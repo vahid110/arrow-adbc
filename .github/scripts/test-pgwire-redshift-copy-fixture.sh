@@ -33,7 +33,7 @@ excludes() { [[ "$(< "$1")" != *"$2"* ]] || fail "Unexpected $2 in $1"; }
 
 aws() {
   local service="${1:-}" operation="${2:-}" description body='' previous='' argument
-  local object_file object_etag requested_etag
+  local object_file object_etag requested_etag expected_csv
   printf '%s\n' "$*" >> "$MOCK_DIR/aws-calls"
   case "$service/$operation" in
     ec2/describe-security-group-rules)
@@ -70,7 +70,12 @@ aws() {
         previous="$argument"
       done
       if [[ "$*" == *'/data.csv'* ]]; then
-        [[ "$(< "$body")" == $'1,alpha\n2,beta' ]] || return 45
+        if [[ "$MOCK_CASE" == csv_semantics_* ]]; then
+          expected_csv=$'1,""\n2,\n3,\\N\n4,"\\N"\n5,"a,b"\n6,"a ""quote"""\n7,"line\nbreak"\n9223372036854775807,"max"\n-9223372036854775808,"min"'
+        else
+          expected_csv=$'1,alpha\n2,beta'
+        fi
+        [[ "$(< "$body")" == "$expected_csv" ]] || return 45
         object_file="$MOCK_DIR/data-object"
         object_etag='"etag-data"'
         [[ ! -f "$object_file" ]] || return 254
@@ -130,6 +135,26 @@ psql() {
     else
       printf 't\n'
     fi
+  elif [[ "$sql" == *'COPY pgwire_copy_csv_semantics_fixture'* ]]; then
+    [[ "$sql" == *'SELECT COUNT(*)'* &&
+       "$sql" == *"id = 1 AND name = ''"* &&
+       "$sql" == *"id = 2 AND name = ''"* &&
+       "$sql" == *"id = 3 AND name IS NULL"* &&
+       "$sql" == *"id = 4 AND name = CHR(92) || 'N'"* &&
+       "$sql" == *"id = 5 AND name = 'a,b'"* &&
+       "$sql" == *"id = 6 AND name = 'a \"quote\"'"* &&
+       "$sql" == *"id = 7 AND name = 'line' || CHR(10) || 'break'"* &&
+       "$sql" == *"CAST('9223372036854775807' AS BIGINT)"* &&
+       "$sql" == *"CAST('-9223372036854775808' AS BIGINT)"* &&
+       "$sql" == *'ROLLBACK;'* ]] || return 52
+    case "$MOCK_CASE" in
+      csv_semantics_null) printf '9|1|1|1|1|1|1|1|1|1|0\n' ;;
+      csv_semantics_literal) printf '9|1|1|1|1|1|1|1|1|0|1\n' ;;
+      csv_semantics_other) printf '9|1|1|1|1|1|1|1|1|0|0\n' ;;
+      csv_semantics_bad_escape) printf '9|1|1|1|1|0|1|1|1|0|1\n' ;;
+      csv_semantics_bad_marker) printf '9|1|1|1|1|1|1|1|1|2|0\n' ;;
+      *) return 53 ;;
+    esac
   elif [[ "$sql" == *'COPY pgwire_copy_ci_fixture'* ]]; then
     [[ "$sql" == *"id = 1 AND name = 'alpha'"* &&
        "$sql" == *"id = 2 AND name = 'beta'"* ]] || return 48
@@ -146,7 +171,7 @@ export -f aws curl psql
 
 run_case() {
   local scenario="$1" expected="$2" case_dir="$test_root/$1" status=0
-  local cleanup_status=0
+  local cleanup_status=0 fixture_mode=run
   mkdir -p "$case_dir"
   (
     export MOCK_CASE="$scenario" MOCK_DIR="$case_dir" RUNNER_TEMP="$case_dir"
@@ -158,8 +183,13 @@ run_case() {
     export REDSHIFT_HOST=pgwire-ci.example.com REDSHIFT_DBNAME=dev
     export PGWIRE_COPY_GETOBJECT_VERIFIED=true
     : > "$MOCK_DIR/aws-calls"
-    if [[ "$scenario" == missing_getobject_approval ]]; then
+    if [[ "$scenario" == missing_getobject_approval ||
+          "$scenario" == missing_getobject_approval_csv ]]; then
       unset PGWIRE_COPY_GETOBJECT_VERIFIED
+    fi
+    if [[ "$scenario" == csv_semantics_* ||
+          "$scenario" == missing_getobject_approval_csv ]]; then
+      fixture_mode=csv-semantics
     fi
     if [[ "$scenario" == existing_other_owner ]]; then
       printf 'someone-else\n' > "$MOCK_DIR/rule"
@@ -170,7 +200,7 @@ run_case() {
     if [[ "$scenario" == manifest_collision ]]; then
       printf '"etag-foreign"\n' > "$MOCK_DIR/manifest-object"
     fi
-    bash "$fixture_script" run > "$MOCK_DIR/output" 2>&1 || status=$?
+    bash "$fixture_script" "$fixture_mode" > "$MOCK_DIR/output" 2>&1 || status=$?
     if [[ "$expected" == success && "$status" != 0 ]]; then
       fail "$scenario failed unexpectedly: $(< "$MOCK_DIR/output")"
     fi
@@ -178,7 +208,7 @@ run_case() {
       fail "$scenario passed unexpectedly"
     fi
     case "$scenario" in
-      missing_getobject_approval)
+      missing_getobject_approval|missing_getobject_approval_csv)
         contains "$MOCK_DIR/output" 'ETag-matched cleanup needs reviewed s3:GetObject'
         [[ ! -s "$MOCK_DIR/aws-calls" ]] || fail 'Unapproved COPY gate made an AWS call'
         ;;
@@ -234,6 +264,23 @@ run_case() {
         contains "$MOCK_DIR/aws-calls" 'delete-object --bucket bucket-test --key staging/ci/12345-2/manifest.json --if-match "etag-manifest"'
         [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/manifest-object" && ! -f "$MOCK_DIR/rule" ]] || fail "$scenario resources remained"
         ;;
+      csv_semantics_null|csv_semantics_literal|csv_semantics_other)
+        contains "$MOCK_DIR/output" 'Nine-row CSV semantics fixture passed'
+        case "$scenario" in
+          csv_semantics_null) contains "$MOCK_DIR/output" 'classified as null' ;;
+          csv_semantics_literal) contains "$MOCK_DIR/output" 'classified as literal' ;;
+          csv_semantics_other) contains "$MOCK_DIR/output" 'classified as other' ;;
+        esac
+        [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/manifest-object" && ! -f "$MOCK_DIR/rule" ]] || fail "$scenario resources remained"
+        ;;
+      csv_semantics_bad_escape)
+        contains "$MOCK_DIR/output" 'CSV semantics fixture failed its nine-row aggregate'
+        [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/manifest-object" && ! -f "$MOCK_DIR/rule" ]] || fail "$scenario resources remained"
+        ;;
+      csv_semantics_bad_marker)
+        contains "$MOCK_DIR/output" 'CSV quoted-null-marker classification was malformed'
+        [[ ! -f "$MOCK_DIR/data-object" && ! -f "$MOCK_DIR/manifest-object" && ! -f "$MOCK_DIR/rule" ]] || fail "$scenario resources remained"
+        ;;
       success)
         contains "$MOCK_DIR/output" 'Two-row staged COPY fixture passed.'
         contains "$MOCK_DIR/aws-calls" 'delete-object --bucket bucket-test --key staging/ci/12345-2/data.csv --if-match "etag-data"'
@@ -260,6 +307,7 @@ run_case() {
 }
 
 run_case missing_getobject_approval failure
+run_case missing_getobject_approval_csv failure
 run_case describe_denied failure
 run_case existing_other_owner failure
 run_case authorize_response_lost failure
@@ -275,3 +323,8 @@ run_case manifest_put_no_etag failure
 run_case object_replaced failure
 run_case copy_query_failed failure
 run_case success success
+run_case csv_semantics_null success
+run_case csv_semantics_literal success
+run_case csv_semantics_other success
+run_case csv_semantics_bad_escape failure
+run_case csv_semantics_bad_marker failure
