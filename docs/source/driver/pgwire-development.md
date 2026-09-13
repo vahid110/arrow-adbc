@@ -162,6 +162,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Prepare and publish a third small Apache-ready COPY-stream result-handle
       cleanup stacked on the second, with only PostgreSQL statement code in
       its added diff and both PostgreSQL C++ suites passing locally.
+- [ ] Publish the fourth Apache-facing PostgreSQL-only parameter-schema status
+      fix after the core branch's native Windows and Redshift checks pass.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -291,6 +293,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Prepared local Apache-facing branch
+  `feature/pgwire-parameter-schema-upstream` with commit `8c4797e84`, stacked
+  on the third cleanup. Its added diff changes only PostgreSQL statement code
+  and a focused parameter-schema test. Both PostgreSQL C++ suites and the
+  pinned formatter pass locally; branch publication waits for the core fix's
+  native Windows and live Redshift qualification.
 - 2026-09-13: Initial Windows ZIP workflow `34751390419` built all five
   existing Linux/macOS archive targets but both native Windows Release jobs
   exposed a previously inherited `GetParameterSchema` bug: a nanoarrow
