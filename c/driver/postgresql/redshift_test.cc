@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -772,6 +773,58 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest_atomic", &error_);
+}
+
+class RedshiftCancelTest : public RedshiftSmokeTest {
+ protected:
+  void SetUp() override {
+    if (std::getenv("ADBC_REDSHIFT_CANCEL_TEST") == nullptr) {
+      GTEST_SKIP() << "ADBC_REDSHIFT_CANCEL_TEST is not configured";
+    }
+    RedshiftSmokeTest::SetUp();
+  }
+};
+
+TEST_F(RedshiftCancelTest, CancelsBoundedAnalyticQuery) {
+  // Redshift does not support pg_sleep(). Use an analytic query backed by the
+  // recursive CTE already exercised above, with a session-local server timeout
+  // as a hard backstop if cancellation does not reach the query.
+  ASSERT_NO_FATAL_FAILURE(
+      ExecuteSql(&connection_, "SET statement_timeout = 20000", &error_));
+
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(&statement,
+                               "WITH RECURSIVE seq(n) AS ("
+                               "SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1024) "
+                               "SELECT SUM(a.n * b.n * c.n) "
+                               "FROM seq a CROSS JOIN seq b CROSS JOIN seq c",
+                               &error_),
+      IsOkStatus(&error_));
+
+  struct AdbcError query_error = {};
+  AdbcStatusCode query_status = ADBC_STATUS_UNKNOWN;
+  const auto started = std::chrono::steady_clock::now();
+  std::thread query_thread([&] {
+    query_status = AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &query_error);
+  });
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  struct AdbcError cancel_error = {};
+  const AdbcStatusCode cancel_status = AdbcStatementCancel(&statement, &cancel_error);
+  query_thread.join();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_THAT(cancel_status, IsOkStatus(&cancel_error));
+  EXPECT_EQ(query_status, ADBC_STATUS_CANCELLED)
+      << (query_error.message == nullptr ? "" : query_error.message);
+  EXPECT_LT(elapsed, std::chrono::seconds(15))
+      << "The server timeout, not the cancel request, may have ended the query";
+  if (cancel_error.release != nullptr) cancel_error.release(&cancel_error);
+  if (query_error.release != nullptr) query_error.release(&query_error);
+
+  ASSERT_NO_FATAL_FAILURE(ExecuteSql(&connection_, "SELECT 1", &error_));
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
 class RedshiftBenchmarkTest : public RedshiftSmokeTest {

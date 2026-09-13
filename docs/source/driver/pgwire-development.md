@@ -301,6 +301,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Prepared an opt-in Redshift cancellation experiment using a
+  1,024-row recursive CTE crossed three ways, a per-session 20-second
+  `statement_timeout` backstop, a separate cancel thread, a 15-second
+  completion assertion to distinguish explicit cancellation from timeout,
+  and a post-cancel connection-health check. It is excluded from push-triggered
+  Redshift tests and requires manual dispatch with `cancel_test=true`.
+  `actionlint`, the pinned formatter, the local C++ build, and both PostgreSQL
+  suites pass. Live behavior remains unqualified until the manual run passes;
+  do not infer it from the existing 18 smoke tests.
 - 2026-09-13: Focused run `34754680798` passed all five PostgreSQL 18
   platform jobs and all 18 live Redshift tests. The new
   `PreservesNumericBoundaries` case passed for integer limits and exact

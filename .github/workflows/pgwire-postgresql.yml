@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      cancel_test:
+        description: Run the bounded Redshift query-cancellation experiment
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -292,6 +297,15 @@ jobs:
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftBenchmarkTest.*'
+
+      - name: Qualify Redshift query cancellation (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.cancel_test }}
+        env:
+          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_CANCEL_TEST: "1"
+        run: >-
+          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
+          --gtest_filter='RedshiftCancelTest.*'
 
       - name: Connect through installed Redshift driver manager
         env:
