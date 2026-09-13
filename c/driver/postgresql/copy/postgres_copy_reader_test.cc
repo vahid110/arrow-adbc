@@ -703,6 +703,59 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadJsonb) {
   ASSERT_EQ(std::string(data_buffer + 9, 9), "[4, 5, 6]");
 }
 
+TEST(PostgresCopyUtilsTest, PostgresCopyReadJsonbRejectsUnknownVersion) {
+  constexpr uint8_t kInvalidJsonb[] = {0x02, '{', '}'};
+  ArrowBufferView data;
+  data.data.as_uint8 = kInvalidJsonb;
+  data.size_bytes = sizeof(kInvalidJsonb);
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(NANOARROW_OK, ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_STRING));
+
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(NANOARROW_OK, ArrowArrayInitFromType(array.get(), NANOARROW_TYPE_STRING));
+  ASSERT_EQ(NANOARROW_OK, ArrowArrayStartAppending(array.get()));
+
+  PostgresCopyJsonbFieldReader reader;
+  ASSERT_EQ(NANOARROW_OK, reader.InitSchema(schema.get()));
+  ASSERT_EQ(NANOARROW_OK, reader.InitArray(array.get()));
+
+  ArrowError error{};
+  ASSERT_EQ(EINVAL, reader.Read(&data, sizeof(kInvalidJsonb), array.get(), &error));
+  ASSERT_STREQ("Expected JSONB binary version 0x01 but got 2", error.message);
+  ASSERT_EQ(0, array->length);
+  ASSERT_EQ(sizeof(int32_t), ArrowArrayBuffer(array.get(), 1)->size_bytes);
+  ASSERT_EQ(0, ArrowArrayBuffer(array.get(), 2)->size_bytes);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyReadJsonbRejectsEmptyFieldWithoutReadingNext) {
+  constexpr uint8_t kNextField[] = {0x01, '{', '}'};
+  ArrowBufferView data;
+  data.data.as_uint8 = kNextField;
+  data.size_bytes = sizeof(kNextField);
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(NANOARROW_OK, ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_STRING));
+
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(NANOARROW_OK, ArrowArrayInitFromType(array.get(), NANOARROW_TYPE_STRING));
+  ASSERT_EQ(NANOARROW_OK, ArrowArrayStartAppending(array.get()));
+
+  PostgresCopyJsonbFieldReader reader;
+  ASSERT_EQ(NANOARROW_OK, reader.InitSchema(schema.get()));
+  ASSERT_EQ(NANOARROW_OK, reader.InitArray(array.get()));
+
+  ArrowError error{};
+  ASSERT_EQ(EINVAL, reader.Read(&data, 0, array.get(), &error));
+  ASSERT_STREQ("Expected JSONB field with a version byte but found 0 bytes",
+               error.message);
+  ASSERT_EQ(kNextField, data.data.as_uint8);
+  ASSERT_EQ(sizeof(kNextField), data.size_bytes);
+  ASSERT_EQ(0, array->length);
+  ASSERT_EQ(sizeof(int32_t), ArrowArrayBuffer(array.get(), 1)->size_bytes);
+  ASSERT_EQ(0, ArrowArrayBuffer(array.get(), 2)->size_bytes);
+}
+
 TEST(PostgresCopyUtilsTest, PostgresCopyReadBinary) {
   ArrowBufferView data;
   data.data.as_uint8 = kTestPgCopyBinary;
