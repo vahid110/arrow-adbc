@@ -96,7 +96,7 @@ exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
 | Types | Tested scalar integers, floats, booleans, strings, decimal-as-string, date/time/timestamp, and `VARBYTE`; `SUPER` and spatial types are not qualified |
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
-| Ingest | Correctness-first atomic prepared inserts; no Redshift S3 `COPY` or `UNLOAD` path |
+| Ingest | Atomic parameterized inserts in bounded 16-row SQL batches; no Redshift S3 `COPY` or `UNLOAD` path |
 | Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 Release builds and installed DLL load checks pass through the public CMake package; release artifacts and other platforms' database-backed installed-client qualification remain pending |
 
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on

@@ -136,7 +136,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Provision a private, short-retention S3 fixture and a namespace-attached,
       read-only Redshift IAM role for an opt-in staged `COPY` experiment.
 - [ ] Resolve the scoped IAM role-assumption failure before using staged `COPY`.
-- [ ] Add and live-test a bounded multi-row parameterized INSERT path for
+- [x] Add and live-test a bounded multi-row parameterized INSERT path for
       Redshift, preserving whole-bind atomicity, as an intermediate improvement
       that requires no AWS uploader or broader IAM trust.
 - [ ] If justified, add staged S3 `COPY` ingestion with least-privilege IAM,
@@ -227,8 +227,11 @@ In AWS account `149112076833`, region `eu-central-1`:
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
 `34744399423` inserted and verified 1,000 rows in 186.081 seconds, or 5.374
-rows/second, on the 4-RPU `pgwire-ci` workgroup. This is one measurement, not a
-capacity estimate, but it justifies an opt-in staged `COPY` investigation.
+rows/second, on the 4-RPU `pgwire-ci` workgroup. After bounded 16-row batching,
+run `34745478491` inserted and verified 1,000 rows in 11.7552 seconds, or
+85.069 rows/second (about 15.8 times faster). These are single measurements,
+not capacity estimates. High-volume ingest still justifies an opt-in staged
+`COPY` investigation.
 
 See the AWS documentation on [Serverless namespace IAM roles](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-security-other-services.html),
 [minimum S3 permissions for `COPY`](https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-access-permissions.html),
@@ -254,8 +257,12 @@ implemented or verified.
   path. The driver caps each SQL statement at 32,767 parameters and preserves
   one transaction across the entire Arrow bind. The focused live tests now
   span a full and partial batch and put an error in the second batch to check
-  rollback. Local build and SQL-builder/profile unit tests pass; live CI and a
-  second benchmark are pending.
+  rollback. Live CI run `34745172344` passed all platform and Redshift gates;
+  manual benchmark run `34745478491` passed and measured 85.069 rows/second
+  versus the 5.374 rows/second row-at-a-time baseline. A follow-up local test
+  now splits 18 rows across two Arrow batches, crossing both stream and SQL
+  batch boundaries;
+  its live verification is pending.
 - 2026-09-13: Manual benchmark CI run `34744399423` passed all PostgreSQL and
   live Redshift gates. Its one-shot prepared-insert measurement was 1,000 rows
   in 186.081 seconds (5.374 rows/second), with the exact database row count
