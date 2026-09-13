@@ -162,7 +162,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Prepare and publish a third small Apache-ready COPY-stream result-handle
       cleanup stacked on the second, with only PostgreSQL statement code in
       its added diff and both PostgreSQL C++ suites passing locally.
-- [ ] Publish the fourth Apache-facing PostgreSQL-only parameter-schema status
+- [x] Publish the fourth Apache-facing PostgreSQL-only parameter-schema status
       fix after the core branch's native Windows and Redshift checks pass.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
@@ -175,7 +175,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
-- [ ] Publish short-retention Windows x64/ARM64 development ZIPs only after
+- [x] Publish short-retention Windows x64/ARM64 development ZIPs only after
       collecting linked vcpkg dependency licenses, verifying SHA-256 after
       download, and loading the DLL from an extracted archive on each native
       Windows architecture.
@@ -195,8 +195,8 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
-| Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
-| Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
+| Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention x64 development ZIP | Production release artifact and database-backed installed-client test |
+| Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke; checked, short-retention ARM64 development ZIP | Production release artifact and database-backed installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
 | Ubuntu 24.04 ARM64 | Native CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
 
@@ -293,21 +293,33 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Published `feature/pgwire-parameter-schema-upstream` at
+  `8c4797e84` on the fork after the core branch's native Windows C/C++ jobs,
+  14 live Redshift tests, and installed-client live test passed. The fourth
+  Apache-facing diff is limited to `statement.cc` and one PostgreSQL test;
+  both PostgreSQL C++ suites and the pinned formatter passed locally. Fork CI
+  for this new branch is pending; no Apache PR has been opened.
+- 2026-09-13: Isolated package workflow `34751985546` passed on all seven
+  targets, including native Windows x64 and ARM64 ZIP builds, extracted-client
+  DLL load checks, and the final archive/checksum download gate. Separately
+  downloaded both Windows ZIPs and verified their unmodified LF-only SHA-256
+  files with macOS `shasum -c`; inspected the x64 and ARM64 PE DLLs and linked
+  vcpkg copyright texts. These are short-retention development archives, not
+  production releases or live Windows-to-Redshift qualification.
 - 2026-09-13: The corrected Windows x64 ZIP job in workflow `34751714432`
   passed its native build, vcpkg copyright collection, extracted CMake-client
   build, and DLL load. A separate download audit confirmed an x86-64 PE DLL
   and libpq/OpenSSL/zlib/lz4 license texts, but found its PowerShell-written
-  `.sha256` used CRLF; GNU `sha256sum -c` treats the trailing carriage return
+  `.sha256` used CRLF; macOS `shasum -c` treats the trailing carriage return
   as part of the archive filename. The archive bytes match after ignoring
-  CRLF, but the artifact pair is not qualified for cross-platform verification.
-  Changed Windows checksum output to LF-only and added an explicit no-CR
-  assertion; CI rerun remains pending.
+  CRLF, but that artifact pair was not cross-platform portable. Windows
+  checksum output is now LF-only with an explicit no-CR assertion; the
+  replacement workflow passed, as recorded above.
 - 2026-09-13: Prepared local Apache-facing branch
   `feature/pgwire-parameter-schema-upstream` with commit `8c4797e84`, stacked
   on the third cleanup. Its added diff changes only PostgreSQL statement code
   and a focused parameter-schema test. Both PostgreSQL C++ suites and the
-  pinned formatter pass locally; branch publication waits for the core fix's
-  native Windows and live Redshift qualification.
+  pinned formatter pass locally; subsequent publication is recorded above.
 - 2026-09-13: Initial Windows ZIP workflow `34751390419` built all five
   existing Linux/macOS archive targets but both native Windows Release jobs
   exposed a previously inherited `GetParameterSchema` bug: a nanoarrow
