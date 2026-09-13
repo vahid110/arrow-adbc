@@ -293,6 +293,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: The corrected Windows x64 ZIP job in workflow `34751714432`
+  passed its native build, vcpkg copyright collection, extracted CMake-client
+  build, and DLL load. A separate download audit confirmed an x86-64 PE DLL
+  and libpq/OpenSSL/zlib/lz4 license texts, but found its PowerShell-written
+  `.sha256` used CRLF; GNU `sha256sum -c` treats the trailing carriage return
+  as part of the archive filename. The archive bytes match after ignoring
+  CRLF, but the artifact pair is not qualified for cross-platform verification.
+  Changed Windows checksum output to LF-only and added an explicit no-CR
+  assertion; CI rerun remains pending.
 - 2026-09-13: Prepared local Apache-facing branch
   `feature/pgwire-parameter-schema-upstream` with commit `8c4797e84`, stacked
   on the third cleanup. Its added diff changes only PostgreSQL statement code
