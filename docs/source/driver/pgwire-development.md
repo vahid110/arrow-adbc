@@ -463,7 +463,10 @@ necessary; this is not a claim of automatic orphan reconciliation.
   locally. A read-only regional security-group audit found no run-scoped CI
   ingress; an existing narrow developer rule was left untouched. The live
   Redshift workflow was not dispatched for this safety-only change, and the
-  hard-lost-runner limitation above remains.
+  hard-lost-runner limitation above remains. The updated head passed the
+  [AWS-free cleanup selftest](https://github.com/vahid110/arrow-adbc/actions/runs/34775735021),
+  [five PostgreSQL/artifact targets](https://github.com/vahid110/arrow-adbc/actions/runs/34775730590),
+  and [seven-platform development archive and checksum gates](https://github.com/vahid110/arrow-adbc/actions/runs/34775734174).
 - 2026-09-13: Prevented an offline-preparable Redshift `COPY` failure: the
   private CSV writer now rejects any serialized row exceeding 4,000,000 bytes,
   conservatively below [Redshift's 4 MB input-row limit](https://docs.aws.amazon.com/redshift/latest/dg/r_COPY.html),
