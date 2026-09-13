@@ -132,6 +132,10 @@ jobs:
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.so" \
             'postgresql://postgres:5432/postgres?user=postgres&password=password'
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
+            'postgresql://postgres:5432/postgres?user=postgres&password=password' \
+            --expect-postgresql-rejection
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -221,6 +225,9 @@ jobs:
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.dylib" \
             "$ADBC_POSTGRESQL_TEST_URI"
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.dylib" \
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
 
       - name: Stop temporary PostgreSQL 18 server
         if: always()

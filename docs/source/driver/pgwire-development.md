@@ -246,6 +246,17 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   The compute-usage panel was not opened because the console warns that
   retrieving it may consume workgroup capacity.
 - Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
+- [ ] Harden temporary CI ingress cleanup for an ambiguous authorize failure:
+  the current `always()` step runs only after a confirmed successful authorize.
+  If AWS creates the rule but the CLI loses its response, the `/32` could remain.
+  Do not blindly revoke by CIDR after failure: an identical pre-existing rule
+  might belong to someone else. A safe recovery needs a run-unique rule
+  description, the returned rule ID when available, and read-only
+  [`ec2:DescribeSecurityGroupRules`](https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-security-group-rules.html)
+  to verify exact ownership before revoking an ambiguous rule. AWS lists this
+  read-only action without a resource type, so its IAM grant would require
+  `Resource: "*"` (with a regional condition where supported). This is a
+  proposed IAM permission expansion, not yet made.
 - Avoid keepalive connections, polling queries, and idle open transactions so that
   Serverless can return to its non-compute-billed idle state promptly.
 - Check trial-credit and RPU usage before and after larger integration runs.
@@ -367,6 +378,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Extended the extracted-archive client check on Linux and macOS
+  to require the packaged Redshift driver to reject PostgreSQL, matching the
+  existing Windows check. Workflow YAML, shell syntax, and diff checks passed;
+  seven-platform package CI is pending. Separately documented an ambiguous
+  ingress-authorize cleanup gap and its ownership-safe remediation; no AWS IAM
+  or security-group change was made.
 - 2026-09-13: Strengthened the independent installed-client smoke test to
   execute `SELECT CAST(42 AS BIGINT)` and check one non-null Arrow int64 value,
   stream exhaustion, and resource cleanup. A local PostgreSQL 17 connection
