@@ -161,7 +161,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       changes and with both PostgreSQL C++ test suites passing locally.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
-- [ ] Start with a short-retention Ubuntu x86-64 development archive containing
+- [x] Start with a short-retention Ubuntu x86-64 development archive containing
       licenses, install guide, and SHA-256 checksum; compile and load a client
       against the extracted archive before publishing it as a CI artifact.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
@@ -177,7 +177,7 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
-| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift | Release artifact |
+| Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
@@ -278,14 +278,17 @@ continued production hardening and platform qualification.
 
 ## Progress log
 
-- 2026-09-13: Built a relocatable development archive recipe for Ubuntu 24.04
-  x86-64 with license notices, a usage guide, and SHA-256 verification. The CI
-  recipe extracts the archive to a second prefix, checks pkg-config relocation,
-  and compiles/loads an independent driver-manager client. The same packaging
-  and extracted-client sequence passed locally on macOS Apple Silicon, using
-  that platform's `.dylib` output. Linux artifact qualification is pending
-  manual workflow run `34748813873`; no release support is claimed from the
-  local check alone.
+- 2026-09-13: Isolated Ubuntu package workflow `34749412874` passed. It built
+  the Redshift driver and manager, verified the archive checksum, extracted to
+  a second prefix, checked package contents and pkg-config relocation, compiled
+  an independent client against the extracted headers/library, and loaded the
+  Redshift driver. The seven-day CI artifact was downloaded separately and its
+  checksum and key contents verified again. The same packaging and extracted
+  client sequence passed locally on macOS Apple Silicon, using that platform's
+  `.dylib` output. This is a development archive, not a production release or
+  live Redshift qualification for the packaged binary. The earlier manual
+  workflow run `34748813873` remained queued with zero planned jobs; a later
+  focused push run encountered an Actions startup error before retry.
 - 2026-09-13: Rebased-core vcpkg workflow `34747963136` passed x64 Debug,
   x64 Release, and native ARM64 Release, including installed-driver checks.
   The same rebased commit passed the repository-wide Integration, C#, Rust,
