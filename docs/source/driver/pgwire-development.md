@@ -393,6 +393,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Published a manual, opt-in two-row `COPY` fixture, separate from
+  the ADBC driver path. It requires read-only ingress discovery before any
+  network/S3 mutation, uses an exact run-owned security-group rule ID and
+  two run-owned S3 keys, verifies TLS hostname, database identity, role-use
+  privilege, row count and both values, and cleans up on ordinary failures.
+  Six offline mocks pass, including ambiguous authorize/revoke responses and
+  partial upload. Updated credential-only run `34768476642` passed while all
+  database jobs were skipped; no `COPY` was attempted. The missing ingress-read
+  permission and required independent post-run audit still gate a live test.
 - 2026-09-13: Manual OIDC credential run `34767827101` succeeded and returned
   `IAMR:adbc-redshift-ci`; PostgreSQL and live Redshift jobs were skipped. Added
   an isolated CI inline policy for workgroup-specific temporary credentials and
