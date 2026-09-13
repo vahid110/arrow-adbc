@@ -156,6 +156,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       dependency requirements, and a tested platform matrix.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
+- [x] Rehearse the 67-commit driver series on the newer Apache main without
+      patch drift and pass local PostgreSQL plus Redshift artifact tests.
 
 ### Platform and architecture qualification
 
@@ -257,6 +259,16 @@ qualification continue on the core/Redshift branch.
 
 ## Progress log
 
+- 2026-09-13: All three Windows vcpkg jobs for workflow `34747059182`
+  completed successfully: x64 Debug, x64 Release, and native ARM64 Release.
+  Their installed Redshift DLL/client checks passed; this is still not a
+  published binary release or a live Windows-to-Redshift test. Rebased the
+  67-commit development series onto Apache main `4d50e2e30`; `git range-diff`
+  reports every project patch unchanged. The four intervening Apache commits
+  only update Go, Java, and C# dependencies. A clean local build and all three
+  PostgreSQL/Redshift artifact C++ suites passed on the rebased checkout.
+  Strengthened the live Redshift transaction test to check the persisted row
+  count after commit and rollback; live CI qualification is pending.
 - 2026-09-13: Added a live `GetObjects` column-filter assertion to the Redshift
   metadata test. Workflow `34747059209` passed all five PostgreSQL 18 platform
   jobs, the installed-client checks, and all 14 focused Redshift tests. Its
