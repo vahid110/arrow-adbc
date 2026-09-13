@@ -109,11 +109,25 @@ int TupleReader::GetCopyData() {
     while ((result_ = PQgetResult(conn_)) != nullptr) {
       PQclear(result_);
     }
+    if (pq_status == PGRES_COMMAND_OK) {
+      const int validation_result = copy_reader_->ValidateEndOfStream(&na_error_);
+      if (validation_result != NANOARROW_OK) {
+        InternalAdbcSetError(&error_, "[libpq] Invalid binary COPY stream: %s",
+                             na_error_.message);
+        status_ = ADBC_STATUS_INVALID_DATA;
+        return validation_result;
+      }
+    }
     return errno_result;
   }
 
   data_.size_bytes = get_copy_res;
   data_.data.as_char = pgbuf_;
+  if (copy_reader_->trailer_seen()) {
+    InternalAdbcSetError(&error_, "[libpq] Unexpected COPY data after trailer");
+    status_ = ADBC_STATUS_INVALID_DATA;
+    return EINVAL;
+  }
   return NANOARROW_OK;
 }
 

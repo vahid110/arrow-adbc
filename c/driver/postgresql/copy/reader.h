@@ -1020,10 +1020,20 @@ class PostgresCopyStreamReader {
     pg_type_ = std::move(pg_type);
     root_reader_.Init(pg_type_);
     array_size_approx_bytes_ = 0;
+    trailer_seen_ = false;
     return NANOARROW_OK;
   }
 
   int64_t array_size_approx_bytes() const { return array_size_approx_bytes_; }
+  bool trailer_seen() const { return trailer_seen_; }
+
+  ArrowErrorCode ValidateEndOfStream(ArrowError* error) const {
+    if (!trailer_seen_) {
+      ArrowErrorSet(error, "Binary COPY stream ended without a trailer");
+      return EINVAL;
+    }
+    return NANOARROW_OK;
+  }
 
   ArrowErrorCode SetOutputSchema(ArrowSchema* schema, ArrowError* error) {
     if (std::string(schema_->format) != "+s") {
@@ -1115,6 +1125,11 @@ class PostgresCopyStreamReader {
   }
 
   ArrowErrorCode ReadRecord(ArrowBufferView* data, ArrowError* error) {
+    if (trailer_seen_) {
+      ArrowErrorSet(error, "Unexpected COPY data after trailer");
+      return EINVAL;
+    }
+
     if (array_->release == nullptr) {
       NANOARROW_RETURN_NOT_OK(
           ArrowArrayInitFromSchema(array_.get(), schema_.get(), error));
@@ -1124,7 +1139,17 @@ class PostgresCopyStreamReader {
     }
 
     const uint8_t* start = data->data.as_uint8;
-    NANOARROW_RETURN_NOT_OK(root_reader_.Read(data, -1, array_.get(), error));
+    const ArrowErrorCode result = root_reader_.Read(data, -1, array_.get(), error);
+    if (result == ENODATA) {
+      if (data->size_bytes != 0) {
+        ArrowErrorSet(error, "Unexpected %ld bytes after binary COPY trailer",
+                      static_cast<long>(data->size_bytes));  // NOLINT(runtime/int)
+        return EINVAL;
+      }
+      trailer_seen_ = true;
+      return ENODATA;
+    }
+    NANOARROW_RETURN_NOT_OK(result);
     array_size_approx_bytes_ += (data->data.as_uint8 - start);
     return NANOARROW_OK;
   }
@@ -1151,6 +1176,7 @@ class PostgresCopyStreamReader {
   nanoarrow::UniqueSchema schema_;
   nanoarrow::UniqueArray array_;
   int64_t array_size_approx_bytes_;
+  bool trailer_seen_ = false;
 };
 
 }  // namespace adbcpq

@@ -46,6 +46,18 @@ class PostgresCopyStreamTester {
     return result;
   }
 
+  ArrowErrorCode ReadHeader(ArrowBufferView* data, ArrowError* error = nullptr) {
+    return reader_.ReadHeader(data, error);
+  }
+
+  ArrowErrorCode ReadRecord(ArrowBufferView* data, ArrowError* error = nullptr) {
+    return reader_.ReadRecord(data, error);
+  }
+
+  ArrowErrorCode ValidateEndOfStream(ArrowError* error = nullptr) const {
+    return reader_.ValidateEndOfStream(error);
+  }
+
   void GetSchema(ArrowSchema* out) { reader_.GetSchema(out); }
 
   ArrowErrorCode GetArray(ArrowArray* out, ArrowError* error = nullptr) {
@@ -55,6 +67,83 @@ class PostgresCopyStreamTester {
  private:
   PostgresCopyStreamReader reader_;
 };
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectBytesAfterTrailer) {
+  for (const std::vector<uint8_t>& suffix :
+       {std::vector<uint8_t>{0x42}, std::vector<uint8_t>{0xff, 0xff}}) {
+    SCOPED_TRACE(suffix.size());
+    std::vector<uint8_t> bytes(kTestPgCopyBoolean,
+                               kTestPgCopyBoolean + sizeof(kTestPgCopyBoolean));
+    bytes.insert(bytes.end(), suffix.begin(), suffix.end());
+
+    ArrowBufferView data;
+    data.data.as_uint8 = bytes.data();
+    data.size_bytes = bytes.size();
+
+    PostgresType input_type(PostgresTypeId::kRecord);
+    input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+    PostgresCopyStreamTester tester;
+    ArrowError error{};
+    ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
+    ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
+    EXPECT_NE(std::string(error.message).find("after binary COPY trailer"),
+              std::string::npos);
+    EXPECT_EQ(data.size_bytes, suffix.size());
+  }
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectAdditionalDataAfterTrailer) {
+  ArrowBufferView data;
+  data.data.as_uint8 = kTestPgCopyBoolean;
+  data.size_bytes = sizeof(kTestPgCopyBoolean);
+
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamTester tester;
+  ArrowError error{};
+  ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
+  ASSERT_EQ(tester.ReadAll(&data, &error), ENODATA) << error.message;
+  ASSERT_EQ(tester.ValidateEndOfStream(&error), NANOARROW_OK) << error.message;
+
+  static const uint8_t kExtraCopyData[] = {0xff, 0xff};
+  data.data.as_uint8 = kExtraCopyData;
+  data.size_bytes = sizeof(kExtraCopyData);
+  ASSERT_EQ(tester.ReadRecord(&data, &error), EINVAL);
+  EXPECT_STREQ(error.message, "Unexpected COPY data after trailer");
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectTruncatedTrailer) {
+  ArrowBufferView data;
+  data.data.as_uint8 = kTestPgCopyBoolean;
+  data.size_bytes = sizeof(kTestPgCopyBoolean) - 1;
+
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamTester tester;
+  ArrowError error{};
+  ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
+  ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
+  EXPECT_STREQ(error.message, "Unexpected end of input (expected 2 bytes but found 1)");
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopyRejectPhysicalEndWithoutTrailer) {
+  ArrowBufferView data;
+  data.data.as_uint8 = kTestPgCopyBoolean;
+  data.size_bytes = sizeof(kTestPgCopyBoolean) - 2;
+
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamTester tester;
+  ArrowError error{};
+  ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
+  ASSERT_EQ(tester.ReadHeader(&data, &error), NANOARROW_OK) << error.message;
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_EQ(tester.ReadRecord(&data, &error), NANOARROW_OK) << error.message;
+  }
+  ASSERT_EQ(data.size_bytes, 0);
+  ASSERT_EQ(tester.ValidateEndOfStream(&error), EINVAL);
+  EXPECT_STREQ(error.message, "Binary COPY stream ended without a trailer");
+}
 
 TEST(PostgresCopyUtilsTest, PostgresCopyReadBoolean) {
   ArrowBufferView data;
