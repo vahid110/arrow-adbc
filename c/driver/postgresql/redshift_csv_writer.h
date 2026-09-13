@@ -34,6 +34,7 @@ enum class RedshiftCsvWriteStatus {
   kNullValue,
   kInvalidText,
   kAmbiguousNullMarker,
+  kRowTooLarge,
   kPayloadTooLarge,
 };
 
@@ -42,6 +43,8 @@ enum class RedshiftCsvWriteStatus {
 // This deliberately supports only non-null INT32, INT64, and UTF-8 string
 // values. On any error, serialized_csv is left unchanged. Empty batches are
 // rejected because the staged COPY coordinator requires a nonempty payload.
+// Each serialized row is limited to 4,000,000 bytes (conservatively below
+// Redshift COPY's 4 MB row limit), and the whole object to 8 MiB.
 RedshiftCsvWriteStatus WriteRedshiftCsv(
     const ArrowSchema* schema, const ArrowArray* array,
     const std::vector<std::string_view>& ordered_columns, std::string* serialized_csv);

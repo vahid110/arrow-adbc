@@ -31,6 +31,8 @@
 namespace adbc::driver::pgwire {
 namespace {
 
+constexpr std::size_t kRedshiftStagedCopyMaxRowBytes = 4'000'000;
+
 bool AppendBounded(std::string* output, std::string_view value) {
   if (value.size() > kRedshiftStagedCopyMaxPayloadBytes - output->size()) {
     return false;
@@ -141,6 +143,7 @@ RedshiftCsvWriteStatus WriteRedshiftCsv(
 
   std::string result;
   for (int64_t row = 0; row < array->length; ++row) {
+    const std::size_t row_start = result.size();
     if (ArrowArrayViewIsNull(view.get(), row)) {
       return RedshiftCsvWriteStatus::kNullValue;
     }
@@ -188,6 +191,9 @@ RedshiftCsvWriteStatus WriteRedshiftCsv(
     }
     if (!AppendBounded(&result, "\n")) {
       return RedshiftCsvWriteStatus::kPayloadTooLarge;
+    }
+    if (result.size() - row_start > kRedshiftStagedCopyMaxRowBytes) {
+      return RedshiftCsvWriteStatus::kRowTooLarge;
     }
   }
   *serialized_csv = std::move(result);

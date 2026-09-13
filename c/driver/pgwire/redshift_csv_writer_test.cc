@@ -179,7 +179,11 @@ TEST(RedshiftCsvWriterTest, RejectsMalformedOffsets) {
 
 TEST(RedshiftCsvWriterTest, RejectsPayloadLargerThanCoordinatorBound) {
   auto batch = MakeBatch();
-  batch.AppendRow(1, 2, std::string(kRedshiftStagedCopyMaxPayloadBytes, 'x'));
+  constexpr std::size_t kMaxRowBytes = 4'000'000;
+  batch.AppendRow(1, 2, std::string(kMaxRowBytes - 7, 'x'));
+  batch.AppendRow(1, 2, std::string(kMaxRowBytes - 7, 'x'));
+  batch.AppendRow(
+      1, 2, std::string(kRedshiftStagedCopyMaxPayloadBytes - 2 * kMaxRowBytes - 6, 'x'));
   batch.Finish();
   std::string csv = "original";
   EXPECT_EQ(Write(&batch, &csv), RedshiftCsvWriteStatus::kPayloadTooLarge);
@@ -188,12 +192,26 @@ TEST(RedshiftCsvWriterTest, RejectsPayloadLargerThanCoordinatorBound) {
 
 TEST(RedshiftCsvWriterTest, AcceptsExactlyCoordinatorPayloadBound) {
   auto batch = MakeBatch();
-  // 1,2,"..."\n adds seven bytes around this simple string.
-  batch.AppendRow(1, 2, std::string(kRedshiftStagedCopyMaxPayloadBytes - 7, 'x'));
+  constexpr std::size_t kMaxRowBytes = 4'000'000;
+  // 1,2,"..."\n adds seven bytes around each simple string.
+  batch.AppendRow(1, 2, std::string(kMaxRowBytes - 7, 'x'));
+  batch.AppendRow(1, 2, std::string(kMaxRowBytes - 7, 'x'));
+  batch.AppendRow(
+      1, 2, std::string(kRedshiftStagedCopyMaxPayloadBytes - 2 * kMaxRowBytes - 7, 'x'));
   batch.Finish();
   std::string csv;
   EXPECT_EQ(Write(&batch, &csv), RedshiftCsvWriteStatus::kSucceeded);
   EXPECT_EQ(csv.size(), kRedshiftStagedCopyMaxPayloadBytes);
+}
+
+TEST(RedshiftCsvWriterTest, RejectsSingleRowOverRedshiftCopyLimit) {
+  auto batch = MakeBatch();
+  // The complete CSV row is 4,000,001 bytes, below the 8 MiB object cap.
+  batch.AppendRow(1, 2, std::string(4'000'000 - 6, 'x'));
+  batch.Finish();
+  std::string csv = "original";
+  EXPECT_EQ(Write(&batch, &csv), RedshiftCsvWriteStatus::kRowTooLarge);
+  EXPECT_EQ(csv, "original");
 }
 
 }  // namespace

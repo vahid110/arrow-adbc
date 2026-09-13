@@ -191,12 +191,24 @@ TEST(RedshiftStagedArrowCopyTest, CsvFailuresHaveNoExternalSideEffects) {
   EXPECT_FALSE(ambiguous_result.staged_copy.has_value());
 
   ArrowBatch oversized;
-  oversized.AppendRow(1, std::string(kRedshiftStagedCopyMaxPayloadBytes, 'x'));
+  oversized.AppendRow(1, std::string(4'000'000 - 5, 'x'));
+  oversized.AppendRow(2, std::string(4'000'000 - 5, 'x'));
+  oversized.AppendRow(
+      3, std::string(kRedshiftStagedCopyMaxPayloadBytes - 2 * 4'000'000 - 4, 'x'));
   oversized.Finish();
   const auto oversized_result =
       RunRedshiftStagedArrowCopy(MakeRequest(&oversized), store, execute_copy);
   EXPECT_EQ(oversized_result.csv_status, RedshiftCsvWriteStatus::kPayloadTooLarge);
   EXPECT_FALSE(oversized_result.staged_copy.has_value());
+
+  ArrowBatch oversized_row;
+  // A 4,000,001-byte row must fail before any S3 or COPY action.
+  oversized_row.AppendRow(1, std::string(4'000'000 - 4, 'x'));
+  oversized_row.Finish();
+  const auto oversized_row_result =
+      RunRedshiftStagedArrowCopy(MakeRequest(&oversized_row), store, execute_copy);
+  EXPECT_EQ(oversized_row_result.csv_status, RedshiftCsvWriteStatus::kRowTooLarge);
+  EXPECT_FALSE(oversized_row_result.staged_copy.has_value());
   EXPECT_TRUE(store.events.empty());
   EXPECT_EQ(copy_calls, 0);
 }
