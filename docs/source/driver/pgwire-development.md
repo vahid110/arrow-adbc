@@ -164,7 +164,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
       licenses, install guide, and SHA-256 checksum; compile and load a client
       against the extracted archive before publishing it as a CI artifact.
-- [ ] Extend the same short-retention, extracted-client archive check to macOS
+- [x] Extend the same short-retention, extracted-client archive check to macOS
       Intel and Apple Silicon, with architecture-specific artifacts and runtime
       dependency instructions.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
@@ -181,8 +181,8 @@ database-backed behavior tests. Do not infer Debian support from Ubuntu alone.
 | Target | Current evidence | Release qualification still needed |
 | --- | --- | --- |
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; clean-prefix manager/client connection to live Redshift; checked, short-retention development archive | Production release artifact and compatibility guarantee |
-| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
-| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
+| macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive | Production release artifact and database-backed installed-client test |
+| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive | Production release artifact and database-backed installed-client test |
 | Windows x86-64 | C++/vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
 | Windows ARM64 | Native vcpkg Release build and installed CMake package/DLL load smoke | Release artifact and database-backed installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke | Release artifact and database-backed installed-client test |
@@ -281,6 +281,24 @@ continued production hardening and platform qualification.
 
 ## Progress log
 
+- 2026-09-13: Package workflow `34749872614` passed for Ubuntu 24.04 x86-64,
+  macOS Intel, and macOS Apple Silicon. Each job built the driver and manager,
+  verified a SHA-256 checksum, extracted the archive to a new prefix, compiled
+  an independent client against that prefix, loaded the driver, and uploaded
+  a seven-day artifact. Both macOS artifacts were downloaded separately;
+  their checksums passed and their Redshift libraries were confirmed as
+  x86-64 and arm64 Mach-O binaries respectively. No packaged macOS binary has
+  yet been connected to live Redshift, and no production release is claimed.
+- 2026-09-13: Focused driver workflow `34749295187` passed after a retry of
+  an initial Actions startup error: PostgreSQL 18 checks passed on
+  Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon. The
+  Ubuntu job also packaged and reloaded its extracted development archive.
+  All 14 live Redshift tests and the independently installed client connection
+  passed; the exact temporary runner-ingress cleanup step completed
+  successfully. The separate, smaller Release-built Ubuntu archive remains
+  the preferred evaluation artifact. The analogous macOS Intel and Apple
+  Silicon archive jobs were qualified in isolated package workflow
+  `34749872614`.
 - 2026-09-13: Isolated Ubuntu package workflow `34749412874` passed. It built
   the Redshift driver and manager, verified the archive checksum, extracted to
   a second prefix, checked package contents and pkg-config relocation, compiled
