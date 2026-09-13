@@ -306,6 +306,16 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Extended the Linux development-archive workflow to start a
+  PostgreSQL 18 service and compile a driver-manager client against the
+  extracted archive that connects through its PostgreSQL driver. This closes
+  a gap left by load-only archive smoke tests, without involving Redshift or
+  AWS. The same independent client compiled and connected through a fresh
+  local CMake installation against PostgreSQL 18; `actionlint` passed.
+  Isolated package workflow `34756083906` is pending across all seven
+  platforms, so downloaded-archive connection qualification is not yet
+  claimed. The commit used `[skip ci]` and manually dispatched only package
+  CI to avoid an unnecessary live Redshift rerun for client-test code.
 - 2026-09-13: Focused run `34755613857` passed all five PostgreSQL 18
   platform jobs and 19 live Redshift smoke tests. The new
   `ReadsExplicitlySerializedSuperAsText` case passed for a small JSON array;
