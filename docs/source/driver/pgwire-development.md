@@ -173,7 +173,7 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
       development archives; keep their qualification distinct from Ubuntu
       x86-64 and from production release support.
-- [ ] Rebase on a newer Apache baseline after checking upstream changes and
+- [x] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
       patch drift and pass local PostgreSQL plus Redshift artifact tests.
@@ -287,6 +287,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: The rebased core branch's Native Unix workflow `34749280271`
+  completed successfully, including C/C++ CMake/Meson, Go, Python, Ruby,
+  documentation, and clang-tidy jobs. With the earlier focused PostgreSQL and
+  Redshift, Java, C#, Rust, Integration, Native Windows, vcpkg, and Dev passes,
+  the Apache-main rebase checkpoint is complete. This qualifies the current
+  development baseline, not production binaries or untested Redshift features.
 - 2026-09-13: After qualifying the five-platform development-package workflow,
   removed the duplicate Ubuntu archive/upload steps from the PostgreSQL and
   live-Redshift workflow. That workflow retains its installed-client checks;
@@ -351,7 +357,7 @@ short-lived evaluation archives.
   x64 Release, and native ARM64 Release, including installed-driver checks.
   The same rebased commit passed the repository-wide Integration, C#, Rust,
   Dev/pre-commit, Native Windows, Java, and focused PostgreSQL/Redshift workflows.
-  Native Unix still has queued jobs, so its final result is not yet claimed.
+  Native Unix completed later in workflow `34749280271`.
   The AWS dashboard showed $298.08 of $300.00 Redshift trial
   credit remaining through 2026-12-11; no RPU-hour limit or alarms are
   configured, and no AWS setting was changed during this inspection.
