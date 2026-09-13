@@ -285,6 +285,17 @@ In AWS account `149112076833`, region `eu-central-1`:
   original three-ARN trust condition was restored and verified. Thus the
   current test role is intentionally not usable for `COPY`; choose and verify
   a least-privilege operational trust policy before enabling staged ingestion.
+- AWS's [Redshift confused-deputy guidance](https://docs.aws.amazon.com/redshift/latest/mgmt/cross-service-confused-deputy-prevention.html)
+  recommends both `aws:SourceAccount` and a Serverless workgroup
+  `aws:SourceArn`. Its example uses a workgroup *name* in the ARN, while the
+  [Serverless service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_redshift-serverless.html)
+  defines the workgroup ARN by *ID*. The fixture already tried both forms,
+  including its actual UUID, so this documentation difference alone does not
+  explain the failed assumption. The observed success when only `SourceArn`
+  was removed suggests the request's source ARN was absent or different, but
+  that is an inference, not a verified value. Do not widen the role again to
+  test guesses; obtain an authoritative source-context trace or AWS Support
+  guidance before changing the trust condition.
 - This fixture alone does not enable ADBC staged ingestion. An uploader needs
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
@@ -319,6 +330,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Rechecked AWS's current Redshift confused-deputy example and
+  Serverless ARN reference against the unsuccessful scoped `COPY` attempts.
+  The example's name-based workgroup ARN differs from the ID-based ARN
+  reference, but both were already tried in this fixture. Documented the
+  unresolved source-context question without changing IAM policy or
+  incurring another Redshift test window.
 - 2026-09-13: Manually dispatched focused run `34758596998` passed all five
   PostgreSQL 18 platform jobs, 19 standard live Redshift cases, and a second
   bounded cancellation case in 5.816 seconds. The connection remained usable
