@@ -131,11 +131,14 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Add optional, short-lived IAM credential preparation without changing the
       common libpq authentication path.
 - [x] Benchmark prepared-insert throughput before choosing an optimization.
-- [x] Add an opt-in, one-shot 1,000-row prepared-insert benchmark with an exact
+- [x] Add an opt-in, one-shot 1,000-row parameterized-insert benchmark with an exact
       row-count check and guaranteed test-table cleanup.
 - [x] Provision a private, short-retention S3 fixture and a namespace-attached,
       read-only Redshift IAM role for an opt-in staged `COPY` experiment.
 - [ ] Resolve the scoped IAM role-assumption failure before using staged `COPY`.
+- [ ] Add and live-test a bounded multi-row parameterized INSERT path for
+      Redshift, preserving whole-bind atomicity, as an intermediate improvement
+      that requires no AWS uploader or broader IAM trust.
 - [ ] If justified, add staged S3 `COPY` ingestion with least-privilege IAM,
       deterministic object cleanup, and a separate opt-in live test. Consider
       `UNLOAD` only after a measured read-path need.
@@ -239,10 +242,20 @@ requesting short-lived AWS credentials, opens TCP 5439 for only the current GitH
 runner `/32`, runs only the focused Redshift suite, and revokes that exact rule in
 an `always()` cleanup step. The AWS role can modify ingress on only the dedicated
 Redshift security group and its OIDC trust is pinned to this repository's immutable
-owner/repository IDs plus the development branch.
+owner/repository IDs plus the development branch. Current development is the
+bounded multi-row INSERT path described above; the account-scoped staged `COPY`
+test proved the mechanism but a production trust/uploader design is not yet
+implemented or verified.
 
 ## Progress log
 
+- 2026-09-13: Implemented a bounded 16-row parameterized INSERT path selected
+  by Redshift's backend capability; PostgreSQL retains its binary `COPY`
+  path. The driver caps each SQL statement at 32,767 parameters and preserves
+  one transaction across the entire Arrow bind. The focused live tests now
+  span a full and partial batch and put an error in the second batch to check
+  rollback. Local build and SQL-builder/profile unit tests pass; live CI and a
+  second benchmark are pending.
 - 2026-09-13: Manual benchmark CI run `34744399423` passed all PostgreSQL and
   live Redshift gates. Its one-shot prepared-insert measurement was 1,000 rows
   in 186.081 seconds (5.374 rows/second), with the exact database row count

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 namespace adbc::driver::pgwire {
@@ -46,6 +47,7 @@ struct BackendCapabilities {
   bool type_catalog_has_typarray = false;
   bool metadata_constraints = false;
   bool metadata_statistics = false;
+  uint16_t parameterized_ingest_batch_rows = 1;
 };
 
 enum class IsolationLevelPolicy {
@@ -129,7 +131,8 @@ struct BackendProfile {
          /*binary_ingest_copy=*/true,
          /*type_catalog_has_typarray=*/true,
          /*metadata_constraints=*/true,
-         /*metadata_statistics=*/true},
+         /*metadata_statistics=*/true,
+         /*parameterized_ingest_batch_rows=*/1},
         {/*isolation_levels=*/IsolationLevelPolicy::kSessionConfigurable,
          /*transactional_ddl=*/true},
         kPostgreSQLTableTypes,
@@ -152,7 +155,8 @@ struct BackendProfile {
          /*binary_ingest_copy=*/false,
          /*type_catalog_has_typarray=*/false,
          /*metadata_constraints=*/false,
-         /*metadata_statistics=*/false},
+         /*metadata_statistics=*/false,
+         /*parameterized_ingest_batch_rows=*/16},
         {/*isolation_levels=*/IsolationLevelPolicy::kDatabaseConfigured,
          /*transactional_ddl=*/false},
         kRedshiftTableTypes,

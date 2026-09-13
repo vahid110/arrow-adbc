@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       benchmark:
-        description: Run the one-shot Redshift prepared-insert benchmark
+        description: Run the one-shot Redshift parameterized-insert benchmark
         required: false
         type: boolean
         default: false
@@ -284,7 +284,7 @@ jobs:
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftSmokeTest.*'
 
-      - name: Benchmark prepared inserts (manual runs only)
+      - name: Benchmark parameterized inserts (manual runs only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
         env:
           ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}

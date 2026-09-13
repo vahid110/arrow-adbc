@@ -18,6 +18,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <string>
@@ -37,6 +38,23 @@ namespace adbcpq {
 
 /// The flag indicating to PostgreSQL that we want binary-format values.
 constexpr int kPgBinaryFormat = 1;
+
+// table and fields must be SQL identifiers escaped by CreateBulkTable().
+inline std::string BuildParameterizedInsertQuery(const std::string& table,
+                                                  const std::string& fields,
+                                                  size_t columns, size_t rows) {
+  std::string query = "INSERT INTO " + table + " (" + fields + ") VALUES ";
+  for (size_t row = 0; row < rows; row++) {
+    if (row > 0) query += ", ";
+    query += "(";
+    for (size_t col = 0; col < columns; col++) {
+      if (col > 0) query += ", ";
+      query += "$" + std::to_string(row * columns + col + 1);
+    }
+    query += ")";
+  }
+  return query;
+}
 
 /// Helper to manage bind parameters with a prepared statement
 struct BindStream {
@@ -370,14 +388,101 @@ struct BindStream {
     return Status::Ok();
   }
 
-  Status ExecutePreparedRows(PGconn* pg_conn, const std::string& query,
-                             const PostgresTypeResolver& type_resolver,
-                             bool connection_autocommit, int64_t* rows_affected) {
-    if (rows_affected) *rows_affected = 0;
+  Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,
+                                const std::string& fields, size_t max_rows,
+                                int64_t* executed_rows) {
+    *executed_rows = 0;
+    param_buffer->size_bytes = 0;
+    std::vector<Oid> batch_types;
+    std::vector<const char*> batch_values;
+    std::vector<int> batch_lengths;
+    std::vector<int> batch_formats;
+    std::vector<int64_t> batch_offsets;
+    std::vector<bool> batch_nulls;
+    const size_t columns = static_cast<size_t>(bind_schema->n_children);
+    const size_t capacity = max_rows * columns;
+    batch_types.reserve(capacity);
+    batch_lengths.reserve(capacity);
+    batch_formats.reserve(capacity);
+    batch_offsets.reserve(capacity);
+    batch_nulls.reserve(capacity);
 
-    // PQexecPrepared executes one row at a time. Preserve statement-level
-    // atomicity in autocommit mode by wrapping the whole Arrow stream in one
-    // transaction; when autocommit is disabled, the caller owns the transaction.
+    for (size_t row = 0; row < max_rows; row++) {
+      UNWRAP_STATUS(EnsureNextRow());
+      if (current->release == nullptr) break;
+
+      for (size_t col = 0; col < columns; col++) {
+        const bool is_null = ArrowArrayViewIsNull(array_view->children[col], current_row);
+        if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null) {
+          return Status::InvalidArgument("Parameter $", row * columns + col + 1,
+                                         " has null type but contains a non-null value");
+        }
+
+        const int64_t start = param_buffer->size_bytes;
+        if (is_null) {
+          UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
+        } else {
+          UNWRAP_NANOARROW(
+              na_error, Internal,
+              bind_field_writers[col]->Write(&param_buffer.value, current_row,
+                                             &na_error));
+        }
+        const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
+        if (length > (std::numeric_limits<int>::max)()) {
+          return Status::Internal("Parameter ", row * columns + col + 1,
+                                  " serialized to >2GB of binary");
+        }
+        batch_types.push_back(param_types[col]);
+        batch_lengths.push_back(static_cast<int>(length));
+        batch_formats.push_back(param_formats[col]);
+        batch_offsets.push_back(start + sizeof(int32_t));
+        batch_nulls.push_back(is_null);
+      }
+      ++*executed_rows;
+    }
+
+    if (*executed_rows == 0) return Status::Ok();
+    batch_values.reserve(batch_offsets.size());
+    for (size_t i = 0; i < batch_offsets.size(); i++) {
+      batch_values.push_back(batch_nulls[i]
+                                 ? nullptr
+                                 : reinterpret_cast<const char*>(param_buffer->data) +
+                                       batch_offsets[i]);
+    }
+
+    const std::string query = BuildParameterizedInsertQuery(
+        table, fields, columns, static_cast<size_t>(*executed_rows));
+    adbc::driver::pgwire::UniqueResult result(
+        PQexecParams(pg_conn, query.c_str(), static_cast<int>(batch_values.size()),
+                     batch_types.data(), batch_values.data(), batch_lengths.data(),
+                     batch_formats.data(), kPgBinaryFormat));
+    const ExecStatusType pg_status = PQresultStatus(result.get());
+    if (pg_status != PGRES_COMMAND_OK) {
+      return MakeStatus(result.get(),
+                        "[libpq] Failed to execute parameterized ingest batch: {} {}",
+                        PQresStatus(pg_status), PQerrorMessage(pg_conn));
+    }
+    return Status::Ok();
+  }
+
+  Status ExecutePreparedRows(PGconn* pg_conn, const std::string& table,
+                             const std::string& fields,
+                             const PostgresTypeResolver& type_resolver,
+                             bool connection_autocommit, size_t max_batch_rows,
+                             int64_t* rows_affected) {
+    if (rows_affected) *rows_affected = 0;
+    const size_t columns = static_cast<size_t>(bind_schema->n_children);
+    constexpr size_t kMaxParameters = 32767;
+    if (columns == 0 || columns > kMaxParameters || max_batch_rows == 0) {
+      return Status::InvalidArgument("Invalid parameterized ingest dimensions");
+    }
+    max_batch_rows = std::min(max_batch_rows, kMaxParameters / columns);
+    const std::string one_row_query =
+        BuildParameterizedInsertQuery(table, fields, columns, 1);
+
+    // Both the single-row prepared path and the multi-row parameterized path
+    // must preserve statement-level atomicity across the whole Arrow stream.
+    // In autocommit mode we own this transaction; otherwise the caller does.
     if (connection_autocommit) {
       PqResultHelper begin(pg_conn, "BEGIN");
       UNWRAP_STATUS(begin.Execute());
@@ -394,16 +499,26 @@ struct BindStream {
     // The transaction is already open in autocommit mode, so timezone cleanup
     // must not independently commit it.
     Status execution_status = SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false);
-    if (execution_status.ok()) execution_status = Prepare(pg_conn, query);
+    if (execution_status.ok() && max_batch_rows == 1) {
+      execution_status = Prepare(pg_conn, one_row_query);
+    }
     while (true) {
       if (!execution_status.ok()) break;
-      execution_status = EnsureNextRow();
-      if (!execution_status.ok() || current->release == nullptr) break;
+      if (max_batch_rows == 1) {
+        execution_status = EnsureNextRow();
+        if (!execution_status.ok() || current->release == nullptr) break;
 
-      adbc::driver::pgwire::UniqueResult result;
-      execution_status = BindAndExecuteCurrentRow(pg_conn, &result, kPgBinaryFormat);
-      if (!execution_status.ok()) break;
-      if (rows_affected) (*rows_affected)++;
+        adbc::driver::pgwire::UniqueResult result;
+        execution_status = BindAndExecuteCurrentRow(pg_conn, &result, kPgBinaryFormat);
+        if (!execution_status.ok()) break;
+        if (rows_affected) (*rows_affected)++;
+      } else {
+        int64_t executed_rows = 0;
+        execution_status = BindAndExecuteNextBatch(
+            pg_conn, table, fields, max_batch_rows, &executed_rows);
+        if (!execution_status.ok() || executed_rows == 0) break;
+        if (rows_affected) *rows_affected += executed_rows;
+      }
     }
 
     Status cleanup_status = Cleanup(pg_conn);
