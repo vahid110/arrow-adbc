@@ -188,9 +188,7 @@ class PqResultHelper {
              curr_row_ == other.curr_row_;
     }
     bool operator!=(iterator other) const { return !(*this == other); }
-    PqResultRow operator*() const {
-      return PqResultRow(outer_.result_.get(), curr_row_);
-    }
+    PqResultRow operator*() const { return PqResultRow(outer_.result_.get(), curr_row_); }
     using iterator_category = std::forward_iterator_tag;
     using difference_type = std::ptrdiff_t;
     using value_type = std::vector<PqResultRow>;
