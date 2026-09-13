@@ -34,7 +34,7 @@ class MetadataQuerySet {
   std::string Schemas(bool filtered) const;
   std::string Tables(bool filtered) const;
   std::string Columns(bool filtered) const;
-  std::string Constraints(bool filtered) const;
+  std::string Constraints() const;
   std::string TableSchema() const;
 
   bool LoadsConstraints() const {

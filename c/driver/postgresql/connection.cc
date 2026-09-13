@@ -79,8 +79,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
         some_tables_(conn, queries_.Tables(true)),
         all_columns_(conn, queries_.Columns(false)),
         some_columns_(conn, queries_.Columns(true)),
-        all_constraints_(conn, queries_.Constraints(false)),
-        some_constraints_(conn, queries_.Constraints(true)) {}
+        all_constraints_(conn, queries_.Constraints()) {}
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -177,15 +176,9 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
     }
 
     if (queries_.LoadsConstraints()) {
-      if (column_filter.has_value()) {
-        UNWRAP_STATUS(some_constraints_.Execute(
-            {std::string(schema), std::string(table), std::string(*column_filter)}))
-        next_constraint_ = some_constraints_.Row(-1);
-      } else {
-        UNWRAP_STATUS(
-            all_constraints_.Execute({std::string(schema), std::string(table)}));
-        next_constraint_ = all_constraints_.Row(-1);
-      }
+      UNWRAP_STATUS(
+          all_constraints_.Execute({std::string(schema), std::string(table)}));
+      next_constraint_ = all_constraints_.Row(-1);
     }
 
     return Status::Ok();
@@ -269,7 +262,6 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
   PqResultHelper all_columns_;
   PqResultHelper some_columns_;
   PqResultHelper all_constraints_;
-  PqResultHelper some_constraints_;
 
   // Iterator state for the catalogs/schema/table/column queries
   PqResultRow next_catalog_;

@@ -571,6 +571,67 @@ TEST_F(PostgresConnectionTest, GetObjectsGetAllFindsPrimaryKey) {
   ASSERT_EQ(constraint_column_name, "id");
 }
 
+TEST_F(PostgresConnectionTest, GetObjectsColumnFilterPreservesPrimaryKey) {
+  ASSERT_THAT(AdbcConnectionNew(&connection, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionInit(&connection, &database, &error), IsOkStatus(&error));
+
+  constexpr const char* kTableName = "adbc_column_filter_constraint_test";
+  ASSERT_THAT(quirks()->DropTable(&connection, kTableName, &error),
+              IsOkStatus(&error));
+
+  struct AdbcStatement statement;
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  {
+    ASSERT_THAT(AdbcStatementSetSqlQuery(
+                    &statement,
+                    "CREATE TABLE adbc_column_filter_constraint_test "
+                    "(id INT PRIMARY KEY, data TEXT)",
+                    &error),
+                IsOkStatus(&error));
+    adbc_validation::StreamReader create_reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &create_reader.stream.value,
+                                          &create_reader.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(create_reader.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(create_reader.Next());
+    ASSERT_EQ(create_reader.array->release, nullptr);
+  }
+  ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcConnectionGetObjects(&connection, ADBC_OBJECT_DEPTH_ALL, nullptr,
+                                       "public", kTableName, nullptr, "data",
+                                       &reader.stream.value, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+
+  auto get_objects_data = adbc_validation::GetObjectsReader{&reader.array_view.value};
+  ASSERT_NE(*get_objects_data, nullptr);
+
+  struct AdbcGetObjectsTable* table = InternalAdbcGetObjectsDataGetTableByName(
+      *get_objects_data, "postgres", "public", kTableName);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->n_table_columns, 1);
+  EXPECT_NE(InternalAdbcGetObjectsDataGetColumnByName(
+                *get_objects_data, "postgres", "public", kTableName, "data"),
+            nullptr);
+  EXPECT_EQ(InternalAdbcGetObjectsDataGetColumnByName(
+                *get_objects_data, "postgres", "public", kTableName, "id"),
+            nullptr);
+
+  ASSERT_EQ(table->n_table_constraints, 1);
+  struct AdbcGetObjectsConstraint* constraint =
+      InternalAdbcGetObjectsDataGetConstraintByName(
+          *get_objects_data, "postgres", "public", kTableName,
+          "adbc_column_filter_constraint_test_pkey");
+  ASSERT_NE(constraint, nullptr);
+  ASSERT_EQ(constraint->n_column_names, 1);
+  EXPECT_EQ(std::string(constraint->constraint_column_names[0].data,
+                        constraint->constraint_column_names[0].size_bytes),
+            "id");
+}
+
 TEST_F(PostgresConnectionTest, GetObjectsGetAllFindsForeignKey) {
   ASSERT_THAT(AdbcConnectionNew(&connection, &error), IsOkStatus(&error));
   ASSERT_THAT(AdbcConnectionInit(&connection, &database, &error), IsOkStatus(&error));
