@@ -57,7 +57,7 @@ TEST(RedshiftStagedCopyTest, RejectsInvalidIdentifiers) {
   const std::string with_nul("a\0b", 3);
   for (std::string_view bad :
        {std::string_view(), std::string_view(with_nul), std::string_view("tab\nle"),
-        std::string_view("tab\\le"), std::string_view("caf\xc3\xa9")}) {
+        std::string_view("tab\\le"), std::string_view("\xc3\xa9")}) {
     EXPECT_FALSE(
         PrepareRedshiftStagedCopy("public", bad, kDataUrl, kManifestUrl, kRoleArn));
     EXPECT_FALSE(

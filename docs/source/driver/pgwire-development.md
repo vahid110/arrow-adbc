@@ -367,6 +367,14 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Strengthened the independent installed-client smoke test to
+  execute `SELECT CAST(42 AS BIGINT)` and check one non-null Arrow int64 value,
+  stream exhaustion, and resource cleanup. A local PostgreSQL 17 connection
+  passed; the Redshift driver's PostgreSQL rejection and load-only paths still
+  passed. Fixed a Windows `min`/`max` macro collision in the numeric-boundary
+  test and a codespell false positive in the staged-`COPY` test fixture.
+  Local builds, focused tests, pinned formatting, and codespell passed;
+  cross-platform CI is pending for this checkpoint.
 - 2026-09-13: CI run `34762177471` passed all five PostgreSQL 18 targets and
   the focused live Redshift job; its temporary ingress cleanup succeeded.
   Development-package run `34762177517` passed all seven Linux, macOS, and

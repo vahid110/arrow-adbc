@@ -278,13 +278,13 @@ TEST_F(RedshiftSmokeTest, PreservesNumericBoundaries) {
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_EQ(reader.array->length, 1);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0),
-            std::numeric_limits<int32_t>::min());
+            (std::numeric_limits<int32_t>::min)());
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[1], 0),
-            std::numeric_limits<int32_t>::max());
+            (std::numeric_limits<int32_t>::max)());
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[2], 0),
-            std::numeric_limits<int64_t>::min());
+            (std::numeric_limits<int64_t>::min)());
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0),
-            std::numeric_limits<int64_t>::max());
+            (std::numeric_limits<int64_t>::max)());
   const ArrowStringView positive =
       ArrowArrayViewGetStringUnsafe(reader.array_view->children[4], 0);
   const ArrowStringView negative =
