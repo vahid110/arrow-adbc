@@ -206,6 +206,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       `upstream/main`: reject unsupported critical format flags while accepting
       advisory flags and bounded extensions. This is a fork branch, not an
       Apache PR.
+- [x] Publish an eleventh PostgreSQL binary-COPY field-framing fix stacked on
+      the isolated field-bounds branch: constrain tuple, record, and array
+      children to their declared byte ranges, including exact consumption.
+      This is a fork branch, not an Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -462,7 +466,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Ten
+the CSV buffer; none is selected by the active driver ingest path. Eleven
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -479,6 +483,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Bounded each binary-COPY tuple, nested-record, and array child
+  decoder to its own declared field view and reject successful decodes that
+  leave bytes unconsumed. Five new regressions cover cross-field array,
+  record, and numeric reads, surplus numeric bytes, and cursor preservation
+  on `EOVERFLOW`. The development reader suite passes 41/41 both normally and
+  under ASan/UBSan. Published the generic fix on
+  [`feature/upstream-pg-copy-framing`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-framing),
+  stacked on the isolated bounds branch; its source build and all 34 offline
+  reader tests pass. Fatal malformed-field errors may still leave a partial
+  Arrow builder, and this does not validate the COPY trailer or redesign
+  whole-row overflow retry. The broader fork CI remains pending; no AWS run
+  or Apache PR was used.
 - 2026-09-14: The prior COPY-bounds head passed the
   [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34786999583)
   and [seven-platform development archive and checksum matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34787001908)
