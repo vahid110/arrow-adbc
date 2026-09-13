@@ -31,10 +31,30 @@ permissions:
   contents: read
 
 jobs:
-  ubuntu-x86-64:
-    name: Ubuntu 24.04 x86-64 development archive
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+  linux:
+    name: Linux ${{ matrix.platform }} development archive
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu24-x86_64
+            arch: x86_64
+            runner: ubuntu-latest
+            image: ubuntu:24.04
+          - platform: debian12-x86_64
+            arch: x86_64
+            runner: ubuntu-latest
+            image: debian:bookworm
+          - platform: ubuntu24-arm64
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: ubuntu:24.04
+    env:
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      PACKAGE_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,8 +62,9 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          apt-get update -o Acquire::Retries=3
+          apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
 
       - name: Build and install drivers and manager
         run: |
@@ -62,7 +83,7 @@ jobs:
           cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
           cp c/driver/pgwire/DEVELOPMENT_PACKAGE.md \
             "$RUNNER_TEMP/pgwire-prefix/README.md"
-          archive="adbc-redshift-dev-ubuntu24-x86_64-${GITHUB_SHA}.tar.gz"
+          archive="adbc-redshift-dev-${PACKAGE_PLATFORM}-${GITHUB_SHA}.tar.gz"
           tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/$archive" .
           (cd "$RUNNER_TEMP" && sha256sum "$archive" > "$archive.sha256")
           (cd "$RUNNER_TEMP" && sha256sum -c "$archive.sha256")
@@ -91,12 +112,12 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: adbc-redshift-dev-ubuntu24-x86_64
+          name: adbc-redshift-dev-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz
-            ${{ runner.temp }}/adbc-redshift-dev-ubuntu24-x86_64-*.tar.gz.sha256
+            ${{ runner.temp }}/adbc-redshift-dev-${{ matrix.platform }}-*.tar.gz
+            ${{ runner.temp }}/adbc-redshift-dev-${{ matrix.platform }}-*.tar.gz.sha256
 
   macos:
     name: macOS ${{ matrix.arch }} development archive
