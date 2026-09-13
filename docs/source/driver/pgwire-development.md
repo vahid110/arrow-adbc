@@ -318,6 +318,21 @@ In AWS account `149112076833`, region `eu-central-1`:
   separate, short-lived write permissions, and any opt-in driver path needs
   strict option validation, safe SQL construction, and deterministic cleanup.
 
+The next gated AWS checkpoint is a *manual*, two-row non-root test, not an
+automatic push job. Reuse the branch-scoped GitHub OIDC role `adbc-redshift-ci`
+as the test identity rather than creating a long-lived key. Before changing the
+COPY role's trust, grant only workgroup-scoped Serverless credential access to
+that identity and verify its actual `IAMR:` database username. Then evaluate
+an exact database-user `sts:ExternalId` alongside `aws:SourceAccount` and the
+two Redshift service principals; keep the COPY role's S3 access read-only.
+Restrict the uploader identity to `PutObject`/`DeleteObject` for
+`staging/ci/*`. Use unique run-specific data and manifest keys, require
+`mandatory: true`, verify exactly two rows, and delete both exact objects in
+failure-safe cleanup. The one-day lifecycle remains a backstop, not the normal
+cleanup path. An isolated non-canceling CI concurrency group is needed so a
+push cannot interrupt cleanup. No permanent IAM change or new CI path has been
+made for this checkpoint; qualify the policy and database privileges first.
+
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
 `34744399423` inserted and verified 1,000 rows in 186.081 seconds, or 5.374
@@ -352,6 +367,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: CI run `34762177471` passed all five PostgreSQL 18 targets and
+  the focused live Redshift job; its temporary ingress cleanup succeeded.
+  Development-package run `34762177517` passed all seven Linux, macOS, and
+  Windows archive targets. An earlier Linux test build exposed that the new
+  private helper was not exported from the shared driver; the test now compiles
+  the helper separately without expanding the driver's public ABI.
 - 2026-09-13: Added a Redshift-private staged-`COPY` preparation helper that
   validates generated-object S3 URLs, a single IAM role ARN, and separate
   schema/table identifiers. It produces a one-object `mandatory: true`
