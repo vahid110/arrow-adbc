@@ -390,13 +390,41 @@ TEST_F(RedshiftSmokeTest, ReportsOnlySupportedTableTypes) {
 }
 
 TEST_F(RedshiftSmokeTest, CommitsAndRollsBackExplicitTransactions) {
+  ExecuteSql(&connection_, "DROP TABLE IF EXISTS adbc_redshift_mvp_transactions",
+             &error_);
+  ExecuteSql(&connection_, "CREATE TABLE adbc_redshift_mvp_transactions (id INTEGER)",
+             &error_);
+
   ASSERT_THAT(AdbcConnectionSetOption(&connection_, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
                                       ADBC_OPTION_VALUE_DISABLED, &error_),
               IsOkStatus(&error_));
-  ExecuteSql(&connection_, "SELECT 1", &error_);
+  ExecuteSql(&connection_, "INSERT INTO adbc_redshift_mvp_transactions VALUES (1)",
+             &error_);
   ASSERT_THAT(AdbcConnectionCommit(&connection_, &error_), IsOkStatus(&error_));
-  ExecuteSql(&connection_, "SELECT 1", &error_);
+  ExecuteSql(&connection_, "INSERT INTO adbc_redshift_mvp_transactions VALUES (2)",
+             &error_);
   ASSERT_THAT(AdbcConnectionRollback(&connection_, &error_), IsOkStatus(&error_));
+
+  ASSERT_THAT(AdbcConnectionSetOption(&connection_, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_ENABLED, &error_),
+              IsOkStatus(&error_));
+  struct AdbcStatement query = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &query, "SELECT COUNT(*) FROM adbc_redshift_mvp_transactions", &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_EQ(reader.array->length, 1);
+  EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0), 1);
+  EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
+
+  ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_transactions", &error_);
 }
 
 TEST_F(RedshiftSmokeTest, RejectsSessionIsolationOverrides) {
