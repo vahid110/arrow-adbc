@@ -77,6 +77,7 @@ add_arrow_lib(adbc_driver_redshift
               SOURCES
               ${PGWIRE_DRIVER_SOURCES}
               redshift_staged_copy.cc
+              redshift_staged_copy_coordinator.cc
               OUTPUTS
               ADBC_REDSHIFT_LIBRARIES
               CMAKE_PACKAGE_NAME
@@ -128,7 +129,9 @@ if(ADBC_BUILD_TESTS)
                 SOURCES
                 ../pgwire/redshift_driver_test.cc
                 ../pgwire/redshift_staged_copy_test.cc
+                ../pgwire/redshift_staged_copy_coordinator_test.cc
                 redshift_staged_copy.cc
+                redshift_staged_copy_coordinator.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common
                 ${REDSHIFT_TEST_LINK_LIBS})
