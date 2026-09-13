@@ -120,8 +120,11 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 
 ### 2. Correctness and compatibility
 
-- [ ] Expand focused live Redshift tests for NULL values, errors, cancellation,
-      larger results, and type/metadata edge cases.
+- [x] Expand focused live Redshift tests for NULL values, query errors and
+      recovery, larger results, parameter schemas, and quoted/empty/UTF-8
+      text plus binary edge values.
+- [ ] Expand type and metadata edge coverage for quoted identifiers, numeric
+      boundaries, and other behavior verified against the live Redshift engine.
 - [ ] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -294,20 +297,28 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Delayed focused run `34752544871` completed successfully: all
+  five PostgreSQL 18 platform jobs passed, followed by 16 live Redshift tests.
+  `PreservesTextAndBinaryEdges` and `DiscoversParameterSchema` both passed;
+  the independently installed client connected, and the exact temporary
+  runner ingress was revoked successfully. The fourth PostgreSQL-only
+  Apache-facing branch also passed Dev, Integration, Rust, Native Unix,
+  Native Windows, and native vcpkg fork workflows. Cancellation and further
+  metadata/type edges remain separate, unqualified work.
 - 2026-09-13: Focused run `34752544871` passed its Ubuntu x86-64, Ubuntu
   ARM64, and Debian PostgreSQL 18 jobs. Both macOS jobs remained queued, so
   the dependency-gated live Redshift job had not started. GitHub's
   [status page](https://www.githubstatus.com/) reported degraded Actions
   performance beginning 09:25 UTC; this may explain the runner delay but is
-  not evidence that the new live cases passed. Keep the current 14-test
-  Redshift qualification as the last completed live result until this run
-  finishes.
+  not evidence that the new live cases passed. At that point, the prior
+  14-test Redshift result was the last completed live qualification; the
+  successful completion is recorded above.
 - 2026-09-13: Added live Redshift test cases for parameter-schema discovery
   and quoted/empty/UTF-8 text plus zero/high-byte binary values in
   `3690c591c`. The pinned formatter, local C++ build, both PostgreSQL suites
   against PostgreSQL 18, and Redshift test binary's non-live checks pass.
-  Focused multi-platform and live Redshift CI run `34752544871` is pending;
-  do not count these new cases as qualified until it passes. The package
+  Focused multi-platform and live Redshift CI run `34752544871` was pending
+  at this checkpoint and later passed, as recorded above. The package
   workflow now excludes test-only and Markdown changes so the seven archives
   are not rebuilt for coverage-only edits; canceled its redundant queued run
   `34752544856` without affecting the focused database test.
@@ -324,7 +335,8 @@ short-lived evaluation archives.
   14 live Redshift tests, and installed-client live test passed. The fourth
   Apache-facing diff is limited to `statement.cc` and one PostgreSQL test;
   both PostgreSQL C++ suites and the pinned formatter passed locally. Fork CI
-  for this new branch is pending; no Apache PR has been opened.
+  for this new branch was pending at publication and later passed, as recorded
+  above; no Apache PR has been opened.
 - 2026-09-13: Isolated package workflow `34751985546` passed on all seven
   targets, including native Windows x64 and ARM64 ZIP builds, extracted-client
   DLL load checks, and the final archive/checksum download gate. Separately
