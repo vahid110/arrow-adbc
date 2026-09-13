@@ -159,6 +159,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Prepare and publish a second small Apache-ready cancellation-handle
       cleanup stacked on the first, again without Redshift code or roadmap
       changes and with both PostgreSQL C++ test suites passing locally.
+- [x] Prepare and publish a third small Apache-ready COPY-stream result-handle
+      cleanup stacked on the second, with only PostgreSQL statement code in
+      its added diff and both PostgreSQL C++ suites passing locally.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -274,13 +277,20 @@ an `always()` cleanup step. The AWS role can modify ingress on only the dedicate
 Redshift security group and its OIDC trust is pinned to this repository's immutable
 owner/repository IDs plus the development branch. The bounded multi-row INSERT
 path is live-tested, while account-scoped staged `COPY` proved the mechanism but
-still lacks a safe operational trust/uploader design. Two backend-neutral libpq
-cleanup patches are published on separate Apache-facing fork branches; a third
-is locally validated. Current work is a checked Ubuntu development archive and
-continued production hardening and platform qualification.
+still lacks a safe operational trust/uploader design. Three backend-neutral
+libpq cleanup patches are published on separate Apache-facing fork branches.
+Current work is production hardening and platform qualification through
+short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Published the third Apache-facing branch,
+  `feature/pgwire-libpq-stream-upstream`, stacked on the cancel-handle branch.
+  Its added commit `c45517428` changes only PostgreSQL statement COPY-stream
+  result ownership to RAII; both PostgreSQL C++ suites and the pinned
+  formatting check passed locally. The parent cancel-handle branch passed
+  Dev, Native Unix/Windows/vcpkg, Integration, and Rust fork workflows. The
+  third branch's own CI remains pending; no Apache PR has been opened.
 - 2026-09-13: Package workflow `34749872614` passed for Ubuntu 24.04 x86-64,
   macOS Intel, and macOS Apple Silicon. Each job built the driver and manager,
   verified a SHA-256 checksum, extracted the archive to a new prefix, compiled
