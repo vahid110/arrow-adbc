@@ -101,8 +101,8 @@ TEST(PostgresCopyUtilsTest, PostgresCopyReadBoolean) {
 }
 
 TEST(PostgresCopyUtilsTest, PostgresCopyRejectZeroLengthFixedWidthFields) {
-  for (const auto type_id : {PostgresTypeId::kBool, PostgresTypeId::kInt4,
-                             PostgresTypeId::kInterval}) {
+  for (const auto type_id :
+       {PostgresTypeId::kBool, PostgresTypeId::kInt4, PostgresTypeId::kInterval}) {
     SCOPED_TRACE(static_cast<int>(type_id));
     ArrowBufferView data;
     data.data.as_uint8 = kTestPgCopyZeroLengthField;
@@ -915,8 +915,9 @@ TEST(PostgresCopyUtilsTest, PostgresCopyRejectZeroLengthArray) {
   ArrowError error{};
   ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
   ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
-  ASSERT_STREQ(error.message,
-               "Expected array field with at least 12 bytes but found field with 0 bytes");
+  ASSERT_STREQ(
+      error.message,
+      "Expected array field with at least 12 bytes but found field with 0 bytes");
   EXPECT_EQ(data.data.as_uint8, kTestPgCopyZeroLengthField + 25);
   EXPECT_EQ(data.size_bytes, 2);
 }
@@ -974,8 +975,7 @@ TEST(PostgresCopyUtilsTest, PostgresCopyRejectNegativeArrayDimension) {
   ArrowError error{};
   ASSERT_EQ(tester.Init(input_type, &error), NANOARROW_OK) << error.message;
   ASSERT_EQ(tester.ReadAll(&data, &error), EINVAL);
-  ASSERT_STREQ(error.message,
-               "Expected non-negative array dimension size but got -1");
+  ASSERT_STREQ(error.message, "Expected non-negative array dimension size but got -1");
 }
 
 TEST(PostgresCopyUtilsTest, PostgresCopyReadInt2vector) {
