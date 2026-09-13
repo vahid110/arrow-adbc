@@ -291,6 +291,13 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: The third Apache-facing COPY-stream result-handle branch passed
+  Dev, Integration, Rust, Native Windows, native vcpkg, and Native Unix fork
+  workflows; its added diff remains limited to two PostgreSQL statement
+  files. It is ready for upstream review preparation, but no Apache PR has
+  been opened. Native Windows x64/ARM64 development ZIP qualification is now
+  running in isolated package workflow `34751390419`; release claims remain
+  pending its result and third-party-license inventory.
 - 2026-09-13: The rebased core branch's Native Unix workflow `34749280271`
   completed successfully, including C/C++ CMake/Meson, Go, Python, Ruby,
   documentation, and clang-tidy jobs. With the earlier focused PostgreSQL and
