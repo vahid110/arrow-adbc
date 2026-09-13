@@ -458,17 +458,34 @@ TEST_F(RedshiftSmokeTest, BulkIngestUsesBatchedParameterizedInsert) {
     ids.emplace_back(i);
     labels.emplace_back(std::to_string(i));
   }
-  nanoarrow::UniqueArray bind;
+  nanoarrow::UniqueArray first_batch;
+  nanoarrow::UniqueArray second_batch;
+  std::vector<std::optional<int32_t>> first_ids(ids.begin(), ids.begin() + 10);
+  std::vector<std::optional<int32_t>> second_ids(ids.begin() + 10, ids.end());
+  std::vector<std::optional<std::string>> first_labels(labels.begin(),
+                                                        labels.begin() + 10);
+  std::vector<std::optional<std::string>> second_labels(labels.begin() + 10,
+                                                         labels.end());
   ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
-                  bind_schema.get(), bind.get(), nullptr, ids, labels)),
+                  bind_schema.get(), first_batch.get(), nullptr, first_ids,
+                  first_labels)),
               adbc_validation::IsOkErrno());
+  ASSERT_THAT((adbc_validation::MakeBatch<int32_t, std::string>(
+                  bind_schema.get(), second_batch.get(), nullptr, second_ids,
+                  second_labels)),
+              adbc_validation::IsOkErrno());
+  std::vector<struct ArrowArray> batches(2);
+  ArrowArrayMove(first_batch.get(), &batches[0]);
+  ArrowArrayMove(second_batch.get(), &batches[1]);
+  nanoarrow::UniqueArrayStream bind;
+  adbc_validation::MakeStream(bind.get(), bind_schema.get(), std::move(batches));
 
   struct AdbcStatement ingest = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
   ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
                                      kTableName.data(), &error_),
               IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementBind(&ingest, bind.get(), bind_schema.get(), &error_),
+  ASSERT_THAT(AdbcStatementBindStream(&ingest, bind.get(), &error_),
               IsOkStatus(&error_));
   int64_t rows_affected = -1;
   ASSERT_THAT(AdbcStatementExecuteQuery(&ingest, nullptr, &rows_affected, &error_),
