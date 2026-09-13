@@ -464,6 +464,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-13: The fork's general `Dev` pre-commit job exposed three repository
+  hygiene failures after the new safety workflow push: four Redshift fixture
+  scripts had shebangs without executable modes, the CSV writer lacked an
+  explicit `<vector>` include, and eight existing PgWire files differed from
+  the repository-pinned clang-format 18.1.7. Fixed the first two separately
+  from a formatting-only commit. Local PostgreSQL reader tests (23/23),
+  Redshift artifact tests (39/39), and both AWS-free safety mock suites
+  (34/34) pass after the changes. A fresh general pre-commit run is pending;
+  no live Redshift test was dispatched for formatting.
 - 2026-09-13: Corrected a shared PostgreSQL-wire result conversion edge: the
   binary-encoded `TIMESTAMP`/`TIMESTAMPTZ` epoch adjustment now checks for
   overflow and reports a non-retryable range error instead of wrapping a valid
