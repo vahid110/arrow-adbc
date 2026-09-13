@@ -154,6 +154,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       trust. This does not enable staged ingestion in the driver.
 - [x] Add a Redshift-private, AWS-free exact-object staging coordinator with
       failure-path tests, without selecting it from the active ingest path.
+- [x] Add a conservative one-batch Arrow-to-CSV preparation and compose it with
+      the staging coordinator behind an AWS-free, Redshift-private seam; leave
+      active ingestion on the existing prepared-INSERT path.
 - [x] Add and live-test a bounded multi-row parameterized INSERT path for
       Redshift, preserving whole-bind atomicity, as an intermediate improvement
       that requires no AWS uploader or broader IAM trust.
@@ -266,6 +269,17 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   passed on Ubuntu and one live two-row run cleaned up its rule. A lost runner
   can still bypass all in-job cleanup, so manually audit each opt-in run;
   automatic push-triggered COPY remains gated on independent reconciliation.
+- [x] Make S3 fixture uploads conditional (`If-None-Match: *`) and cleanup
+  conditional on the ETag from a confirmed successful upload. Collision,
+  missing ETag, or a lost response leaves an unconfirmed exact key untouched
+  for independent audit; the one-day lifecycle is only a backstop. Sixteen
+  offline safety mocks passed. An ETag cannot distinguish a same-content
+  replacement, so unique per-run keys and independent audit remain necessary.
+  AWS requires `s3:GetObject` in addition to `s3:DeleteObject` for
+  ETag-matched deletion, so a fail-before-AWS runtime
+  gate now blocks live COPY until a narrowly scoped grant is reviewed and the
+  workflow deliberately sets `PGWIRE_COPY_GETOBJECT_VERIFIED=true` after
+  verification. This does not grant new IAM permission.
 - Avoid keepalive connections, polling queries, and idle open transactions so that
   Serverless can return to its non-compute-billed idle state promptly.
 - Check trial-credit and RPU usage before and after larger integration runs.
@@ -285,7 +299,11 @@ In AWS account `149112076833`, region `eu-central-1`:
   workgroup. Public access is blocked, ACLs are disabled, and default encryption
   uses SSE-S3. The `staging/` prefix expires after one day and incomplete
   multipart uploads are aborted after one day. Tests must still delete their
-  exact objects in a `finally`/cleanup path; lifecycle is a backstop.
+  exact objects in a `finally`/cleanup path; lifecycle is a backstop. A
+  read-only `GetBucketVersioning` check on 2026-09-13 returned no versioning
+  configuration. If versioning is enabled later, the future adapter must
+  capture/delete exact object versions rather than treating a delete marker
+  as byte cleanup.
 - IAM role `adbc-pgwire-ci-copy` trusts the two Redshift service principals
   required by AWS documentation, constrained to account `149112076833` and
   the known `pgwire-ci` workgroup/namespace ARN variants, including the actual
@@ -356,16 +374,17 @@ driver ingest path.
 
 The manual COPY qualification must first check the actual connected user and
 database `ASSUMEROLE` privilege. Use unique run-specific data and manifest
-keys, require `mandatory: true`, verify exactly two rows, and delete both exact
-objects in failure-safe cleanup. The one-day lifecycle remains a backstop,
-not the normal cleanup path. Isolate the non-canceling CI run from push-driven
-jobs so a push cannot interrupt cleanup. Ownership-safe recovery uses the
-regional read-only `ec2:DescribeSecurityGroupRules` grant described above. After
-each manual run, independently inspect the security group for its unique
-`adbc-pgwire-copy-<run-id>-<attempt>` rule description; a force-canceled job
-or lost runner can bypass in-job cleanup, and no ingress TTL exists. Remove
-only a verified rule ID belonging to that run if one remains. A future
-push-triggered COPY gate would need automatic independent reconciliation.
+keys, require `mandatory: true`, verify exactly two rows, and delete only
+confirmed-owned exact objects in failure-safe cleanup. The one-day lifecycle
+remains a backstop, not the normal cleanup path. Isolate the non-canceling CI
+run from push-driven jobs so a push cannot interrupt cleanup. Ownership-safe
+recovery uses the regional read-only `ec2:DescribeSecurityGroupRules` grant
+described above. After each manual run, independently inspect the security
+group for its unique `adbc-pgwire-copy-<run-id>-<attempt>` rule description;
+a force-canceled job or lost runner can bypass in-job cleanup, and no ingress
+TTL exists. Remove only a verified rule ID belonging to that run if one remains.
+A future push-triggered COPY gate would need automatic independent
+reconciliation.
 
 The optional driver ingest path remains unimplemented. Its first internal
 coordinator accepts caller-supplied serialized data, an exact mandatory manifest,
@@ -373,12 +392,20 @@ and a tiny conditional object-store interface. It never deletes a collided or
 unconfirmed object. A lost response or unsettled COPY can require independent
 owned-object reconciliation; `cleanup_complete` is reported separately from
 whether COPY succeeded. The coordinator is not selected by `ExecuteIngest`.
-Before enabling it, implement and qualify an Arrow-to-CSV serializer (including
-null versus empty string), an optional S3 adapter with short-lived credentials,
-an explicit transaction boundary, and exact cleanup. An uploader may need
-`s3:GetObject` for `HeadObject` ownership checks; no such IAM expansion or SDK
-dependency has been added. Keep automatic COPY disabled until a lost runner can
-also be reconciled independently.
+An AWS-free Redshift-private Arrow-to-CSV writer now serializes only non-null
+INT32, INT64, and validated UTF-8 strings, with an exact ordered field match
+and an 8 MiB payload cap. It rejects literal `\\N` pending a live check of
+quoted null-marker behavior. Before enabling staged ingestion, qualify null
+versus empty string and the remaining Arrow type mappings, an optional S3
+adapter with short-lived credentials, an explicit transaction boundary, and
+exact cleanup. An uploader may need `s3:GetObject` for `HeadObject` ownership
+checks; AWS also requires it for an
+ETag-matched conditional `DeleteObject`. The branch-scoped uploader role does
+not have that permission. No such IAM expansion or SDK dependency has been
+added. Do not dispatch the ETag-conditional manual fixture until a narrow
+`s3:GetObject` grant for `staging/ci/*` is explicitly approved and verified;
+keep automatic COPY disabled until a lost runner can also be reconciled
+independently.
 
 The benchmark is available through manual dispatch of the `PgWire Drivers`
 workflow with `benchmark=true`. Push-triggered CI does not run it. Run
@@ -408,24 +435,92 @@ The dedicated IAMR role trust and uploader permissions are narrowly configured
 and live-qualified by a non-root two-row `COPY` fixture, with independent
 cleanup checks. A private, offline-tested preparation helper builds a mandatory
 exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
-column list. An AWS-free staging coordinator now tests conditional creation and
-owned-object cleanup; neither is selected by the active driver ingest path.
-Five PostgreSQL-only fixes are published on separate
-Apache-facing fork branches.
+column list. An AWS-free staging coordinator tests conditional creation and
+owned-object cleanup. A conservative CSV writer covers three non-null Arrow
+types, and a one-batch adapter composes it with the coordinator while owning
+the CSV buffer; none is selected by the active driver ingest path. Five
+PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Prepared a separate, opt-in nine-row CSV semantics probe reusing
+  the exact-key staging fixture and transaction rollback. It checks quoted and
+  bare empty text, bare `\\N` NULL, comma/quote/newline escaping, and BIGINT
+  bounds, while classifying quoted `\\N` as NULL, literal, or other without
+  assuming the answer. The original two-row probe remains separate. Twenty-two
+  offline mocks pass, including the missing-permission gate on both modes;
+  no live fixture execution is allowed until the reviewed grant and deliberate
+  workflow flag are added. The workflow now isolates AWS-free selftests from the
+  PostgreSQL-only matrix after one selftest superseded an unrelated matrix.
+  Concurrent AWS-free qualification runs
+  [`34773423309`](https://github.com/vahid110/arrow-adbc/actions/runs/34773423309)
+  and [`34773423480`](https://github.com/vahid110/arrow-adbc/actions/runs/34773423480)
+  both passed independently: all 22 cleanup/CSV mocks passed on Ubuntu with
+  AWS and database jobs skipped, while the PostgreSQL/Redshift artifact matrix
+  passed Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon
+  with AWS jobs skipped. Neither canceled the other. No AWS call or IAM change
+  was made for this checkpoint.
+- 2026-09-13: Hardened the manual staged-`COPY` fixture's exact S3 keys:
+  conditional create and ETag-matched delete now prevent a collision or
+  ambiguous upload from authorizing a blind delete. Sixteen offline mocks
+  cover missing approval, collisions, lost responses, changed ETag, exact
+  ingress cleanup, and success. AWS-free selftest run
+  [`34772988617`](https://github.com/vahid110/arrow-adbc/actions/runs/34772988617)
+  passed on Ubuntu with every database and AWS job skipped. AWS
+  [requires both `s3:DeleteObject` and `s3:GetObject` for an
+  ETag-conditional delete](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-deletes.html),
+  so live fixture dispatch is deliberately gated until the CI uploader role's
+  exact `staging/ci/*` read permission is separately approved and verified.
+  No IAM change or live AWS call was made for this checkpoint.
+- 2026-09-13: Composed one Arrow record batch, the conservative CSV writer,
+  and the exact-object staging coordinator in a Redshift-private adapter. Five
+  new fake-store tests cover exact uploaded CSV/manifest/COPY SQL, rejection
+  before any external side effect, collision preservation, and a settled
+  ambiguous COPY result without retry. All 38 local Redshift tests passed in
+  CMake with warnings as errors; a fresh Meson C++17 build also passed 38/38.
+  AWS-free PostgreSQL/Redshift matrix run
+  [`34772908486`](https://github.com/vahid110/arrow-adbc/actions/runs/34772908486)
+  was superseded by the later AWS-free cleanup selftest under the workflow's
+  shared concurrency group; replacement matrix run
+  [`34773086915`](https://github.com/vahid110/arrow-adbc/actions/runs/34773086915)
+  passed Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon,
+  with AWS-backed jobs skipped. The seven-platform development-archive run
+  [`34772902589`](https://github.com/vahid110/arrow-adbc/actions/runs/34772902589)
+  also passed. The package run verified extracted archives and independent
+  clients on Ubuntu x86-64/ARM64, Debian x86-64,
+  macOS Intel/Apple Silicon, and Windows x64/ARM64, plus all seven checksums.
+  These are development archives, not production releases. This adapter
+  neither supplies an S3 implementation nor selects `ExecuteIngest`; no AWS
+  call was made for it.
+- 2026-09-13: Added a Redshift-private, AWS-free CSV writer for non-null INT32,
+  INT64, and UTF-8 string Arrow fields. It requires the COPY column list to
+  exactly match field names and order, quotes strings, escapes embedded quotes,
+  validates UTF-8 and Arrow buffers, respects slices, and caps output at the
+  coordinator's 8 MiB bound. Nulls, unsupported types, malformed text, and
+  the ambiguous literal `\\N` fail without changing the output. Eight new
+  focused tests and all 33 local Redshift tests passed with warnings as errors;
+  CMake/Meson lists were updated. AWS-free five-platform CI run
+  [`34772508677`](https://github.com/vahid110/arrow-adbc/actions/runs/34772508677)
+  passed Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon;
+  every AWS-backed job was skipped. A fresh local Meson Redshift test build
+  passed all 33 tests after explicitly linking nanoarrow in that test target.
+  Live CSV semantics, S3 integration, and driver selection remain unverified.
+  No AWS call was made for this checkpoint.
 - 2026-09-13: Added a Redshift-only, AWS-free coordinator for the already
   validated one-object `COPY` plan. It accepts bounded pre-serialized data and
   a store that conditionally creates and deletes only proven-owned exact keys;
   16 fake-store tests cover collisions, ambiguous uploads, SQL outcomes,
   exception deferral, and cleanup errors. CMake built the Redshift library and
   PostgreSQL targets, and the Redshift suite passed locally. CMake/Meson source
-  lists are aligned, but Meson execution and cross-platform CI remain pending.
-  No S3 SDK, IAM change, actual CSV serializer, or ADBC ingest selection was
-  added; no AWS call was made for this checkpoint.
+  lists are aligned; AWS-free run
+  [`34771998414`](https://github.com/vahid110/arrow-adbc/actions/runs/34771998414)
+  passed Ubuntu x86-64/ARM64, Debian x86-64, and macOS Intel/Apple Silicon,
+  with every AWS-backed job skipped. A later fresh local Meson Redshift test
+  build passed all 33 tests including this seam. At that checkpoint there was
+  no S3 SDK, IAM change, CSV serializer, or ADBC ingest selection; no AWS call
+  was made for it.
 - 2026-09-13: Published standalone fork branch
   [`feature/upstream-pg-getobjects-column-constraints`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-getobjects-column-constraints)
   from the current Apache `main` at `4d50e2e30`. Its diff is only PostgreSQL
