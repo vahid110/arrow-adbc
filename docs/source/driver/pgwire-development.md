@@ -447,7 +447,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Six
+the CSV buffer; none is selected by the active driver ingest path. Seven
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -468,12 +468,21 @@ necessary; this is not a claim of automatic orphan reconciliation.
   Arrow child array with no buffer list. It now returns `kMalformedArrow`
   without touching the caller's output instead of reaching a nanoarrow null
   dereference. The new regression and all 40 AWS-free Redshift artifact tests
-  pass locally; staged `COPY` remains disabled.
+  pass locally. The
+  [five-platform PostgreSQL 18 and Redshift artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34781875099)
+  and [seven-platform development archive/checksum run](https://github.com/vahid110/arrow-adbc/actions/runs/34781873040)
+  passed on the pushed head with all AWS-backed jobs skipped; staged `COPY`
+  remains disabled.
 - 2026-09-13: Prevented the shared PostgreSQL binary-COPY reader from silently
   flattening a multidimensional PostgreSQL array into a one-dimensional Arrow
   list. It now reports an explicit unsupported error until nested-list mapping
   exists. A valid 2-by-2 `int4[]` binary fixture proves the error; the existing
   one-dimensional array case and all 24 offline COPY reader tests pass.
+- 2026-09-13: Published that generic array-shape guard on isolated fork branch
+  [`feature/upstream-pg-array-shape`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-array-shape)
+  from `upstream/main` at `4d50e2e30`. Its one-commit diff changes only the
+  PostgreSQL COPY reader and test; an isolated source build and all 23 offline
+  reader cases pass. No Apache PR has been opened.
 - 2026-09-13: The fork's general `Dev` pre-commit job exposed three repository
   hygiene failures after the new safety workflow push: four Redshift fixture
   scripts had shebangs without executable modes, the CSV writer lacked an
