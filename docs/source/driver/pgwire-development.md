@@ -179,6 +179,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       its added diff and both PostgreSQL C++ suites passing locally.
 - [x] Publish the fourth Apache-facing PostgreSQL-only parameter-schema status
       fix after the core branch's native Windows and Redshift checks pass.
+- [x] Publish a fifth standalone Apache-facing PostgreSQL `GetObjects` fix:
+      column filtering retains table constraints, with a focused regression
+      test and no Redshift-specific code. This is a fork branch, not an Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -391,14 +394,19 @@ and live-qualified by a non-root two-row `COPY` fixture, with independent
 cleanup checks. A private, offline-tested
 preparation helper now builds a mandatory exact-object manifest and validates
 `COPY` SQL with an explicit, ordered ingest column list, but is not selected by
-the driver. Four PostgreSQL-only cleanup
-patches are published on separate
+the driver. Five PostgreSQL-only fixes are published on separate
 Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Published standalone fork branch
+  [`feature/upstream-pg-getobjects-column-constraints`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-getobjects-column-constraints)
+  from the current Apache `main` at `4d50e2e30`. Its diff is only PostgreSQL
+  connection logic and a regression test; 17 focused upstream PostgreSQL
+  GetObjects tests passed against a disposable PostgreSQL 17.11 instance.
+  No PR against Apache was opened.
 - 2026-09-13: Fixed a PostgreSQL `GetObjects` semantics bug: a column-name
   filter now affects columns, not table constraints. A new regression checks
   that the primary key on an excluded column remains in the returned table
