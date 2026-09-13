@@ -110,6 +110,14 @@ exercise this mode; live Windows-to-Redshift connectivity is still unqualified.
 | Ingest | Atomic parameterized inserts in bounded 16-row SQL batches; no Redshift S3 `COPY` or `UNLOAD` path |
 | Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and clean-prefix client connection to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 Release builds and installed DLL load checks pass through the public CMake package; checked short-retention development archives are available for all seven CI targets, but production release artifacts and other platforms' database-backed installed-client qualification remain pending |
 
+`SUPER` is not mapped natively to Arrow. For values that fit Redshift's `VARCHAR`
+limit, a query can explicitly select `JSON_SERIALIZE(super_column)` and read
+the resulting JSON text as an Arrow string. This is not a lossless general
+`SUPER` strategy: [AWS documents](https://docs.aws.amazon.com/redshift/latest/dg/JSON_SERIALIZE.html)
+that serialization errors when the JSON exceeds the system's `VARCHAR` limit,
+which is smaller than the maximum `SUPER` value. Do not use this expression as
+an implicit driver conversion for arbitrary-sized values.
+
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
 the development branch. The roadmap records what each gate proves and what it
 does not. Report unsupported behavior as an issue rather than assuming a

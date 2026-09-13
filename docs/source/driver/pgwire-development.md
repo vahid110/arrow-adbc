@@ -303,6 +303,12 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a read-only live test for explicit
+  `JSON_SERIALIZE(JSON_PARSE(...))` as Arrow text and documented why this
+  cannot be an automatic, arbitrary-size `SUPER` mapping: Redshift's
+  serialized `VARCHAR` limit is smaller than its `SUPER` value limit. The
+  pinned formatter, local C++ build, and PostgreSQL suites pass; live Redshift
+  qualification is pending. Native `SUPER` mapping remains unsupported.
 - 2026-09-13: Manual focused run `34755153065` passed all five PostgreSQL 18
   platform jobs, the 18 existing live Redshift smoke tests, and the separate
   opt-in `RedshiftCancelTest.CancelsBoundedAnalyticQuery` (5.52 seconds

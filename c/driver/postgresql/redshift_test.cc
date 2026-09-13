@@ -297,6 +297,30 @@ TEST_F(RedshiftSmokeTest, PreservesNumericBoundaries) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
+TEST_F(RedshiftSmokeTest, ReadsExplicitlySerializedSuperAsText) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement,
+                  "SELECT JSON_SERIALIZE(JSON_PARSE('[10001,10002,\"abc\"]'))", &error_),
+              IsOkStatus(&error_));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 1U);
+  EXPECT_EQ(reader.fields[0].type, NANOARROW_TYPE_STRING);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+  const ArrowStringView value =
+      ArrowArrayViewGetStringUnsafe(reader.array_view->children[0], 0);
+  EXPECT_EQ(std::string_view(value.data, value.size_bytes), "[10001,10002,\"abc\"]");
+
+  EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
+}
+
 TEST_F(RedshiftSmokeTest, DiscoversParameterSchema) {
   struct AdbcStatement statement = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
