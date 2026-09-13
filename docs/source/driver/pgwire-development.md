@@ -237,7 +237,8 @@ In AWS account `149112076833`, region `eu-central-1`:
   exact objects in a `finally`/cleanup path; lifecycle is a backstop.
 - IAM role `adbc-pgwire-ci-copy` trusts the two Redshift service principals
   required by AWS documentation, constrained to account `149112076833` and
-  the known `pgwire-ci` workgroup/namespace ARN variants. Its inline policy
+  the known `pgwire-ci` workgroup/namespace ARN variants, including the actual
+  workgroup UUID ARN shown in the console. Its inline policy
   permits `s3:ListBucket` only for `staging/*` and `s3:GetObject` only for
   `staging/*`. It has no S3 write or broad managed policy.
 - The role was attached to namespace `pgwire-ci` on 2026-09-12. A subsequent
@@ -286,13 +287,21 @@ an `always()` cleanup step. The AWS role can modify ingress on only the dedicate
 Redshift security group and its OIDC trust is pinned to this repository's immutable
 owner/repository IDs plus the development branch. The bounded multi-row INSERT
 path is live-tested, while account-scoped staged `COPY` proved the mechanism but
-still lacks a safe operational trust/uploader design. Three backend-neutral
-libpq cleanup patches are published on separate Apache-facing fork branches.
+still lacks a safe operational trust/uploader design. Four PostgreSQL-only
+cleanup patches are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: With the renewed AWS console session, confirmed the `pgwire-ci`
+  workgroup is available, its actual workgroup ARN is still covered by the
+  staged-COPY role trust condition, and the trust policy still includes both
+  service principals, `aws:SourceAccount`, and the scoped `aws:SourceArn`
+  variants. The Serverless dashboard still displayed $298.08 of $300 trial
+  credit; no compute-usage chart or query was opened for this check. The
+  apparent source-context mismatch remains unresolved, so no IAM scope was
+  broadened.
 - 2026-09-13: Published `feature/pgwire-parameter-schema-upstream` at
   `8c4797e84` on the fork after the core branch's native Windows C/C++ jobs,
   14 live Redshift tests, and installed-client live test passed. The fourth
