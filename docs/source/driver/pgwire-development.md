@@ -294,6 +294,15 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added live Redshift test cases for parameter-schema discovery
+  and quoted/empty/UTF-8 text plus zero/high-byte binary values in
+  `3690c591c`. The pinned formatter, local C++ build, both PostgreSQL suites
+  against PostgreSQL 18, and Redshift test binary's non-live checks pass.
+  Focused multi-platform and live Redshift CI run `34752544871` is pending;
+  do not count these new cases as qualified until it passes. The package
+  workflow now excludes test-only and Markdown changes so the seven archives
+  are not rebuilt for coverage-only edits; canceled its redundant queued run
+  `34752544856` without affecting the focused database test.
 - 2026-09-13: With the renewed AWS console session, confirmed the `pgwire-ci`
   workgroup is available, its actual workgroup ARN is still covered by the
   staged-COPY role trust condition, and the trust policy still includes both
