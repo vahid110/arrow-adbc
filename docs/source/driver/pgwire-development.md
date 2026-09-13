@@ -343,13 +343,22 @@ owner/repository IDs plus the development branch. The bounded multi-row INSERT
 path is live-tested, while two-row staged `COPY` probes proved the AWS mechanism
 with reduced trust conditions, including an exact database-user External ID.
 Operational trust for a dedicated non-root identity and an uploader remain
-unfinished. Four PostgreSQL-only
-cleanup patches are published on separate Apache-facing fork branches.
+unfinished. A private, offline-tested preparation helper now builds a mandatory
+exact-object manifest and validates `COPY` SQL, but is not selected by the
+driver. Four PostgreSQL-only cleanup patches are published on separate
+Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Added a Redshift-private staged-`COPY` preparation helper that
+  validates generated-object S3 URLs, a single IAM role ARN, and separate
+  schema/table identifiers. It produces a one-object `mandatory: true`
+  manifest and quoted `COPY ... MANIFEST CSV` SQL, with no uploader, execution,
+  public option, or change to the selected batched-INSERT path. Focused local
+  tests passed; live staged-ingest support remains blocked on a dedicated
+  non-root trust policy and deterministic upload/object cleanup.
 - 2026-09-13: Verified a database-user-scoped `sts:ExternalId` trust candidate
   for the two-row Redshift Serverless `COPY` fixture. The Data API batch
   returned count 2. Restored and semantically verified the original

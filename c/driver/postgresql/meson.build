@@ -40,7 +40,7 @@ adbc_postgres_driver_lib = library(
 
 adbc_redshift_driver_lib = library(
     'adbc_driver_redshift',
-    sources: pgwire_driver_sources,
+    sources: pgwire_driver_sources + ['redshift_staged_copy.cc'],
     include_directories: [include_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_framework_lib],
     dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
@@ -114,7 +114,10 @@ endforeach
 
 redshift_exc = executable(
     'adbc-driver-redshift-test',
-    sources: ['../pgwire/redshift_driver_test.cc'],
+    sources: [
+        '../pgwire/redshift_driver_test.cc',
+        '../pgwire/redshift_staged_copy_test.cc',
+    ],
     include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_redshift_driver_lib],
     dependencies: [libpq_dep, gtest_main_dep, fmt_dep],
