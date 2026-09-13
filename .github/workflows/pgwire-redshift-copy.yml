@@ -1,0 +1,61 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire Redshift COPY Credentials
+
+# First verify the branch-scoped OIDC role's actual database identity without
+# opening network ingress or using a long-lived database password.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: pgwire-redshift-copy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fixture:
+    name: Verify temporary non-root database identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_REGION: eu-central-1
+      AWS_ACCOUNT_ID: "149112076833"
+      REDSHIFT_WORKGROUP: pgwire-ci
+
+    steps:
+      - name: Configure temporary AWS credentials
+        id: aws-credentials
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Verify temporary non-root database credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          caller="$(aws sts get-caller-identity --query Arn --output text)"
+          [[ "$caller" == "arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/adbc-redshift-ci/"* ]]
+          db_user="$(aws redshift-serverless get-credentials \
+            --workgroup-name "$REDSHIFT_WORKGROUP" \
+            --duration-seconds 900 --query dbUser --output text)"
+          [[ "$db_user" == IAMR:* ]]
+          printf 'Verified temporary Redshift database user: %s\n' "$db_user"
