@@ -447,7 +447,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Five
+the CSV buffer; none is selected by the active driver ingest path. Six
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -464,6 +464,16 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-13: Hardened the private Redshift CSV writer against a malformed
+  Arrow child array with no buffer list. It now returns `kMalformedArrow`
+  without touching the caller's output instead of reaching a nanoarrow null
+  dereference. The new regression and all 40 AWS-free Redshift artifact tests
+  pass locally; staged `COPY` remains disabled.
+- 2026-09-13: Prevented the shared PostgreSQL binary-COPY reader from silently
+  flattening a multidimensional PostgreSQL array into a one-dimensional Arrow
+  list. It now reports an explicit unsupported error until nested-list mapping
+  exists. A valid 2-by-2 `int4[]` binary fixture proves the error; the existing
+  one-dimensional array case and all 24 offline COPY reader tests pass.
 - 2026-09-13: The fork's general `Dev` pre-commit job exposed three repository
   hygiene failures after the new safety workflow push: four Redshift fixture
   scripts had shebangs without executable modes, the CSV writer lacked an
@@ -473,13 +483,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
   Redshift artifact tests (39/39), and both AWS-free safety mock suites
   (34/34) pass after the changes. A docs-only push then passed the
   [repository-wide pre-commit gate](https://github.com/vahid110/arrow-adbc/actions/runs/34779120566);
-  no live Redshift test was dispatched for formatting.
+  the later unity-fix head passed it again in
+  [run 34779475982](https://github.com/vahid110/arrow-adbc/actions/runs/34779475982).
+  No live Redshift test was dispatched for formatting.
 - 2026-09-13: The broader native Unix CI exposed a CMake unity-build collision
   between three independent Redshift fixture tests sharing anonymous-namespace
   names. Only `adbc-driver-redshift-test` now opts out of unity compilation;
   production libraries remain unity-enabled. With `CMAKE_UNITY_BUILD=ON`, the
-  full local CMake build and the 39-case Redshift suite pass. A fresh native
-  CI run is pending; no AWS test was required.
+  full local CMake build and the 39-case Redshift suite pass. The fresh
+  [native Unix CI run 34779475942](https://github.com/vahid110/arrow-adbc/actions/runs/34779475942)
+  passed all 24 jobs, including CMake on Ubuntu/macOS Intel/Apple Silicon,
+  Meson on Ubuntu, clang-tidy, and downstream client checks. No AWS test was
+  required.
 - 2026-09-13: Corrected a shared PostgreSQL-wire result conversion edge: the
   binary-encoded `TIMESTAMP`/`TIMESTAMPTZ` epoch adjustment now checks for
   overflow and reports a non-retryable range error instead of wrapping a valid
