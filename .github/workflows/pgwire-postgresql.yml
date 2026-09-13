@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: false
+      postgresql_only:
+        description: Run PostgreSQL and Redshift artifact tests without AWS or live Redshift
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -59,8 +64,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
 
 concurrency:
-  group: pgwire-${{ inputs.copy_probe && !inputs.copy_fixture_selftest && 'copy-dispatch' || 'postgresql' }}-${{ github.ref }}
-  cancel-in-progress: ${{ !inputs.copy_probe || inputs.copy_fixture_selftest }}
+  group: pgwire-${{ inputs.copy_probe && !inputs.copy_fixture_selftest && !inputs.postgresql_only && 'copy-dispatch' || 'postgresql' }}-${{ github.ref }}
+  cancel-in-progress: ${{ !inputs.copy_probe || inputs.copy_fixture_selftest || inputs.postgresql_only }}
 
 permissions:
   contents: read
@@ -82,7 +87,7 @@ jobs:
 
   redshift-credential-probe:
     name: Redshift OIDC credential/COPY fixture (manual only)
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.copy_fixture_selftest && (inputs.credential_probe || inputs.copy_probe) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.copy_fixture_selftest && !inputs.postgresql_only && (inputs.credential_probe || inputs.copy_probe) }}
     permissions:
       contents: read
       id-token: write
@@ -94,7 +99,7 @@ jobs:
 
   cpp-postgresql:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.credential_probe && !inputs.copy_probe && !inputs.copy_fixture_selftest) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.copy_fixture_selftest && (inputs.postgresql_only || (!inputs.credential_probe && !inputs.copy_probe))) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -189,7 +194,7 @@ jobs:
 
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.credential_probe && !inputs.copy_probe && !inputs.copy_fixture_selftest) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.copy_fixture_selftest && (inputs.postgresql_only || (!inputs.credential_probe && !inputs.copy_probe))) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -264,6 +269,7 @@ jobs:
 
   cpp-redshift:
     name: C++ / Redshift Serverless
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.postgresql_only && !inputs.copy_fixture_selftest) }}
     needs: [cpp-postgresql, cpp-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 30

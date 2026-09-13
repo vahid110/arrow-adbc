@@ -390,7 +390,8 @@ The dedicated IAMR role trust and uploader permissions are narrowly configured
 and live-qualified by a non-root two-row `COPY` fixture, with independent
 cleanup checks. A private, offline-tested
 preparation helper now builds a mandatory exact-object manifest and validates
-`COPY` SQL, but is not selected by the driver. Four PostgreSQL-only cleanup
+`COPY` SQL with an explicit, ordered ingest column list, but is not selected by
+the driver. Four PostgreSQL-only cleanup
 patches are published on separate
 Apache-facing fork branches.
 Current work is production hardening and platform qualification through
@@ -398,6 +399,17 @@ short-lived evaluation archives.
 
 ## Progress log
 
+- 2026-09-13: Fixed a PostgreSQL `GetObjects` semantics bug: a column-name
+  filter now affects columns, not table constraints. A new regression checks
+  that the primary key on an excluded column remains in the returned table
+  metadata; ten focused integration/unit tests passed against an isolated
+  local PostgreSQL server, which was stopped and removed afterward. Separately,
+  the Redshift-private staged-`COPY` plan now requires an exact ordered column
+  list, rejecting invalid or duplicate names so a future reordered append
+  cannot silently load the wrong table fields. The focused plan tests and
+  combined C++ build passed locally. Added `postgresql_only=true` manual CI
+  dispatch to qualify both patches across the PostgreSQL matrix without AWS;
+  that CI run is pending. Neither change selects staged ingestion in the driver.
 - 2026-09-13: The approved, separate `RedshiftCiIngressInspect` IAM policy now
   grants `ec2:DescribeSecurityGroupRules` only in `eu-central-1` (the action
   requires `Resource: "*"`); IAM simulation allowed Frankfurt and denied
