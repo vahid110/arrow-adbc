@@ -17,11 +17,13 @@
   under the License.
 -->
 
-# ADBC Redshift development archive (Ubuntu 24.04 x86-64)
+# ADBC Redshift development archive (Linux)
 
 This is a short-lived CI build for evaluation, **not a production release** or
-an ABI/platform compatibility guarantee. The archive contains the installed
-ADBC Redshift and PostgreSQL driver libraries, the ADBC driver manager, public
+an ABI/platform compatibility guarantee. Choose the archive matching your
+distribution and CPU: Ubuntu 24.04 x86-64 or ARM64, or Debian Bookworm x86-64.
+The archive contains the installed ADBC Redshift and PostgreSQL driver
+libraries, the ADBC driver manager, public
 headers, CMake and pkg-config metadata, and license notices. The CI job builds
 and loads a client against the archive after extracting it to a different path.
 Only the shared-library client path is qualified; bundled static archives may
@@ -30,14 +32,15 @@ require dependencies that are not included here.
 Before extraction, verify the adjacent checksum file:
 
 ```sh
-sha256sum -c adbc-redshift-dev-ubuntu24-x86_64-<commit>.tar.gz.sha256
+sha256sum -c adbc-redshift-dev-<platform>-<commit>.tar.gz.sha256
 mkdir adbc-redshift-dev
-tar -xzf adbc-redshift-dev-ubuntu24-x86_64-<commit>.tar.gz \
+tar -xzf adbc-redshift-dev-<platform>-<commit>.tar.gz \
   -C adbc-redshift-dev
 ```
 
 The shared libraries require a compatible system `libpq` at runtime (the
-`libpq5` package on Ubuntu). Set your library search path to the extracted
+`libpq5` package on Ubuntu and Debian). Set your library search path to the
+extracted
 `lib/` directory, or install the archive contents into a normal library path.
 The bundled `.pc` files retain the build's default `/usr/local` prefix; when
 using the extracted tree in place, pass

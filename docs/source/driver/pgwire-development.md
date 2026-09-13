@@ -170,6 +170,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Extend the same short-retention, extracted-client archive check to macOS
       Intel and Apple Silicon, with architecture-specific artifacts and runtime
       dependency instructions.
+- [ ] Publish separately checked Debian Bookworm x86-64 and Ubuntu 24.04 ARM64
+      development archives; keep their qualification distinct from Ubuntu
+      x86-64 and from production release support.
 - [ ] Rebase on a newer Apache baseline after checking upstream changes and
       rerunning PostgreSQL, Redshift, and downstream compatibility suites.
 - [x] Rehearse the 67-commit driver series on the newer Apache main without
