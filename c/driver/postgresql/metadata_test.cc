@@ -45,8 +45,7 @@ TEST(MetadataQuerySetTest, CapabilitiesGuardOptionalQueries) {
 
   EXPECT_TRUE(postgresql.LoadsConstraints());
   EXPECT_FALSE(redshift.LoadsConstraints());
-  EXPECT_NE(postgresql.Constraints().find("pg_catalog.pg_constraint"),
-            std::string::npos);
+  EXPECT_NE(postgresql.Constraints().find("pg_catalog.pg_constraint"), std::string::npos);
   EXPECT_NE(redshift.TableSchema().find("pg_catalog.pg_attribute"), std::string::npos);
 }
 

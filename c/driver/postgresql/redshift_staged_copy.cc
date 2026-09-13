@@ -169,9 +169,8 @@ std::optional<RedshiftStagedCopyPlan> PrepareRedshiftStagedCopy(
   // Validation above excludes JSON and SQL escape characters from all URLs.
   plan.manifest_json =
       "{\"entries\":[{\"url\":\"" + std::string(data_s3_url) + "\",\"mandatory\":true}]}";
-  plan.copy_sql = "COPY " + *quoted_schema + "." + *quoted_table + " (" +
-                  quoted_columns + ") FROM '" +
-                  std::string(manifest_s3_url) + "' IAM_ROLE '" +
+  plan.copy_sql = "COPY " + *quoted_schema + "." + *quoted_table + " (" + quoted_columns +
+                  ") FROM '" + std::string(manifest_s3_url) + "' IAM_ROLE '" +
                   std::string(iam_role_arn) + "' MANIFEST CSV";
   return plan;
 }

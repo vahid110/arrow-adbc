@@ -576,18 +576,17 @@ TEST_F(PostgresConnectionTest, GetObjectsColumnFilterPreservesPrimaryKey) {
   ASSERT_THAT(AdbcConnectionInit(&connection, &database, &error), IsOkStatus(&error));
 
   constexpr const char* kTableName = "adbc_column_filter_constraint_test";
-  ASSERT_THAT(quirks()->DropTable(&connection, kTableName, &error),
-              IsOkStatus(&error));
+  ASSERT_THAT(quirks()->DropTable(&connection, kTableName, &error), IsOkStatus(&error));
 
   struct AdbcStatement statement;
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   {
-    ASSERT_THAT(AdbcStatementSetSqlQuery(
-                    &statement,
-                    "CREATE TABLE adbc_column_filter_constraint_test "
-                    "(id INT PRIMARY KEY, data TEXT)",
-                    &error),
-                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(&statement,
+                                 "CREATE TABLE adbc_column_filter_constraint_test "
+                                 "(id INT PRIMARY KEY, data TEXT)",
+                                 &error),
+        IsOkStatus(&error));
     adbc_validation::StreamReader create_reader;
     ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &create_reader.stream.value,
                                           &create_reader.rows_affected, &error),
@@ -599,10 +598,10 @@ TEST_F(PostgresConnectionTest, GetObjectsColumnFilterPreservesPrimaryKey) {
   ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
 
   adbc_validation::StreamReader reader;
-  ASSERT_THAT(AdbcConnectionGetObjects(&connection, ADBC_OBJECT_DEPTH_ALL, nullptr,
-                                       "public", kTableName, nullptr, "data",
-                                       &reader.stream.value, &error),
-              IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcConnectionGetObjects(&connection, ADBC_OBJECT_DEPTH_ALL, nullptr, "public",
+                               kTableName, nullptr, "data", &reader.stream.value, &error),
+      IsOkStatus(&error));
   ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
   ASSERT_NO_FATAL_FAILURE(reader.Next());
 
@@ -613,11 +612,11 @@ TEST_F(PostgresConnectionTest, GetObjectsColumnFilterPreservesPrimaryKey) {
       *get_objects_data, "postgres", "public", kTableName);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->n_table_columns, 1);
-  EXPECT_NE(InternalAdbcGetObjectsDataGetColumnByName(
-                *get_objects_data, "postgres", "public", kTableName, "data"),
+  EXPECT_NE(InternalAdbcGetObjectsDataGetColumnByName(*get_objects_data, "postgres",
+                                                      "public", kTableName, "data"),
             nullptr);
-  EXPECT_EQ(InternalAdbcGetObjectsDataGetColumnByName(
-                *get_objects_data, "postgres", "public", kTableName, "id"),
+  EXPECT_EQ(InternalAdbcGetObjectsDataGetColumnByName(*get_objects_data, "postgres",
+                                                      "public", kTableName, "id"),
             nullptr);
 
   ASSERT_EQ(table->n_table_constraints, 1);

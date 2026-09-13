@@ -28,8 +28,8 @@ namespace {
 bool IsOwnershipToken(std::string_view token) {
   if (token.empty() || token.size() > 64) return false;
   for (char c : token) {
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-          (c >= '0' && c <= '9') || c == '-' || c == '_')) {
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+          c == '-' || c == '_')) {
       return false;
     }
   }
@@ -105,9 +105,9 @@ RedshiftStagedCopyRunResult RunRedshiftStagedCopy(
     cleanup();
     return {data_result == RedshiftStagedPutResult::kCollision
                 ? RedshiftStagedCopyRunStatus::kUploadCollision
-                : data_result == RedshiftStagedPutResult::kFailed
-                      ? RedshiftStagedCopyRunStatus::kUploadFailed
-                      : RedshiftStagedCopyRunStatus::kUploadUnknown,
+            : data_result == RedshiftStagedPutResult::kFailed
+                ? RedshiftStagedCopyRunStatus::kUploadFailed
+                : RedshiftStagedCopyRunStatus::kUploadUnknown,
             cleanup_complete, false};
   }
   data_owned = true;
@@ -121,9 +121,9 @@ RedshiftStagedCopyRunResult RunRedshiftStagedCopy(
     cleanup();
     return {manifest_result == RedshiftStagedPutResult::kCollision
                 ? RedshiftStagedCopyRunStatus::kUploadCollision
-                : manifest_result == RedshiftStagedPutResult::kFailed
-                      ? RedshiftStagedCopyRunStatus::kUploadFailed
-                      : RedshiftStagedCopyRunStatus::kUploadUnknown,
+            : manifest_result == RedshiftStagedPutResult::kFailed
+                ? RedshiftStagedCopyRunStatus::kUploadFailed
+                : RedshiftStagedCopyRunStatus::kUploadUnknown,
             cleanup_complete, false};
   }
   manifest_owned = true;

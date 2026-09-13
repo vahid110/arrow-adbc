@@ -176,8 +176,7 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
     }
 
     if (queries_.LoadsConstraints()) {
-      UNWRAP_STATUS(
-          all_constraints_.Execute({std::string(schema), std::string(table)}));
+      UNWRAP_STATUS(all_constraints_.Execute({std::string(schema), std::string(table)}));
       next_constraint_ = all_constraints_.Row(-1);
     }
 

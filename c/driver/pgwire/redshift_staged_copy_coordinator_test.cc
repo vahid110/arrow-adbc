@@ -54,7 +54,7 @@ class FakeObjectStore : public RedshiftStagedObjectStore {
   };
 
   RedshiftStagedPutResult PutIfAbsent(std::string_view uri, std::string_view bytes,
-                                     std::string_view token) noexcept override {
+                                      std::string_view token) noexcept override {
     const std::string key(uri);
     events.push_back(key == kDataUrl ? "put:data" : "put:manifest");
     const auto configured = put_results.find(key);
@@ -151,26 +151,25 @@ TEST(RedshiftStagedCopyCoordinatorTest, ValidatesBeforeAnyExternalAction) {
 TEST(RedshiftStagedCopyCoordinatorTest, RunsManifestCopyAndExactReverseCleanup) {
   FakeObjectStore store;
   std::string copy_sql;
-  const auto result = RunRedshiftStagedCopy(MakeRequest(), store,
-                                            [&](std::string_view sql) {
-    store.events.push_back("copy");
-    copy_sql = sql;
-    const auto manifest = store.objects.find(std::string(kManifestUrl));
-    EXPECT_NE(manifest, store.objects.end());
-    if (manifest != store.objects.end()) {
-      EXPECT_EQ(manifest->second.bytes,
-                "{\"entries\":[{\"url\":\"s3://pgwire-ci/staging/run-01/data.csv\","
-                "\"mandatory\":true}]}");
-    }
-    return RedshiftCopyExecutionResult::kSucceeded;
-  });
+  const auto result =
+      RunRedshiftStagedCopy(MakeRequest(), store, [&](std::string_view sql) {
+        store.events.push_back("copy");
+        copy_sql = sql;
+        const auto manifest = store.objects.find(std::string(kManifestUrl));
+        EXPECT_NE(manifest, store.objects.end());
+        if (manifest != store.objects.end()) {
+          EXPECT_EQ(manifest->second.bytes,
+                    "{\"entries\":[{\"url\":\"s3://pgwire-ci/staging/run-01/data.csv\","
+                    "\"mandatory\":true}]}");
+        }
+        return RedshiftCopyExecutionResult::kSucceeded;
+      });
   EXPECT_EQ(result.status, RedshiftStagedCopyRunStatus::kSucceeded);
   EXPECT_TRUE(result.copy_succeeded);
   EXPECT_TRUE(result.cleanup_complete);
   EXPECT_TRUE(store.objects.empty());
-  EXPECT_EQ(store.events,
-            (std::vector<std::string>{"put:data", "put:manifest", "copy",
-                                      "delete:manifest", "delete:data"}));
+  EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest", "copy",
+                                                    "delete:manifest", "delete:data"}));
   EXPECT_EQ(copy_sql,
             "COPY \"public\".\"my_table\" (\"label\", \"id\") FROM "
             "'s3://pgwire-ci/staging/run-01/load.manifest' IAM_ROLE "
@@ -277,8 +276,8 @@ TEST(RedshiftStagedCopyCoordinatorTest, LostManifestResponseCleansBothOwnedObjec
 }
 
 TEST(RedshiftStagedCopyCoordinatorTest, SettledCopyFailureAndUnknownAreNotRetried) {
-  for (auto copy_result : {RedshiftCopyExecutionResult::kFailed,
-                           RedshiftCopyExecutionResult::kUnknown}) {
+  for (auto copy_result :
+       {RedshiftCopyExecutionResult::kFailed, RedshiftCopyExecutionResult::kUnknown}) {
     FakeObjectStore store;
     const auto result = RunWithCopyResult(MakeRequest(), store, copy_result);
     EXPECT_EQ(result.status, copy_result == RedshiftCopyExecutionResult::kFailed
@@ -287,23 +286,21 @@ TEST(RedshiftStagedCopyCoordinatorTest, SettledCopyFailureAndUnknownAreNotRetrie
     EXPECT_FALSE(result.copy_succeeded);
     EXPECT_TRUE(result.cleanup_complete);
     EXPECT_TRUE(store.objects.empty());
-    EXPECT_EQ(store.events,
-              (std::vector<std::string>{"put:data", "put:manifest", "copy",
-                                        "delete:manifest", "delete:data"}));
+    EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest", "copy",
+                                                      "delete:manifest", "delete:data"}));
   }
 }
 
 TEST(RedshiftStagedCopyCoordinatorTest, UnsettledCallbackExceptionDefersCleanup) {
   FakeObjectStore store;
-  const auto result = RunRedshiftStagedCopy(MakeRequest(), store,
-                                            [&](std::string_view) -> RedshiftCopyExecutionResult {
-    throw std::runtime_error("COPY callback failure");
-  });
+  const auto result = RunRedshiftStagedCopy(
+      MakeRequest(), store, [&](std::string_view) -> RedshiftCopyExecutionResult {
+        throw std::runtime_error("COPY callback failure");
+      });
   EXPECT_EQ(result.status, RedshiftStagedCopyRunStatus::kCopyUnknown);
   EXPECT_FALSE(result.cleanup_complete);
   EXPECT_EQ(store.objects.size(), 2);
-  EXPECT_EQ(store.events,
-            (std::vector<std::string>{"put:data", "put:manifest"}));
+  EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest"}));
 }
 
 TEST(RedshiftStagedCopyCoordinatorTest, CleanupFailureAfterCopyDoesNotImplyRetry) {
@@ -313,17 +310,15 @@ TEST(RedshiftStagedCopyCoordinatorTest, CleanupFailureAfterCopyDoesNotImplyRetry
   EXPECT_EQ(result.status, RedshiftStagedCopyRunStatus::kCleanupFailed);
   EXPECT_TRUE(result.copy_succeeded);
   EXPECT_FALSE(result.cleanup_complete);
-  EXPECT_EQ(store.events,
-            (std::vector<std::string>{"put:data", "put:manifest", "copy",
-                                      "delete:manifest", "delete:data"}));
+  EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest", "copy",
+                                                    "delete:manifest", "delete:data"}));
   EXPECT_EQ(store.objects.size(), 1);
   EXPECT_NE(store.objects.find(std::string(kManifestUrl)), store.objects.end());
 }
 
 TEST(RedshiftStagedCopyCoordinatorTest, CleanupNeverDeletesObjectNowOwnedByAnother) {
   FakeObjectStore store;
-  const auto result = RunRedshiftStagedCopy(MakeRequest(), store,
-                                            [&](std::string_view) {
+  const auto result = RunRedshiftStagedCopy(MakeRequest(), store, [&](std::string_view) {
     store.objects.at(std::string(kDataUrl)).token = "someone-else";
     return RedshiftCopyExecutionResult::kSucceeded;
   });
@@ -337,14 +332,13 @@ TEST(RedshiftStagedCopyCoordinatorTest, CleanupNeverDeletesObjectNowOwnedByAnoth
 TEST(RedshiftStagedCopyCoordinatorTest, CleanupFailurePreservesEarlierCopyFailure) {
   FakeObjectStore store;
   store.failed_deletes.insert(std::string(kDataUrl));
-  const auto result = RunWithCopyResult(MakeRequest(), store,
-                                        RedshiftCopyExecutionResult::kFailed);
+  const auto result =
+      RunWithCopyResult(MakeRequest(), store, RedshiftCopyExecutionResult::kFailed);
   EXPECT_EQ(result.status, RedshiftStagedCopyRunStatus::kCopyFailed);
   EXPECT_FALSE(result.copy_succeeded);
   EXPECT_FALSE(result.cleanup_complete);
-  EXPECT_EQ(store.events,
-            (std::vector<std::string>{"put:data", "put:manifest", "copy",
-                                      "delete:manifest", "delete:data"}));
+  EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest", "copy",
+                                                    "delete:manifest", "delete:data"}));
   EXPECT_EQ(store.objects.size(), 1);
   EXPECT_NE(store.objects.find(std::string(kDataUrl)), store.objects.end());
 }

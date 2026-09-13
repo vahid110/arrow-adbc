@@ -42,9 +42,9 @@ class RedshiftStagedObjectStore {
  public:
   virtual ~RedshiftStagedObjectStore() = default;
 
-  virtual RedshiftStagedPutResult PutIfAbsent(std::string_view object_uri,
-                                             std::string_view bytes,
-                                             std::string_view ownership_token) noexcept = 0;
+  virtual RedshiftStagedPutResult PutIfAbsent(
+      std::string_view object_uri, std::string_view bytes,
+      std::string_view ownership_token) noexcept = 0;
   virtual RedshiftStagedOwnership CheckOwnership(
       std::string_view object_uri, std::string_view ownership_token) noexcept = 0;
   // Returns true if an owned object was deleted or was already absent. Must
