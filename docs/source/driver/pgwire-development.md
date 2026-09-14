@@ -132,6 +132,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
       zero fields, duplicate names, SQL `CREATE` errors, and later transfer
       failures. Name and Arrow type preflight are narrow completed steps.
+- [ ] Make timezone-aware bound queries release their owned transaction and
+      restore session state on preparation/execution errors and early result-
+      stream release; a field-mapping guard alone does not close this gap.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -505,6 +508,11 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Requalified the current `34a3bfa6c` production-code head through
+  the [seven-platform development archive matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34805781805).
+  All seven Linux, macOS, and Windows archive jobs passed, as did the final
+  downloaded-archive/checksum verification. This is AWS-free development-
+  archive evidence, not a production release or live Redshift test.
 - 2026-09-14: Moved shared Arrow column type resolution ahead of replace-ingest
   `DROP TABLE`. A PostgreSQL-backed regression binds a named unsupported nested
   type and verifies the original temporary table's sentinel row remains and
