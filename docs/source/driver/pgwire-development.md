@@ -508,6 +508,16 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Deferred timezone-sensitive parameter setup until all Arrow
+  fields have valid PostgreSQL mappings and binary writers. A PostgreSQL
+  regression reproduced the old leak (open transaction and UTC session after
+  a later field failed), then passed with the ordering fix. On a disposable
+  local PostgreSQL 17 server, 102 statement tests passed with six expected
+  skips; the new case and existing timezone-ingest case also passed under
+  Meson ASan/UBSan. Both CMake shared/static driver artifacts built, and the
+  AWS-free Redshift artifact suite passed. Preparation, execution, and early
+  result-stream release cleanup remain the separate roadmap item above;
+  cross-platform CI for this narrow fix is pending.
 - 2026-09-14: Requalified the current `34a3bfa6c` production-code head through
   the [seven-platform development archive matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34805781805).
   All seven Linux, macOS, and Windows archive jobs passed, as did the final
