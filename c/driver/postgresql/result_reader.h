@@ -113,6 +113,10 @@ class PqResultArrayReader {
   Status ExecuteAll(int64_t* affected_rows);
   int GetNextImpl(struct ArrowArray* out);
   bool IsConnectionLive() const;
+  // Finalize exactly once. Failed result/bind paths roll back driver-owned
+  // transactions; successful exhaustion commits them. A failed cleanup makes
+  // the connection unusable, even when the primary error is returned instead.
+  Status FinishBoundStream(bool failed);
 
   void ResetErrors() {
     ArrowErrorInit(&na_error_);

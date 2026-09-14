@@ -76,6 +76,9 @@ struct BindStream {
 
   bool has_tz_field = false;
   bool autocommit = false;
+  // Timezone setup can fail before has_tz_field becomes true. Preserve a
+  // failed rollback so the owning connection is not reused afterward.
+  bool cleanup_failed = false;
   std::string tz_setting;
 
   // Expected types from PostgreSQL (after DESCRIBE); used to resolve NA params
@@ -209,7 +212,7 @@ struct BindStream {
     auto fail_setup = [&](Status status) {
       if (autocommit) {
         PqResultHelper rollback(pg_conn, "ROLLBACK");
-        (void)rollback.Execute();
+        if (!rollback.Execute().ok()) cleanup_failed = true;
       }
       return status;
     };

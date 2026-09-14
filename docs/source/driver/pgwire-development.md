@@ -138,12 +138,15 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       Timezone-setup, typed-prepare, and bound-row SQL errors have scoped
       autocommit rollback; synchronous bind/writer errors in healthy explicit
       transactions restore the prior timezone without committing. Early bound
-      stream release now has best-effort, connection-lifetime-guarded cleanup
-      and a per-connection active-stream lease that rejects competing ADBC SQL
-      and transaction changes. Do not treat it as a guarantee under concurrent
-      connection use or failed rollback/restore SQL. A failed cleanup can leave
-      transaction/session state uncertain; add a connection-unusable guard
-      before treating these paths as production-safe.
+      stream release has connection-lifetime-guarded, one-shot cleanup and a
+      per-connection active-stream lease that rejects competing ADBC SQL and
+      transaction changes. Failed rollback, timezone restore, or COMMIT now
+      marks the connection unusable; callers must close and recreate it rather
+      than risk using uncertain transaction/session state. PostgreSQL backend-
+      loss tests cover failed rollback and end-of-stream cleanup. Output-schema
+      failure injection, healthy-connection cleanup-SQL failure, and concurrent
+      connection use still need qualification before a general production-safe
+      claim.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -517,6 +520,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Bound-result finalization is now one-shot. A rollback, timezone
+  restore, or COMMIT failure marks the ADBC connection unusable while preserving
+  the primary bind/decode error; subsequent SQL, transaction, schema, metadata,
+  and option operations refuse to reuse it, and connection release remains
+  allowed. A failed timezone-setup rollback is tracked even before the bind is
+  marked timezone-aware. Two PostgreSQL 17 backend-loss tests cover failed
+  rollback after an intermediate bound row and failed restore/COMMIT at stream
+  exhaustion. Both full PostgreSQL C++ suites, the AWS-free Redshift suite,
+  shared/static PostgreSQL and Redshift builds, and three focused ASan/UBSan
+  tests passed locally. No AWS resources were started. The disposable local
+  PostgreSQL cluster was stopped and removed. Cross-platform CI is pending.
 - 2026-09-14: Post-export Arrow decoding errors now finalize a timezone-aware
   bound stream immediately: discard remaining bound rows, clear the current
   result, and roll back only a driver-owned autocommit transaction; a healthy
@@ -526,9 +540,11 @@ necessary; this is not a claim of automatic orphan reconciliation.
   stream, zero committed rows in autocommit, and caller-controlled rollback
   in explicit mode. Both full PostgreSQL C++ suites, three focused ASan/UBSan
   tests, shared/static PostgreSQL and Redshift builds, and the AWS-free
-  Redshift artifact suite passed locally. Cross-platform CI for this narrow
-  change is pending; output-schema and cleanup-SQL failures remain separate
-  gaps. The disposable PostgreSQL cluster was stopped and removed.
+  Redshift artifact suite passed locally. The
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34810617157)
+  passed with all AWS-backed jobs skipped; output-schema and cleanup-SQL
+  failures remain separate gaps. The disposable PostgreSQL cluster was
+  stopped and removed.
 - 2026-09-14: An unfinished bound result stream now holds a weak reference to
   its ADBC connection and a per-connection active-stream lease. On ordinary
   early release it rolls back a driver-owned autocommit transaction, or

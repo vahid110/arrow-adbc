@@ -282,7 +282,18 @@ void SilentNoticeProcessor(void* /*arg*/, const char* /*message*/) {}
 
 }  // namespace
 
+AdbcStatusCode PostgresConnection::CheckBoundStreamCleanupFailed(
+    struct AdbcError* error) const {
+  if (!bound_stream_cleanup_failed_) return ADBC_STATUS_OK;
+  InternalAdbcSetError(
+      error,
+      "[libpq] Connection is unusable after bound result cleanup failed; "
+      "release it and create a new connection");
+  return ADBC_STATUS_INVALID_STATE;
+}
+
 AdbcStatusCode PostgresConnection::Cancel(struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   // > errbuf must be a char array of size errbufsize (the recommended size is
   // > 256 bytes).
   // https://www.postgresql.org/docs/current/libpq-cancel.html
@@ -297,6 +308,7 @@ AdbcStatusCode PostgresConnection::Cancel(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (HasActiveBoundStream()) {
     InternalAdbcSetError(error,
                          "[libpq] Release the bound result stream before committing");
@@ -324,6 +336,7 @@ AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::EnsureTransaction(struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (!conn_) {
     InternalAdbcSetError(error, "[libpq] Connection was released");
     return ADBC_STATUS_INVALID_STATE;
@@ -360,6 +373,7 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
                                            size_t info_codes_length,
                                            struct ArrowArrayStream* out,
                                            struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (!info_codes) {
     info_codes = kSupportedInfoCodes;
     info_codes_length = sizeof(kSupportedInfoCodes) / sizeof(kSupportedInfoCodes[0]);
@@ -473,6 +487,7 @@ AdbcStatusCode PostgresConnection::GetObjects(
 
 AdbcStatusCode PostgresConnection::GetOption(const char* option, char* value,
                                              size_t* length, struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   std::string output;
   if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
     output = PQdb(conn_);
@@ -527,14 +542,17 @@ AdbcStatusCode PostgresConnection::GetOption(const char* option, char* value,
 AdbcStatusCode PostgresConnection::GetOptionBytes(const char* option, uint8_t* value,
                                                   size_t* length,
                                                   struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   return ADBC_STATUS_NOT_FOUND;
 }
 AdbcStatusCode PostgresConnection::GetOptionInt(const char* option, int64_t* value,
                                                 struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   return ADBC_STATUS_NOT_FOUND;
 }
 AdbcStatusCode PostgresConnection::GetOptionDouble(const char* option, double* value,
                                                    struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   return ADBC_STATUS_NOT_FOUND;
 }
 
@@ -808,6 +826,7 @@ AdbcStatusCode PostgresConnection::GetStatistics(const char* catalog,
                                                  const char* table_name, bool approximate,
                                                  struct ArrowArrayStream* out,
                                                  struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (!backend_profile().capabilities.metadata_statistics) {
     InternalAdbcSetError(error, "[libpq] %s does not support GetStatistics",
                          std::string(VendorName()).c_str());
@@ -880,6 +899,7 @@ AdbcStatusCode PostgresConnectionGetStatisticNamesImpl(struct ArrowSchema* schem
 
 AdbcStatusCode PostgresConnection::GetStatisticNames(struct ArrowArrayStream* out,
                                                      struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   // We don't support any extended statistics, just return an empty stream
   struct ArrowSchema schema;
   std::memset(&schema, 0, sizeof(schema));
@@ -958,6 +978,7 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
 AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connection,
                                                  struct ArrowArrayStream* out,
                                                  struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   MetadataQuerySet metadata(backend_profile());
   std::vector<std::string> table_types = metadata.TableTypeNames();
 
@@ -967,6 +988,7 @@ AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connecti
 
 AdbcStatusCode PostgresConnection::Init(struct AdbcDatabase* database,
                                         struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (conn_ || HasActiveBoundStream()) {
     InternalAdbcSetError(error, "[libpq] Connection is already initialized or in use");
     return ADBC_STATUS_INVALID_STATE;
@@ -1007,6 +1029,7 @@ AdbcStatusCode PostgresConnection::Release(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::Rollback(struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (HasActiveBoundStream()) {
     InternalAdbcSetError(error,
                          "[libpq] Release the bound result stream before rollback");
@@ -1037,6 +1060,7 @@ AdbcStatusCode PostgresConnection::Rollback(struct AdbcError* error) {
 
 AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
                                              struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   if (conn_ && HasActiveBoundStream()) {
     InternalAdbcSetError(
         error, "[libpq] Release the bound result stream before changing options");
@@ -1152,18 +1176,21 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
 AdbcStatusCode PostgresConnection::SetOptionBytes(const char* key, const uint8_t* value,
                                                   size_t length,
                                                   struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   InternalAdbcSetError(error, "%s%s", "[libpq] Unknown option ", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
 AdbcStatusCode PostgresConnection::SetOptionDouble(const char* key, double value,
                                                    struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   InternalAdbcSetError(error, "%s%s", "[libpq] Unknown option ", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
 AdbcStatusCode PostgresConnection::SetOptionInt(const char* key, int64_t value,
                                                 struct AdbcError* error) {
+  RAISE_ADBC(CheckBoundStreamCleanupFailed(error));
   InternalAdbcSetError(error, "%s%s", "[libpq] Unknown option ", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }

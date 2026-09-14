@@ -32,21 +32,41 @@
 namespace adbcpq {
 
 PqResultArrayReader::~PqResultArrayReader() {
-  if (bind_stream_ && bind_stream_->has_tz_field && IsConnectionLive()) {
-    if (bind_stream_->autocommit) {
-      // Releasing an unfinished stream must not commit rows already executed.
-      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
-    } else if (PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
-      // The caller still owns its healthy explicit transaction.
-      (void)bind_stream_->Cleanup(conn_);
-    }
-  }
+  (void)FinishBoundStream(/*failed=*/true);
   ResetErrors();
 }
 
 bool PqResultArrayReader::IsConnectionLive() const {
   auto connection = connection_.lock();
   return conn_ != nullptr && connection && connection->conn() == conn_;
+}
+
+Status PqResultArrayReader::FinishBoundStream(bool failed) {
+  // Retain the lease until cleanup is complete, but disarm the reader before
+  // issuing SQL so no later error path or destructor retries an ambiguous
+  // rollback, timezone restore, or COMMIT.
+  auto bind = std::move(bind_stream_);
+  auto lease = std::move(bound_stream_lease_);
+  if (!bind) return Status::Ok();
+
+  auto connection = connection_.lock();
+  if (bind->cleanup_failed && connection) {
+    connection->MarkBoundStreamCleanupFailed();
+  }
+  if (!bind->has_tz_field || !IsConnectionLive()) return Status::Ok();
+
+  Status cleanup = Status::Ok();
+  if (!failed) {
+    cleanup = bind->Cleanup(conn_);
+  } else if (bind->autocommit) {
+    // Releasing or failing an unfinished stream must never commit prior rows.
+    cleanup = bind->RollbackTimezoneTransactionIfOwned(conn_);
+  } else if (PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
+    // Preserve a healthy explicit transaction, restoring only its timezone.
+    cleanup = bind->Cleanup(conn_);
+  }
+  if (!cleanup.ok() && connection) connection->MarkBoundStreamCleanupFailed();
+  return cleanup;
 }
 
 int PqResultArrayReader::GetSchema(struct ArrowSchema* out) {
@@ -78,18 +98,10 @@ int PqResultArrayReader::GetNext(struct ArrowArray* out) {
   }
 
   int code = GetNextImpl(out);
-  if (code != NANOARROW_OK && bind_stream_) {
+  if (code != NANOARROW_OK) {
     // A decoder or Arrow error after the stream was exported must not leave
     // later bound rows executable, or an owned timezone transaction open.
-    if (bind_stream_->has_tz_field && IsConnectionLive()) {
-      if (bind_stream_->autocommit) {
-        (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
-      } else if (PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
-        (void)bind_stream_->Cleanup(conn_);
-      }
-    }
-    bind_stream_.reset();
-    bound_stream_lease_.reset();
+    if (bind_stream_) (void)FinishBoundStream(/*failed=*/true);
     helper_.ClearResult();
   }
   return code;
@@ -221,7 +233,7 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     Status prepare_status = helper_.Prepare(bind_stream_->param_types);
     if (!prepare_status.ok()) {
       // Preserve the preparation error even if rollback also fails.
-      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+      (void)FinishBoundStream(/*failed=*/true);
       return prepare_status;
     }
 
@@ -299,21 +311,12 @@ Status PqResultArrayReader::ToArrayStream(int64_t* affected_rows,
 
 Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
   auto fail_bind = [&](Status status) {
-    if (bind_stream_->has_tz_field && bind_stream_->autocommit &&
-        bind_stream_->RollbackTimezoneTransactionIfOwned(conn_).ok()) {
-      // The transaction (and its prior row effects) was discarded. Do not let a
-      // later get_next() skip the failed row and run outside that transaction.
-      bind_stream_.reset();
-      bound_stream_lease_.reset();
-      if (affected_rows != nullptr) *affected_rows = 0;
-    } else if (bind_stream_->has_tz_field && !bind_stream_->autocommit &&
-               PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
-      // A local Arrow/binary-writer error has not aborted the caller's
-      // transaction. Restore its session timezone, but do not commit or roll
-      // back that transaction. A failed stream must not retry the bind.
-      (void)bind_stream_->Cleanup(conn_);
-      bind_stream_.reset();
-      bound_stream_lease_.reset();
+    const bool owned_transaction = bind_stream_->has_tz_field && bind_stream_->autocommit;
+    // Keep the bind error primary, and never retry the failed row. If cleanup
+    // itself fails, the connection is marked unusable by FinishBoundStream().
+    Status cleanup = FinishBoundStream(/*failed=*/true);
+    if (owned_transaction && cleanup.ok() && affected_rows != nullptr) {
+      *affected_rows = 0;
     }
     return status;
   };
@@ -327,10 +330,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
     }
 
     if (!bind_stream_->current->release) {
-      UNWRAP_STATUS(bind_stream_->Cleanup(conn_));
-      bind_stream_.reset();
-      bound_stream_lease_.reset();
-      return Status::Ok();
+      return FinishBoundStream(/*failed=*/false);
     }
 
     adbc::driver::pgwire::UniqueResult result;
@@ -371,7 +371,7 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
     Status prepare_status = helper_.Prepare(bind_stream_->param_types);
     if (!prepare_status.ok()) {
       // Preserve the preparation error even if rollback also fails.
-      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+      (void)FinishBoundStream(/*failed=*/true);
       return prepare_status;
     }
 

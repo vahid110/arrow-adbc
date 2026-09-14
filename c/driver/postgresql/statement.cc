@@ -690,6 +690,7 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
 
 AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
                                                 struct AdbcError* error) {
+  RAISE_ADBC(connection_->CheckBoundStreamCleanupFailed(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
         error, "[libpq] Connection is closed or has an active bound result stream");
@@ -900,6 +901,7 @@ AdbcStatusCode PostgresStatement::GetOptionInt(const char* key, int64_t* value,
 
 AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
                                                      struct AdbcError* error) {
+  RAISE_ADBC(connection_->CheckBoundStreamCleanupFailed(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
         error, "[libpq] Connection is closed or has an active bound result stream");

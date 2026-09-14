@@ -2523,6 +2523,109 @@ TEST_F(PostgresStatementTest, BoundDecodeErrorFinalizesTimezoneTransaction) {
   }
 }
 
+TEST_F(PostgresStatementTest, FailedBoundCleanupMakesConnectionUnusable) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT $1::timestamptz, 10 / $2::integer", &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema bind_schema;
+  nanoarrow::UniqueArray bind_batch;
+  ASSERT_THAT(MakeTimezoneAndDivisorBind(bind_schema.get(), bind_batch.get()),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&statement, bind_batch.get(), bind_schema.get(), &error),
+              IsOkStatus(&error));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(
+      AdbcStatementExecuteQuery(&statement, &reader.stream.value, nullptr, &error),
+      IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+
+  // Losing the server after the first row makes the next bind fail. The
+  // driver-owned ROLLBACK will fail too, so the connection must be retired.
+  adbc::driver::pgwire::UniqueResult terminate(
+      PQexec(pg_conn, "SELECT pg_terminate_backend(pg_backend_pid())"));
+  ASSERT_EQ(PQstatus(pg_conn), CONNECTION_BAD);
+  EXPECT_EQ(reader.MaybeNext(), EIO);
+  EXPECT_TRUE(connection_impl->bound_stream_cleanup_failed());
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("Connection is unusable"));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  nanoarrow::UniqueSchema output_schema;
+  ASSERT_THAT(AdbcStatementExecuteSchema(&statement, output_schema.get(), &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  ASSERT_THAT(AdbcStatementGetParameterSchema(&statement, output_schema.get(), &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  ASSERT_THAT(AdbcConnectionRollback(&connection, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  char schema_name[128];
+  size_t schema_name_length = sizeof(schema_name);
+  ASSERT_THAT(
+      AdbcConnectionGetOption(&connection, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA,
+                              schema_name, &schema_name_length, &error),
+      IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+}
+
+TEST_F(PostgresStatementTest, FailedBoundExhaustionCleanupMakesConnectionUnusable) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1::timestamptz", &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema bind_schema;
+  nanoarrow::UniqueArray bind_batch;
+  ArrowSchemaInit(bind_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 1),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      ArrowSchemaSetTypeDateTime(bind_schema->children[0], NANOARROW_TYPE_TIMESTAMP,
+                                 NANOARROW_TIME_UNIT_MICRO, "UTC"),
+      adbc_validation::IsOkErrno());
+  ASSERT_THAT((adbc_validation::MakeBatch<int64_t>(bind_schema.get(), bind_batch.get(),
+                                                   nullptr, {0})),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&statement, bind_batch.get(), bind_schema.get(), &error),
+              IsOkStatus(&error));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(
+      AdbcStatementExecuteQuery(&statement, &reader.stream.value, nullptr, &error),
+      IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->length, 1);
+
+  // The row itself succeeded; the connection is lost before end-of-stream
+  // timezone restoration and COMMIT. Neither outcome can now be assumed.
+  adbc::driver::pgwire::UniqueResult terminate(
+      PQexec(pg_conn, "SELECT pg_terminate_backend(pg_backend_pid())"));
+  ASSERT_EQ(PQstatus(pg_conn), CONNECTION_BAD);
+  EXPECT_EQ(reader.MaybeNext(), EIO);
+  EXPECT_TRUE(connection_impl->bound_stream_cleanup_failed());
+  EXPECT_EQ(reader.MaybeNext(), 0);
+  EXPECT_EQ(reader.array->release, nullptr);
+  ASSERT_THAT(AdbcConnectionCommit(&connection, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+}
+
 TEST_F(PostgresStatementTest, SqlIngestJson) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
