@@ -508,6 +508,16 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: On a failed typed-query `Prepare`, the bound-query reader now
+  rolls back only the timezone transaction it opened for autocommit and
+  preserves the original SQL error. PostgreSQL 17 tests cover both output
+  modes, idle/reusable connection and restored `Europe/Berlin` timezone, plus
+  an explicit-transaction case that remains caller-owned. Both focused cases
+  passed under Meson ASan/UBSan; local CMake shared/static PostgreSQL and
+  Redshift artifacts built and the AWS-free Redshift artifact suite passed.
+  Failures inside timezone setup, after successful preparation, and early
+  result-stream release remain the separate cleanup item above. Cross-platform
+  CI for this narrow fix is pending.
 - 2026-09-14: Deferred timezone-sensitive parameter setup until all Arrow
   fields have valid PostgreSQL mappings and binary writers. A PostgreSQL
   regression reproduced the old leak (open transaction and UTC session after
@@ -517,7 +527,8 @@ necessary; this is not a claim of automatic orphan reconciliation.
   Meson ASan/UBSan. Both CMake shared/static driver artifacts built, and the
   AWS-free Redshift artifact suite passed. Preparation, execution, and early
   result-stream release cleanup remain the separate roadmap item above;
-  cross-platform CI for this narrow fix is pending.
+  the [five-platform PostgreSQL 18 and Ubuntu Meson matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34806383397)
+  passed with all AWS-backed jobs skipped.
 - 2026-09-14: Requalified the current `34a3bfa6c` production-code head through
   the [seven-platform development archive matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34805781805).
   All seven Linux, macOS, and Windows archive jobs passed, as did the final
