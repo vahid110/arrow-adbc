@@ -71,7 +71,7 @@ on:
 concurrency:
   group: pgwire-${{ inputs.copy_fixture_selftest && 'copy-selftest' || inputs.postgresql_only && 'postgresql-only' || (inputs.copy_probe || inputs.copy_csv_semantics_probe) && 'copy-dispatch' || inputs.credential_probe && 'credential-probe' || github.event_name == 'workflow_dispatch' && 'redshift-live' || 'postgresql' }}-${{ github.ref }}
   # A source push must not cancel a live run before its AWS ingress cleanup.
-  cancel-in-progress: ${{ github.event_name == 'push' || inputs.copy_fixture_selftest || inputs.postgresql_only || inputs.credential_probe }}
+  cancel-in-progress: ${{ github.event_name == 'push' || inputs.copy_fixture_selftest || inputs.postgresql_only || (inputs.credential_probe && !inputs.copy_probe && !inputs.copy_csv_semantics_probe) }}
 
 permissions:
   contents: read

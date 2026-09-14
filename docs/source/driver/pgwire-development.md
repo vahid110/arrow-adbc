@@ -130,10 +130,12 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
-      backend-specific identifier collisions, SQL `CREATE` errors, and later
-      transfer failures. Zero fields, byte-identical duplicate names, missing
-      names, and unsupported Arrow types are narrow completed preflight steps;
-      they do not make replacement atomic after `DROP`.
+      backend-specific identifier collisions, Redshift SQL `CREATE` errors,
+      and later transfer failures. Zero fields, byte-identical duplicate names,
+      missing names, and unsupported Arrow types have preflight checks.
+      PostgreSQL autocommit now owns a transactional `DROP`/`CREATE` pair and
+      rolls it back on server-side `CREATE` failure. Explicit transactions need
+      a separate savepoint design; transfer failures remain non-atomic.
 - [ ] Complete timezone-aware bound-query cleanup for output-schema failures,
       cleanup SQL failures, and concurrent connection use. Post-export decoder
       errors now terminalize the bound stream and clean up the timezone state.
@@ -313,7 +315,8 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   Redshift-artifact checks without AWS. Run the live job deliberately at a
   Redshift-relevant milestone, and inspect its temporary ingress cleanup. Give
   manual live runs their own non-canceling concurrency group so a source push
-  cannot interrupt cleanup.
+  cannot interrupt cleanup. Mixed credential/COPY dispatch inputs must also
+  remain non-canceling for the COPY group.
 - [x] Harden the opt-in COPY fixture's temporary CI ingress cleanup for an
   ambiguous authorize or revoke response. It marks an attempt before calling
   AWS and reconciles only a rule matching this run's unique description,
@@ -528,6 +531,19 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: PostgreSQL autocommit replace ingest now wraps its `DROP` and
+  `CREATE` DDL pair in a driver-owned transaction only when the backend
+  advertises transactional DDL. A `CREATE` error rolls back the preceding
+  `DROP`, retaining the original SQL error and target table; a raw-SQL `BEGIN`
+  is refused before `DROP` so the driver cannot claim the caller's transaction.
+  Success commits before data transfer. Failed or uncertain DDL finalization
+  or an unknown pre-BEGIN transaction state marks the connection unusable.
+  Redshift's path is unchanged. PostgreSQL 17
+  sentinel and raw-transaction tests, both full PostgreSQL C++ suites, the
+  AWS-free Redshift suite, shared/static PostgreSQL and Redshift builds, and
+  three focused ASan/UBSan tests passed locally. The disposable PostgreSQL
+  cluster was stopped and removed. Cross-platform CI is pending; explicit
+  transaction savepoints, Redshift DDL, and later transfer failures remain.
 - 2026-09-14: Replace ingest now rejects byte-identical duplicate Arrow column
   names before dropping the target. The shared preflight deliberately does not
   fold case: PostgreSQL and Redshift quoted-identifier equivalence can differ.
@@ -538,8 +554,13 @@ necessary; this is not a claim of automatic orphan reconciliation.
   makes live Redshift Serverless testing manual-only and isolates its
   concurrency group so small source pushes neither open billed compute windows
   nor cancel in-flight ingress cleanup. The disposable PostgreSQL cluster was
-  stopped and removed. Server-side identifier collisions and failures after
-  `DROP` remain open.
+  stopped and removed. The
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34815048781)
+  passed with the billed Redshift job skipped, while the
+  [seven-platform development-package run](https://github.com/vahid110/arrow-adbc/actions/runs/34815048297)
+  passed all archives and its final checksum gate. These are not production
+  releases. Server-side identifier collisions and failures after `DROP` remain
+  open beyond the PostgreSQL DDL pair addressed in the subsequent checkpoint.
 - 2026-09-14: Replace ingest now rejects a zero-field Arrow schema before it
   can drop an existing table. A PostgreSQL 17 test binds an empty STRUCT stream
   for a temporary target, checks `INVALID_ARGUMENT`, then reads the original
