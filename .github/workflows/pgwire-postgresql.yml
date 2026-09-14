@@ -200,6 +200,27 @@ jobs:
             "$RUNNER_TEMP/pgwire-prefix/lib/libadbc_driver_redshift.so" \
             "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
 
+      - name: Test PostgreSQL-wire Meson build parity without AWS
+        if: ${{ matrix.platform == 'Ubuntu x86-64' }}
+        run: |
+          apt-get install --yes meson
+          meson setup build/pgwire-meson c \
+            -Dtests=enabled \
+            -Dpostgresql=enabled \
+            -Dflightsql=disabled \
+            -Dsqlite=disabled \
+            -Ddriver_manager=disabled \
+            -Dbenchmarks=disabled
+          meson compile -C build/pgwire-meson \
+            adbc-driver-postgresql-test \
+            adbc-driver-postgresql-copy-test \
+            adbc-driver-redshift-test
+          meson test -C build/pgwire-meson --no-rebuild --num-processes 1 \
+            --print-errorlogs \
+            adbc-driver-postgresql \
+            adbc-driver-postgresql-copy \
+            adbc-driver-redshift
+
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
     if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.copy_fixture_selftest && (inputs.postgresql_only || (!inputs.credential_probe && !inputs.copy_probe && !inputs.copy_csv_semantics_probe))) }}

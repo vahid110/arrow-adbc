@@ -129,6 +129,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       `DECIMAL(38,0)` values against the live Redshift engine.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
+- [ ] Preflight remaining malformed replace-ingest schemas (such as zero fields,
+      unsupported types, or duplicate names) before destructive DDL; the
+      unnamed-field guard below is a narrow first step.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -502,6 +505,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Guarded the active shared PostgreSQL/Redshift ingest path against
+  unnamed or empty Arrow field names before replace mode can drop an existing
+  table. A PostgreSQL-backed ADBC regression verifies an unnamed field returns
+  `INVALID_ARGUMENT`, preserves a temporary target's sentinel row, and leaves
+  the connection reusable. A temporary local PostgreSQL 17 run passed 267
+  tests with 27 expected skips; local CMake PostgreSQL/Redshift test targets
+  built and the AWS-free Redshift artifact suite passed. Other malformed
+  replace schemas remain a separate preflight checkpoint.
+- 2026-09-14: Added a focused Ubuntu x86-64 Meson build/test step to the
+  PostgreSQL 18 GitHub Actions job. It reuses the existing database service and
+  skips Redshift Serverless; Linux Meson parity remains pending CI evidence.
 - 2026-09-14: Added a second AWS-free regression for the active parameterized
   ingest helper: an Arrow stream read error after one successful 16-row SQL
   batch must roll back the entire bind. The callback confirms 17 rows were
