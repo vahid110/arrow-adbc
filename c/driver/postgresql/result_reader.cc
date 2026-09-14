@@ -77,6 +77,25 @@ int PqResultArrayReader::GetNext(struct ArrowArray* out) {
     return EINVAL;
   }
 
+  int code = GetNextImpl(out);
+  if (code != NANOARROW_OK && bind_stream_) {
+    // A decoder or Arrow error after the stream was exported must not leave
+    // later bound rows executable, or an owned timezone transaction open.
+    if (bind_stream_->has_tz_field && IsConnectionLive()) {
+      if (bind_stream_->autocommit) {
+        (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+      } else if (PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
+        (void)bind_stream_->Cleanup(conn_);
+      }
+    }
+    bind_stream_.reset();
+    bound_stream_lease_.reset();
+    helper_.ClearResult();
+  }
+  return code;
+}
+
+int PqResultArrayReader::GetNextImpl(struct ArrowArray* out) {
   Status status;
   if (schema_->release == nullptr) {
     status = Initialize(nullptr);

@@ -2460,6 +2460,69 @@ TEST_F(PostgresStatementTest, BoundResultAfterConnectionReleaseIsSafe) {
   // The reader is released before the statement, and must not access PGconn.
 }
 
+TEST_F(PostgresStatementTest, BoundDecodeErrorFinalizesTimezoneTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueResult setup(
+      PQexec(pg_conn,
+             "SET TIME ZONE 'Europe/Berlin'; CREATE TEMP TABLE adbc_tz_decode_failure "
+             "(ts TIMESTAMPTZ, quotient INTEGER)"));
+  ASSERT_EQ(PQresultStatus(setup.get()), PGRES_COMMAND_OK);
+
+  for (bool autocommit : {true, false}) {
+    SCOPED_TRACE(autocommit ? "autocommit" : "explicit transaction");
+    if (!autocommit) {
+      ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                          ADBC_OPTION_VALUE_DISABLED, &error),
+                  IsOkStatus(&error));
+    }
+    adbc_validation::Handle<struct AdbcStatement> bound_statement;
+    ASSERT_THAT(AdbcStatementNew(&connection, &bound_statement.value, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(&bound_statement.value,
+                                 "INSERT INTO pg_temp.adbc_tz_decode_failure VALUES "
+                                 "($1::timestamptz, 10 / $2::integer) "
+                                 "RETURNING CAST('P0Y0M0DT2562048H0M0S' AS INTERVAL)",
+                                 &error),
+        IsOkStatus(&error));
+    nanoarrow::UniqueSchema bind_schema;
+    nanoarrow::UniqueArray bind_batch;
+    ASSERT_THAT(MakeTimezoneAndDivisorBind(bind_schema.get(), bind_batch.get()),
+                adbc_validation::IsOkErrno());
+    ASSERT_THAT(AdbcStatementBind(&bound_statement.value, bind_batch.get(),
+                                  bind_schema.get(), &error),
+                IsOkStatus(&error));
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value, &reader.stream.value,
+                                          nullptr, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    EXPECT_EQ(reader.MaybeNext(), EINVAL);
+    EXPECT_THAT(reader.stream->get_last_error(&reader.stream.value),
+                ::testing::HasSubstr("would overflow when converting to nanoseconds"));
+    EXPECT_EQ(reader.MaybeNext(), 0);
+    EXPECT_EQ(reader.array->release, nullptr);
+
+    EXPECT_EQ(PQtransactionStatus(pg_conn), autocommit ? PQTRANS_IDLE : PQTRANS_INTRANS);
+    adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+    ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+    adbc::driver::pgwire::UniqueResult count(
+        PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_decode_failure"));
+    ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), autocommit ? "0" : "1");
+    if (!autocommit) {
+      ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+      adbc::driver::pgwire::UniqueResult rolled_back(
+          PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_decode_failure"));
+      ASSERT_EQ(PQresultStatus(rolled_back.get()), PGRES_TUPLES_OK);
+      EXPECT_STREQ(PQgetvalue(rolled_back.get(), 0, 0), "0");
+    }
+  }
+}
+
 TEST_F(PostgresStatementTest, SqlIngestJson) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 

@@ -111,6 +111,7 @@ class PqResultArrayReader {
 
   Status BindNextAndExecute(int64_t* affected_rows);
   Status ExecuteAll(int64_t* affected_rows);
+  int GetNextImpl(struct ArrowArray* out);
   bool IsConnectionLive() const;
 
   void ResetErrors() {
