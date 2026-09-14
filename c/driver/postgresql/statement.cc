@@ -391,6 +391,12 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
   PGconn* conn = connection_->conn();
   *has_copy_target_types = false;
 
+  if (ingest_.mode == IngestMode::kReplace && source_schema.n_children == 0) {
+    InternalAdbcSetError(error,
+                         "[libpq] Cannot replace a table with zero ingest columns");
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
   // Validate the Arrow field names before replacement can drop an existing table.
   // An ArrowSchema child may legitimately have a null name, but SQL columns may not.
   for (int64_t i = 0; i < source_schema.n_children; ++i) {

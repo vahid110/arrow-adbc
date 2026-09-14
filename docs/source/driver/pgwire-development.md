@@ -130,8 +130,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
-      zero fields, duplicate names, SQL `CREATE` errors, and later transfer
-      failures. Name and Arrow type preflight are narrow completed steps.
+      duplicate names, SQL `CREATE` errors, and later transfer failures. Zero
+      fields, missing names, and unsupported Arrow types are narrow completed
+      preflight steps; they do not make replacement atomic after `DROP`.
 - [ ] Complete timezone-aware bound-query cleanup for output-schema failures,
       cleanup SQL failures, and concurrent connection use. Post-export decoder
       errors now terminalize the bound stream and clean up the timezone state.
@@ -520,6 +521,14 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Replace ingest now rejects a zero-field Arrow schema before it
+  can drop an existing table. A PostgreSQL 17 test binds an empty STRUCT stream
+  for a temporary target, checks `INVALID_ARGUMENT`, then reads the original
+  sentinel row through the same statement. Both full PostgreSQL C++ suites,
+  the AWS-free Redshift suite, shared/static PostgreSQL and Redshift builds,
+  and two focused ASan/UBSan tests passed locally. The disposable PostgreSQL
+  cluster was stopped and removed. Duplicate names, server-side `CREATE`
+  failures, and transfer failures remain separate replace-ingest gaps.
 - 2026-09-14: Bound-result finalization is now one-shot. A rollback, timezone
   restore, or COMMIT failure marks the ADBC connection unusable while preserving
   the primary bind/decode error; subsequent SQL, transaction, schema, metadata,
@@ -530,7 +539,10 @@ necessary; this is not a claim of automatic orphan reconciliation.
   exhaustion. Both full PostgreSQL C++ suites, the AWS-free Redshift suite,
   shared/static PostgreSQL and Redshift builds, and three focused ASan/UBSan
   tests passed locally. No AWS resources were started. The disposable local
-  PostgreSQL cluster was stopped and removed. Cross-platform CI is pending.
+  PostgreSQL cluster was stopped and removed. The same-head
+  [seven-platform development-package run](https://github.com/vahid110/arrow-adbc/actions/runs/34813621804)
+  passed all extracted-client archives and the final checksum gate. This is
+  not a production release; the five-platform PostgreSQL matrix is pending.
 - 2026-09-14: Post-export Arrow decoding errors now finalize a timezone-aware
   bound stream immediately: discard remaining bound rows, clear the current
   result, and roll back only a driver-owned autocommit transaction; a healthy
