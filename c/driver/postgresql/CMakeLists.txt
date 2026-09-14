@@ -78,6 +78,7 @@ add_arrow_lib(adbc_driver_redshift
               ${PGWIRE_DRIVER_SOURCES}
               redshift_csv_writer.cc
               redshift_staged_arrow_copy.cc
+              redshift_staged_arrow_stream_copy.cc
               redshift_staged_copy.cc
               redshift_staged_copy_coordinator.cc
               OUTPUTS
@@ -132,10 +133,12 @@ if(ADBC_BUILD_TESTS)
                 ../pgwire/redshift_driver_test.cc
                 ../pgwire/redshift_csv_writer_test.cc
                 ../pgwire/redshift_staged_arrow_copy_test.cc
+                ../pgwire/redshift_staged_arrow_stream_copy_test.cc
                 ../pgwire/redshift_staged_copy_test.cc
                 ../pgwire/redshift_staged_copy_coordinator_test.cc
                 redshift_csv_writer.cc
                 redshift_staged_arrow_copy.cc
+                redshift_staged_arrow_stream_copy.cc
                 redshift_staged_copy.cc
                 redshift_staged_copy_coordinator.cc
                 EXTRA_LINK_LIBS

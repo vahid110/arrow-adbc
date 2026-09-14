@@ -430,11 +430,14 @@ An AWS-free Redshift-private Arrow-to-CSV writer now serializes only non-null
 INT32, INT64, and validated UTF-8 strings, with an exact ordered field match
 and an 8 MiB payload cap plus a conservative 4,000,000-byte serialized row cap
 below Redshift's documented 4 MB COPY row limit. It rejects literal `\\N`
-pending a live check of quoted null-marker behavior. Before enabling staged
-ingestion, qualify null
-versus empty string and the remaining Arrow type mappings, an optional S3
-adapter with short-lived credentials, an explicit transaction boundary, and
-exact cleanup. AWS requires `s3:GetObject` for
+pending a live check of quoted null-marker behavior. A separate, private
+ArrowArrayStream preflight combines at most 128 batches into one bounded CSV
+payload, validates even empty batches, and releases the stream before calling
+the existing coordinator once. Neither adapter is selected by `ExecuteIngest`.
+Before enabling staged ingestion, qualify null versus empty string and the
+remaining Arrow type mappings, an optional S3 adapter with short-lived
+credentials, an explicit transaction boundary, and exact cleanup. AWS requires
+`s3:GetObject` for
 [`HeadObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)
 and in addition to `s3:DeleteObject` for an
 [ETag-matched conditional `DeleteObject`](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-deletes.html).
@@ -480,7 +483,9 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Thirteen
+the CSV buffer. A bounded multi-batch stream preflight now rejects malformed
+or oversized input before any object-store call; none of these private seams
+is selected by the active driver ingest path. Thirteen
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -497,6 +502,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Added a Redshift-private, AWS-free multi-batch stream preflight.
+  It moves and releases the input stream, validates empty and nonempty batches,
+  caps the aggregate CSV at 8 MiB and the batch count at 128, then calls the
+  existing exact-object coordinator only after the entire stream succeeds.
+  Seven new tests cover two-batch exact output and once-only COPY, later NULL,
+  malformed empty batch, stream-read failure, aggregate overflow, empty or
+  excessive batch streams, and invalid callback handles; failed preflights
+  make zero store/COPY calls. CMake shared/static builds and all 49 Redshift
+  artifact tests pass under ASan/UBSan. Meson source/test lists are kept in
+  parity but its executable was unavailable locally; the AWS-free CI gate is
+  still pending. No S3 adapter, IAM change, active ingest selection, or live
+  Redshift support claim follows.
 - 2026-09-14: The all-empty-string CSV regression head passed the
   [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34794342952)
   and [seven-platform development archive plus checksum verification](https://github.com/vahid110/arrow-adbc/actions/runs/34794351261).
