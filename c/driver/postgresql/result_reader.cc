@@ -249,10 +249,24 @@ Status PqResultArrayReader::ToArrayStream(int64_t* affected_rows,
 }
 
 Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
+  auto fail_bind = [&](Status status) {
+    if (bind_stream_->has_tz_field && bind_stream_->autocommit &&
+        bind_stream_->RollbackTimezoneTransactionIfOwned(conn_).ok()) {
+      // The transaction (and its prior row effects) was discarded. Do not let a
+      // later get_next() skip the failed row and run outside that transaction.
+      bind_stream_.reset();
+      if (affected_rows != nullptr) *affected_rows = 0;
+    }
+    return status;
+  };
+
   // Keep pulling from the bind stream and executing as long as
   // we receive results with zero rows.
   do {
-    UNWRAP_STATUS(bind_stream_->EnsureNextRow());
+    Status next_status = bind_stream_->EnsureNextRow();
+    if (!next_status.ok()) {
+      return fail_bind(std::move(next_status));
+    }
 
     if (!bind_stream_->current->release) {
       UNWRAP_STATUS(bind_stream_->Cleanup(conn_));
@@ -261,8 +275,11 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
     }
 
     adbc::driver::pgwire::UniqueResult result;
-    UNWRAP_STATUS(bind_stream_->BindAndExecuteCurrentRow(
-        conn_, &result, /*result_format*/ kPgBinaryFormat));
+    Status execute_status = bind_stream_->BindAndExecuteCurrentRow(
+        conn_, &result, /*result_format*/ kPgBinaryFormat);
+    if (!execute_status.ok()) {
+      return fail_bind(std::move(execute_status));
+    }
     helper_.SetResult(result.release());
     if (affected_rows) {
       (*affected_rows) += helper_.AffectedRows();
