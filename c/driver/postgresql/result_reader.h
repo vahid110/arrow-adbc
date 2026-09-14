@@ -34,6 +34,8 @@
 
 namespace adbcpq {
 
+class PostgresConnection;
+
 class PqResultArrayReader {
  public:
   PqResultArrayReader(PGconn* conn, std::shared_ptr<PostgresTypeResolver> type_resolver,
@@ -46,12 +48,20 @@ class PqResultArrayReader {
     error_ = ADBC_ERROR_INIT;
   }
 
-  ~PqResultArrayReader() { ResetErrors(); }
+  ~PqResultArrayReader();
 
   // Ensure the reader knows what the autocommit status was on creation. This is used
   // so that the temporary timezone setting required for parameter binding can be wrapped
   // in a transaction (or not) accordingly.
   void SetAutocommit(bool autocommit) { autocommit_ = autocommit; }
+
+  // The Arrow stream can outlive its ADBC connection. Keep only a weak owner
+  // so release/get_next can check whether libpq is still usable.
+  void SetConnection(const std::shared_ptr<PostgresConnection>& connection,
+                     std::shared_ptr<void> lease) {
+    connection_ = connection;
+    bound_stream_lease_ = std::move(lease);
+  }
 
   void SetBind(struct ArrowArrayStream* stream) {
     bind_stream_ = std::make_unique<BindStream>();
@@ -72,6 +82,8 @@ class PqResultArrayReader {
 
  private:
   PGconn* conn_;
+  std::weak_ptr<PostgresConnection> connection_;
+  std::shared_ptr<void> bound_stream_lease_;
   PqResultHelper helper_;
   std::unique_ptr<BindStream> bind_stream_;
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
@@ -84,17 +96,22 @@ class PqResultArrayReader {
 
   explicit PqResultArrayReader(PqResultArrayReader* other)
       : conn_(other->conn_),
+        connection_(std::move(other->connection_)),
+        bound_stream_lease_(std::move(other->bound_stream_lease_)),
         helper_(std::move(other->helper_)),
         bind_stream_(std::move(other->bind_stream_)),
         type_resolver_(std::move(other->type_resolver_)),
         field_readers_(std::move(other->field_readers_)),
-        schema_(std::move(other->schema_)) {
+        schema_(std::move(other->schema_)),
+        autocommit_(other->autocommit_),
+        vendor_name_(std::move(other->vendor_name_)) {
     ArrowErrorInit(&na_error_);
     error_ = ADBC_ERROR_INIT;
   }
 
   Status BindNextAndExecute(int64_t* affected_rows);
   Status ExecuteAll(int64_t* affected_rows);
+  bool IsConnectionLive() const;
 
   void ResetErrors() {
     ArrowErrorInit(&na_error_);

@@ -593,8 +593,15 @@ AdbcStatusCode PostgresStatement::ResolveCopyTargetTypes(
 AdbcStatusCode PostgresStatement::ExecuteBind(struct ArrowArrayStream* stream,
                                               int64_t* rows_affected,
                                               struct AdbcError* error) {
+  auto lease = std::make_shared<int>(0);
+  if (!connection_->TryClaimBoundStream(lease)) {
+    InternalAdbcSetError(error,
+                         "[libpq] Release the bound result stream before another query");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
   reader.SetAutocommit(connection_->autocommit());
+  reader.SetConnection(connection_, std::move(lease));
   reader.SetBind(&bind_);
   reader.SetVendorName(connection_->VendorName());
   RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));
@@ -604,6 +611,10 @@ AdbcStatusCode PostgresStatement::ExecuteBind(struct ArrowArrayStream* stream,
 AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
                                                int64_t* rows_affected,
                                                struct AdbcError* error) {
+  if (!connection_->conn()) {
+    InternalAdbcSetError(error, "[libpq] Connection was released");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   ClearResult();
 
   // Use a dedicated path to handle bulk ingest
@@ -679,6 +690,11 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
 
 AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
                                                 struct AdbcError* error) {
+  if (!connection_->conn() || connection_->HasActiveBoundStream()) {
+    InternalAdbcSetError(
+        error, "[libpq] Connection is closed or has an active bound result stream");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   ClearResult();
   if (query_.empty()) {
     InternalAdbcSetError(error, "%s", "[libpq] Must SetSqlQuery before ExecuteQuery");
@@ -884,6 +900,11 @@ AdbcStatusCode PostgresStatement::GetOptionInt(const char* key, int64_t* value,
 
 AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
                                                      struct AdbcError* error) {
+  if (!connection_->conn() || connection_->HasActiveBoundStream()) {
+    InternalAdbcSetError(
+        error, "[libpq] Connection is closed or has an active bound result stream");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (query_.empty()) {
     InternalAdbcSetError(error, "[libpq] Must SetSqlQuery before GetParameterSchema");
     return ADBC_STATUS_INVALID_STATE;

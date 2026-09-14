@@ -2274,6 +2274,192 @@ TEST_F(PostgresStatementTest, BindArrowErrorRestoresExplicitTransactionTimezone)
   }
 }
 
+TEST_F(PostgresStatementTest, EarlyBindResultReleaseRollsBackOwnedTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueResult setup(
+      PQexec(pg_conn,
+             "SET TIME ZONE 'Europe/Berlin'; CREATE TEMP TABLE adbc_tz_early_release "
+             "(ts TIMESTAMPTZ, quotient INTEGER)"));
+  ASSERT_EQ(PQresultStatus(setup.get()), PGRES_COMMAND_OK);
+
+  for (bool read_first : {false, true}) {
+    SCOPED_TRACE(read_first ? "release after first batch" : "release before first batch");
+    {
+      adbc_validation::Handle<struct AdbcStatement> bound_statement;
+      ASSERT_THAT(AdbcStatementNew(&connection, &bound_statement.value, &error),
+                  IsOkStatus(&error));
+      ASSERT_THAT(AdbcStatementSetSqlQuery(
+                      &bound_statement.value,
+                      "INSERT INTO pg_temp.adbc_tz_early_release VALUES "
+                      "($1::timestamptz, 10 / $2::integer) RETURNING quotient",
+                      &error),
+                  IsOkStatus(&error));
+      nanoarrow::UniqueSchema bind_schema;
+      nanoarrow::UniqueArray bind_batch;
+      ASSERT_THAT(MakeTimezoneAndDivisorBind(bind_schema.get(), bind_batch.get()),
+                  adbc_validation::IsOkErrno());
+      ASSERT_THAT(AdbcStatementBind(&bound_statement.value, bind_batch.get(),
+                                    bind_schema.get(), &error),
+                  IsOkStatus(&error));
+      adbc_validation::StreamReader reader;
+      ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value, &reader.stream.value,
+                                            nullptr, &error),
+                  IsOkStatus(&error));
+      EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+      if (read_first) {
+        ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+        ASSERT_NO_FATAL_FAILURE(reader.Next());
+        ASSERT_EQ(reader.array->length, 1);
+      }
+    }
+
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+    adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+    ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+    adbc::driver::pgwire::UniqueResult count(
+        PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_early_release"));
+    ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "0");
+  }
+}
+
+TEST_F(PostgresStatementTest, EarlyBindResultReleaseKeepsExplicitTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueResult setup(
+      PQexec(pg_conn,
+             "SET TIME ZONE 'Europe/Berlin'; CREATE TEMP TABLE adbc_tz_early_explicit "
+             "(ts TIMESTAMPTZ, quotient INTEGER)"));
+  ASSERT_EQ(PQresultStatus(setup.get()), PGRES_COMMAND_OK);
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  {
+    adbc_validation::Handle<struct AdbcStatement> bound_statement;
+    ASSERT_THAT(AdbcStatementNew(&connection, &bound_statement.value, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(&bound_statement.value,
+                                 "INSERT INTO pg_temp.adbc_tz_early_explicit VALUES "
+                                 "($1::timestamptz, 10 / $2::integer) RETURNING quotient",
+                                 &error),
+        IsOkStatus(&error));
+    nanoarrow::UniqueSchema bind_schema;
+    nanoarrow::UniqueArray bind_batch;
+    ASSERT_THAT(MakeTimezoneAndDivisorBind(bind_schema.get(), bind_batch.get()),
+                adbc_validation::IsOkErrno());
+    ASSERT_THAT(AdbcStatementBind(&bound_statement.value, bind_batch.get(),
+                                  bind_schema.get(), &error),
+                IsOkStatus(&error));
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value, &reader.stream.value,
+                                          nullptr, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+
+    ASSERT_THAT(AdbcConnectionCommit(&connection, &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    ASSERT_THAT(AdbcConnectionRollback(&connection, &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    adbc_validation::Handle<struct AdbcStatement> another_statement;
+    ASSERT_THAT(AdbcStatementNew(&connection, &another_statement.value, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetSqlQuery(&another_statement.value, "SELECT 1", &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementExecuteQuery(&another_statement.value, nullptr, nullptr, &error),
+        IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    nanoarrow::UniqueSchema blocked_schema;
+    ASSERT_THAT(AdbcStatementExecuteSchema(&another_statement.value, blocked_schema.get(),
+                                           &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    ASSERT_THAT(AdbcStatementGetParameterSchema(&another_statement.value,
+                                                blocked_schema.get(), &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                        ADBC_OPTION_VALUE_ENABLED, &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+    char schema_name[128];
+    size_t schema_name_length = sizeof(schema_name);
+    ASSERT_THAT(
+        AdbcConnectionGetOption(&connection, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA,
+                                schema_name, &schema_name_length, &error),
+        IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+  }
+
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+  adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+  ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+  EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+  adbc::driver::pgwire::UniqueResult count(
+      PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_early_explicit"));
+  ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK);
+  EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "1");
+  ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+  adbc::driver::pgwire::UniqueResult rolled_back(
+      PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_early_explicit"));
+  ASSERT_EQ(PQresultStatus(rolled_back.get()), PGRES_TUPLES_OK);
+  EXPECT_STREQ(PQgetvalue(rolled_back.get(), 0, 0), "0");
+}
+
+TEST_F(PostgresStatementTest, BoundResultAfterConnectionReleaseIsSafe) {
+  adbc_validation::Handle<struct AdbcConnection> detached_connection;
+  ASSERT_THAT(AdbcConnectionNew(&detached_connection.value, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionInit(&detached_connection.value, &database, &error),
+              IsOkStatus(&error));
+  adbc_validation::Handle<struct AdbcStatement> bound_statement;
+  ASSERT_THAT(
+      AdbcStatementNew(&detached_connection.value, &bound_statement.value, &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&bound_statement.value,
+                                       "SELECT $1::timestamptz, $2::integer", &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema bind_schema;
+  nanoarrow::UniqueArray bind_batch;
+  ASSERT_THAT(MakeTimezoneAndDivisorBind(bind_schema.get(), bind_batch.get()),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&bound_statement.value, bind_batch.get(),
+                                bind_schema.get(), &error),
+              IsOkStatus(&error));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value, &reader.stream.value,
+                                        nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionRelease(&detached_connection.value, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(reader.MaybeNext(), EINVAL);
+  EXPECT_THAT(reader.stream->get_last_error(&reader.stream.value),
+              ::testing::HasSubstr("Connection was released"));
+  // The reader is released before the statement, and must not access PGconn.
+}
+
 TEST_F(PostgresStatementTest, SqlIngestJson) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 

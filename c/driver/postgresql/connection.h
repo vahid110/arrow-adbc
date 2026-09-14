@@ -84,6 +84,12 @@ class PostgresConnection {
   }
   bool autocommit() const { return autocommit_; }
   bool use_copy() const { return use_copy_; }
+  bool HasActiveBoundStream() const { return !active_bound_stream_.expired(); }
+  bool TryClaimBoundStream(const std::shared_ptr<void>& lease) {
+    if (HasActiveBoundStream()) return false;
+    active_bound_stream_ = lease;
+    return true;
+  }
   std::string_view VendorName();
   const std::array<int, 3>& VendorVersion();
   const adbc::driver::pgwire::BackendProfile& backend_profile() const;
@@ -99,6 +105,7 @@ class PostgresConnection {
   adbc::driver::pgwire::UniqueCancel cancel_;
   bool autocommit_;
   bool use_copy_;
+  std::weak_ptr<void> active_bound_stream_;
   std::vector<std::pair<std::string, std::string>> post_init_options_;
 };
 }  // namespace adbcpq

@@ -25,15 +25,39 @@
 #include <memory>
 #include <utility>
 
+#include "connection.h"
 #include "copy/reader.h"
 #include "driver/framework/status.h"
 
 namespace adbcpq {
 
+PqResultArrayReader::~PqResultArrayReader() {
+  if (bind_stream_ && bind_stream_->has_tz_field && IsConnectionLive()) {
+    if (bind_stream_->autocommit) {
+      // Releasing an unfinished stream must not commit rows already executed.
+      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+    } else if (PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
+      // The caller still owns its healthy explicit transaction.
+      (void)bind_stream_->Cleanup(conn_);
+    }
+  }
+  ResetErrors();
+}
+
+bool PqResultArrayReader::IsConnectionLive() const {
+  auto connection = connection_.lock();
+  return conn_ != nullptr && connection && connection->conn() == conn_;
+}
+
 int PqResultArrayReader::GetSchema(struct ArrowSchema* out) {
   ResetErrors();
 
   if (schema_->release == nullptr) {
+    if (bind_stream_ && !IsConnectionLive()) {
+      Status::InvalidState("[libpq] Connection was released before reading bound results")
+          .ToAdbc(&error_);
+      return EINVAL;
+    }
     Status status = Initialize(nullptr);
     if (!status.ok()) {
       status.ToAdbc(&error_);
@@ -46,6 +70,12 @@ int PqResultArrayReader::GetSchema(struct ArrowSchema* out) {
 
 int PqResultArrayReader::GetNext(struct ArrowArray* out) {
   ResetErrors();
+
+  if (bind_stream_ && !IsConnectionLive()) {
+    Status::InvalidState("[libpq] Connection was released before reading bound results")
+        .ToAdbc(&error_);
+    return EINVAL;
+  }
 
   Status status;
   if (schema_->release == nullptr) {
@@ -255,6 +285,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       // The transaction (and its prior row effects) was discarded. Do not let a
       // later get_next() skip the failed row and run outside that transaction.
       bind_stream_.reset();
+      bound_stream_lease_.reset();
       if (affected_rows != nullptr) *affected_rows = 0;
     } else if (bind_stream_->has_tz_field && !bind_stream_->autocommit &&
                PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
@@ -263,6 +294,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       // back that transaction. A failed stream must not retry the bind.
       (void)bind_stream_->Cleanup(conn_);
       bind_stream_.reset();
+      bound_stream_lease_.reset();
     }
     return status;
   };
@@ -278,6 +310,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
     if (!bind_stream_->current->release) {
       UNWRAP_STATUS(bind_stream_->Cleanup(conn_));
       bind_stream_.reset();
+      bound_stream_lease_.reset();
       return Status::Ok();
     }
 

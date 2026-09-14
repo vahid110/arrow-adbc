@@ -297,6 +297,11 @@ AdbcStatusCode PostgresConnection::Cancel(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
+  if (HasActiveBoundStream()) {
+    InternalAdbcSetError(error,
+                         "[libpq] Release the bound result stream before committing");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (autocommit_) {
     InternalAdbcSetError(error, "%s", "[libpq] Cannot commit when autocommit is enabled");
     return ADBC_STATUS_INVALID_STATE;
@@ -319,6 +324,15 @@ AdbcStatusCode PostgresConnection::Commit(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::EnsureTransaction(struct AdbcError* error) {
+  if (!conn_) {
+    InternalAdbcSetError(error, "[libpq] Connection was released");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  if (HasActiveBoundStream()) {
+    InternalAdbcSetError(error,
+                         "[libpq] Release the bound result stream before another query");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (autocommit_) {
     return ADBC_STATUS_OK;
   }
@@ -463,6 +477,11 @@ AdbcStatusCode PostgresConnection::GetOption(const char* option, char* value,
   if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
     output = PQdb(conn_);
   } else if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0) {
+    if (HasActiveBoundStream()) {
+      InternalAdbcSetError(
+          error, "[libpq] Release the bound result stream before another query");
+      return ADBC_STATUS_INVALID_STATE;
+    }
     PqResultHelper result_helper{conn_, "SELECT CURRENT_SCHEMA()"};
     RAISE_STATUS(error, result_helper.Execute());
     auto it = result_helper.begin();
@@ -948,6 +967,10 @@ AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connecti
 
 AdbcStatusCode PostgresConnection::Init(struct AdbcDatabase* database,
                                         struct AdbcError* error) {
+  if (conn_ || HasActiveBoundStream()) {
+    InternalAdbcSetError(error, "[libpq] Connection is already initialized or in use");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (!database || !database->private_data) {
     InternalAdbcSetError(error, "[libpq] Must provide an initialized AdbcDatabase");
     return ADBC_STATUS_INVALID_ARGUMENT;
@@ -984,6 +1007,11 @@ AdbcStatusCode PostgresConnection::Release(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresConnection::Rollback(struct AdbcError* error) {
+  if (HasActiveBoundStream()) {
+    InternalAdbcSetError(error,
+                         "[libpq] Release the bound result stream before rollback");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (autocommit_) {
     InternalAdbcSetError(error, "%s",
                          "[libpq] Cannot rollback when autocommit is enabled");
@@ -1009,6 +1037,11 @@ AdbcStatusCode PostgresConnection::Rollback(struct AdbcError* error) {
 
 AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
                                              struct AdbcError* error) {
+  if (conn_ && HasActiveBoundStream()) {
+    InternalAdbcSetError(
+        error, "[libpq] Release the bound result stream before changing options");
+    return ADBC_STATUS_INVALID_STATE;
+  }
   if (std::strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     bool autocommit = true;
     if (std::strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {
