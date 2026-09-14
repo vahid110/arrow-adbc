@@ -34,6 +34,13 @@
 namespace adbcpq {
 class PostgresDatabase;
 class PostgresConnection {
+  enum class UnusableReason {
+    kNone,
+    kBoundStreamCleanup,
+    kReplaceIngestDdlFinalization,
+    kUnknownTransactionState,
+  };
+
  public:
   PostgresConnection()
       : database_(nullptr),
@@ -41,7 +48,7 @@ class PostgresConnection {
         cancel_(nullptr),
         autocommit_(true),
         use_copy_(true),
-        bound_stream_cleanup_failed_(false) {}
+        unusable_reason_(UnusableReason::kNone) {}
 
   AdbcStatusCode Cancel(struct AdbcError* error);
   AdbcStatusCode Commit(struct AdbcError* error);
@@ -85,11 +92,22 @@ class PostgresConnection {
   }
   bool autocommit() const { return autocommit_; }
   bool use_copy() const { return use_copy_; }
-  void MarkBoundStreamCleanupFailed() { bound_stream_cleanup_failed_ = true; }
-  bool bound_stream_cleanup_failed() const { return bound_stream_cleanup_failed_; }
+  void MarkBoundStreamCleanupFailed() {
+    MarkUnusable(UnusableReason::kBoundStreamCleanup);
+  }
+  bool bound_stream_cleanup_failed() const {
+    return unusable_reason_ == UnusableReason::kBoundStreamCleanup;
+  }
+  void MarkReplaceIngestDdlFinalizationFailed() {
+    MarkUnusable(UnusableReason::kReplaceIngestDdlFinalization);
+  }
+  void MarkUnknownTransactionState() {
+    MarkUnusable(UnusableReason::kUnknownTransactionState);
+  }
+  bool unusable() const { return unusable_reason_ != UnusableReason::kNone; }
   bool HasActiveBoundStream() const { return !active_bound_stream_.expired(); }
   bool TryClaimBoundStream(const std::shared_ptr<void>& lease) {
-    if (bound_stream_cleanup_failed_ || HasActiveBoundStream()) return false;
+    if (unusable() || HasActiveBoundStream()) return false;
     active_bound_stream_ = lease;
     return true;
   }
@@ -101,7 +119,10 @@ class PostgresConnection {
   friend class PostgresStatement;
 
   AdbcStatusCode EnsureTransaction(struct AdbcError* error);
-  AdbcStatusCode CheckBoundStreamCleanupFailed(struct AdbcError* error) const;
+  AdbcStatusCode CheckConnectionUsable(struct AdbcError* error) const;
+  void MarkUnusable(UnusableReason reason) {
+    if (!unusable()) unusable_reason_ = reason;
+  }
 
   std::shared_ptr<PostgresDatabase> database_;
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
@@ -109,7 +130,7 @@ class PostgresConnection {
   adbc::driver::pgwire::UniqueCancel cancel_;
   bool autocommit_;
   bool use_copy_;
-  bool bound_stream_cleanup_failed_;
+  UnusableReason unusable_reason_;
   std::weak_ptr<void> active_bound_stream_;
   std::vector<std::pair<std::string, std::string>> post_init_options_;
 };

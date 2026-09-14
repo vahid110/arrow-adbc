@@ -1645,6 +1645,129 @@ TEST_F(PostgresStatementTest, SqlIngestReplaceRejectsDuplicateColumnsBeforeDrop)
       adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
 }
 
+TEST_F(PostgresStatementTest, SqlIngestReplaceCreateErrorPreservesTarget) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TEMP TABLE adbc_replace_create_guard (id BIGINT)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "INSERT INTO adbc_replace_create_guard VALUES (42)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  // PostgreSQL reserves ctid as a system column, even when quoted. This passes
+  // Arrow preflight but makes CREATE fail after the replacement DROP.
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "ctid"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArrayStream bind;
+  nanoarrow::EmptyArrayStream(schema.get()).ToArrayStream(bind.get());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_replace_create_guard", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, bind.get(), &error),
+              IsOkStatus(&error));
+  EXPECT_NE(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_OK);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("Failed to create table"));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT id FROM pg_temp.adbc_replace_create_guard", &error),
+              IsOkStatus(&error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+}
+
+TEST_F(PostgresStatementTest, SqlIngestReplaceDoesNotClaimRawTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TEMP TABLE adbc_replace_raw_txn (id BIGINT)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "INSERT INTO adbc_replace_raw_txn VALUES (42)", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  adbc::driver::pgwire::UniqueResult begin(PQexec(pg_conn, "BEGIN"));
+  ASSERT_EQ(PQresultStatus(begin.get()), PGRES_COMMAND_OK);
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArrayStream bind;
+  nanoarrow::EmptyArrayStream(schema.get()).ToArrayStream(bind.get());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_replace_raw_txn", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, bind.get(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT id FROM pg_temp.adbc_replace_raw_txn", &error),
+              IsOkStatus(&error));
+  {
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                          &reader.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    ASSERT_NO_FATAL_FAILURE(
+        adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+  }
+  adbc::driver::pgwire::UniqueResult rollback(PQexec(pg_conn, "ROLLBACK"));
+  ASSERT_EQ(PQresultStatus(rollback.get()), PGRES_COMMAND_OK);
+}
+
 TEST_F(PostgresStatementTest, SqlIngestReplaceRejectsUnsupportedTypeBeforeDrop) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementSetSqlQuery(

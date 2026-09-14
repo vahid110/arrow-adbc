@@ -58,6 +58,95 @@
 
 namespace adbcpq {
 
+namespace {
+
+// Only PostgreSQL autocommit replace ingest owns this short DDL transaction.
+// Redshift and caller-owned transactions retain their existing behavior.
+class ScopedReplaceIngestDdlTransaction {
+ public:
+  ScopedReplaceIngestDdlTransaction(PostgresConnection* connection, bool enabled)
+      : connection_(connection), conn_(connection->conn()), enabled_(enabled) {}
+
+  ~ScopedReplaceIngestDdlTransaction() {
+    if (!open_) return;
+    // This is a last-resort cleanup for an unexpected exit. Explicit error
+    // paths call Rollback() so their original SQL error can be returned.
+    open_ = false;
+    adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "ROLLBACK"));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK ||
+        std::strcmp(PQcmdStatus(result.get()), "ROLLBACK") != 0 ||
+        PQtransactionStatus(conn_) != PQTRANS_IDLE) {
+      connection_->MarkReplaceIngestDdlFinalizationFailed();
+    }
+  }
+
+  Status Begin() {
+    if (!enabled_) return Status::Ok();
+    // An ADBC autocommit connection may still have a caller's raw-SQL BEGIN.
+    // Never claim or roll back that transaction.
+    const PGTransactionStatusType txn_status = PQtransactionStatus(conn_);
+    if (txn_status == PQTRANS_UNKNOWN) {
+      connection_->MarkUnknownTransactionState();
+      return Status::IO(
+          "[libpq] Cannot determine transaction state before replace-ingest DDL");
+    }
+    if (txn_status != PQTRANS_IDLE) {
+      return Status::InvalidState(
+          "[libpq] Cannot replace table while a transaction is already active");
+    }
+
+    adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "BEGIN"));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+      Status failure = MakeStatus(
+          result.get(), "[libpq] Failed to begin replace-ingest DDL transaction: {}",
+          PQerrorMessage(conn_));
+      if (PQtransactionStatus(conn_) != PQTRANS_IDLE) {
+        connection_->MarkReplaceIngestDdlFinalizationFailed();
+      }
+      return failure;
+    }
+    if (std::strcmp(PQcmdStatus(result.get()), "BEGIN") != 0 ||
+        PQtransactionStatus(conn_) != PQTRANS_INTRANS) {
+      connection_->MarkReplaceIngestDdlFinalizationFailed();
+      return Status::IO("[libpq] Replace-ingest DDL transaction did not begin cleanly");
+    }
+    open_ = true;
+    return Status::Ok();
+  }
+
+  Status Rollback() { return Finalize("ROLLBACK"); }
+  Status Commit() { return Finalize("COMMIT"); }
+
+ private:
+  Status Finalize(const char* command) {
+    if (!open_) return Status::Ok();
+    // Disarm before issuing SQL: a failed COMMIT can have an uncertain outcome,
+    // and must not prompt an accidental second rollback from the destructor.
+    open_ = false;
+    adbc::driver::pgwire::UniqueResult result(PQexec(conn_, command));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+      connection_->MarkReplaceIngestDdlFinalizationFailed();
+      return MakeStatus(result.get(), "[libpq] Failed to finalize replace-ingest DDL: {}",
+                        PQerrorMessage(conn_));
+    }
+    if (std::strcmp(PQcmdStatus(result.get()), command) != 0 ||
+        PQtransactionStatus(conn_) != PQTRANS_IDLE) {
+      connection_->MarkReplaceIngestDdlFinalizationFailed();
+      return Status::IO(
+          "[libpq] Replace-ingest DDL finalization had an unexpected "
+          "command tag or transaction state");
+    }
+    return Status::Ok();
+  }
+
+  PostgresConnection* connection_;
+  PGconn* conn_;
+  bool enabled_;
+  bool open_ = false;
+};
+
+}  // namespace
+
 int TupleReader::GetSchema(struct ArrowSchema* out) {
   assert(copy_reader_ != nullptr);
   ArrowErrorInit(&na_error_);
@@ -528,6 +617,13 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
     return ADBC_STATUS_OK;
   }
 
+  create += ")";
+  const bool own_replace_ddl =
+      ingest_.mode == IngestMode::kReplace && connection_->autocommit() &&
+      connection_->backend_profile().transactions.transactional_ddl;
+  ScopedReplaceIngestDdlTransaction ddl_transaction(connection_.get(), own_replace_ddl);
+  RAISE_STATUS(error, ddl_transaction.Begin());
+
   if (ingest_.mode == IngestMode::kReplace) {
     std::string drop = "DROP TABLE IF EXISTS " + *escaped_table;
     adbc::driver::pgwire::UniqueResult result(
@@ -536,24 +632,27 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
                      /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
                      /*resultFormat=*/1 /*(binary)*/));
     if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-      return MakeStatus(result.get(), "[libpq] Failed to drop table: {}\nQuery was: {}",
-                        PQerrorMessage(conn), drop)
-          .ToAdbc(error);
+      Status failure =
+          MakeStatus(result.get(), "[libpq] Failed to drop table: {}\nQuery was: {}",
+                     PQerrorMessage(conn), drop);
+      (void)ddl_transaction.Rollback();
+      return failure.ToAdbc(error);
     }
   }
 
-  create += ")";
-  InternalAdbcSetError(error, "%s%s", "[libpq] ", create.c_str());
   adbc::driver::pgwire::UniqueResult result(
       PQexecParams(conn, create.c_str(), /*nParams=*/0,
                    /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
                    /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
                    /*resultFormat=*/1 /*(binary)*/));
   if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-    return MakeStatus(result.get(), "[libpq] Failed to create table: {}\nQuery was: {}",
-                      PQerrorMessage(conn), create)
-        .ToAdbc(error);
+    Status failure =
+        MakeStatus(result.get(), "[libpq] Failed to create table: {}\nQuery was: {}",
+                   PQerrorMessage(conn), create);
+    (void)ddl_transaction.Rollback();
+    return failure.ToAdbc(error);
   }
+  RAISE_STATUS(error, ddl_transaction.Commit());
   if (ingest_.mode == IngestMode::kCreateAppend) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
@@ -708,7 +807,7 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
 
 AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
                                                 struct AdbcError* error) {
-  RAISE_ADBC(connection_->CheckBoundStreamCleanupFailed(error));
+  RAISE_ADBC(connection_->CheckConnectionUsable(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
         error, "[libpq] Connection is closed or has an active bound result stream");
@@ -919,7 +1018,7 @@ AdbcStatusCode PostgresStatement::GetOptionInt(const char* key, int64_t* value,
 
 AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
                                                      struct AdbcError* error) {
-  RAISE_ADBC(connection_->CheckBoundStreamCleanupFailed(error));
+  RAISE_ADBC(connection_->CheckConnectionUsable(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
         error, "[libpq] Connection is closed or has an active bound result stream");
