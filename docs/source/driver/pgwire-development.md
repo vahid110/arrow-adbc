@@ -132,15 +132,18 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
       zero fields, duplicate names, SQL `CREATE` errors, and later transfer
       failures. Name and Arrow type preflight are narrow completed steps.
-- [ ] Complete timezone-aware bound-query cleanup for output-schema/decoding
-      failures, including post-export Arrow errors and cleanup failures.
+- [ ] Complete timezone-aware bound-query cleanup for output-schema failures,
+      cleanup SQL failures, and concurrent connection use. Post-export decoder
+      errors now terminalize the bound stream and clean up the timezone state.
       Timezone-setup, typed-prepare, and bound-row SQL errors have scoped
       autocommit rollback; synchronous bind/writer errors in healthy explicit
       transactions restore the prior timezone without committing. Early bound
       stream release now has best-effort, connection-lifetime-guarded cleanup
       and a per-connection active-stream lease that rejects competing ADBC SQL
       and transaction changes. Do not treat it as a guarantee under concurrent
-      connection use or failed rollback/restore SQL.
+      connection use or failed rollback/restore SQL. A failed cleanup can leave
+      transaction/session state uncertain; add a connection-unusable guard
+      before treating these paths as production-safe.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -514,6 +517,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Post-export Arrow decoding errors now finalize a timezone-aware
+  bound stream immediately: discard remaining bound rows, clear the current
+  result, and roll back only a driver-owned autocommit transaction; a healthy
+  explicit transaction keeps its work and has its prior timezone restored.
+  A PostgreSQL 17 test executes one `INSERT ... RETURNING` row whose interval
+  overflows Arrow decoding, confirms the original decoder error, a terminal
+  stream, zero committed rows in autocommit, and caller-controlled rollback
+  in explicit mode. Both full PostgreSQL C++ suites, three focused ASan/UBSan
+  tests, shared/static PostgreSQL and Redshift builds, and the AWS-free
+  Redshift artifact suite passed locally. Cross-platform CI for this narrow
+  change is pending; output-schema and cleanup-SQL failures remain separate
+  gaps. The disposable PostgreSQL cluster was stopped and removed.
 - 2026-09-14: An unfinished bound result stream now holds a weak reference to
   its ADBC connection and a per-connection active-stream lease. On ordinary
   early release it rolls back a driver-owned autocommit transaction, or
@@ -527,10 +542,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
   ownership and competing-operation rejection, and connection close before
   stream release. Both full PostgreSQL C++ suites, three focused ASan/UBSan
   tests, shared/static PostgreSQL and Redshift builds, and the AWS-free
-  Redshift artifact suite passed locally. Cross-platform CI for this
-  checkpoint is pending. Cleanup SQL failures, concurrent connection use,
-  and post-export decoder errors still need separate qualification. The
-  disposable PostgreSQL cluster was stopped and removed.
+  Redshift artifact suite passed locally. The
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34810102696)
+  passed with all AWS-backed jobs skipped. Cleanup SQL failures and concurrent
+  connection use still need separate qualification; post-export decoder errors
+  are addressed in the subsequent checkpoint above. The disposable
+  PostgreSQL cluster was stopped and removed. The same-head
+  [seven-platform development-package run](https://github.com/vahid110/arrow-adbc/actions/runs/34810116274)
+  passed all extracted-client archives and the final downloaded-checksum gate;
+  this is not a production release.
 - 2026-09-14: A synchronous Arrow/binary-writer bind error in a healthy
   explicit transaction now restores the caller's timezone, leaves that
   transaction open, and terminalizes the failed bind. A PostgreSQL 17 test
