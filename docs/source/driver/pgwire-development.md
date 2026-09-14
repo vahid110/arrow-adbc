@@ -497,6 +497,11 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: The all-empty-string CSV regression head passed the
+  [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34794342952)
+  and [seven-platform development archive plus checksum verification](https://github.com/vahid110/arrow-adbc/actions/runs/34794351261).
+  The Redshift Serverless and manual COPY jobs were explicitly skipped; these
+  results do not qualify staged `COPY` on AWS or a production package.
 - 2026-09-14: Added an AWS-free regression for an all-empty Arrow string
   column with a valid absent data buffer. The private Redshift CSV writer
   emits the exact quoted empty fields without pointer arithmetic on a null
