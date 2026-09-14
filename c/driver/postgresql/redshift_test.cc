@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -139,6 +140,108 @@ TEST(ParameterizedInsertTest, RollsBackWholeBindAcrossSqlBatches) {
       << PQerrorMessage(connection.get());
   ASSERT_EQ(PQntuples(count.get()), 1);
   EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "18");
+}
+
+TEST(ParameterizedInsertTest, RollsBackWhenStreamFailsAfterFirstSqlBatch) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (uri == nullptr) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_NE(connection, nullptr);
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK)
+      << PQerrorMessage(connection.get());
+  adbc::driver::pgwire::UniqueResult create(PQexec(
+      connection.get(),
+      "CREATE TEMP TABLE adbc_parameterized_insert_stream_error (id INTEGER NOT NULL)"));
+  ASSERT_NE(create, nullptr);
+  ASSERT_EQ(PQresultStatus(create.get()), PGRES_COMMAND_OK)
+      << PQerrorMessage(connection.get());
+  adbc::driver::pgwire::UniqueResult seed(PQexec(
+      connection.get(), "INSERT INTO adbc_parameterized_insert_stream_error VALUES (0)"));
+  ASSERT_NE(seed, nullptr);
+  ASSERT_EQ(PQresultStatus(seed.get()), PGRES_COMMAND_OK)
+      << PQerrorMessage(connection.get());
+
+  adbcpq::PostgresTypeResolver resolver;
+  ArrowError arrow_error;
+  ArrowErrorInit(&arrow_error);
+  ASSERT_EQ(resolver.Insert({23, "int4", "int4recv", 0, 0, 0}, &arrow_error),
+            NANOARROW_OK)
+      << ArrowErrorMessage(&arrow_error);
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_STRUCT), NANOARROW_OK);
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 1), NANOARROW_OK);
+  ASSERT_EQ(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32), NANOARROW_OK);
+  ASSERT_EQ(ArrowSchemaSetName(schema->children[0], "id"), NANOARROW_OK);
+  std::vector<std::optional<int32_t>> ids;
+  for (int32_t id = 1; id <= 16; ++id) ids.emplace_back(id);
+  nanoarrow::UniqueArray batch;
+  ASSERT_EQ(adbc_validation::MakeBatch<int32_t>(schema.get(), batch.get(), nullptr, ids),
+            NANOARROW_OK);
+  std::vector<ArrowArray> batches(1);
+  ArrowArrayMove(batch.get(), &batches[0]);
+  nanoarrow::UniqueArrayStream source;
+  adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+
+  struct FailingStreamState {
+    ArrowArrayStream* source;
+    PGconn* connection;
+    int next_calls = 0;
+    std::string count_before_failure;
+  } state{source.get(), connection.get(), 0, {}};
+  ArrowArrayStream failing_stream = {};
+  failing_stream.get_schema = [](ArrowArrayStream* stream, ArrowSchema* out) {
+    auto* state = static_cast<FailingStreamState*>(stream->private_data);
+    return state->source->get_schema(state->source, out);
+  };
+  failing_stream.get_next = [](ArrowArrayStream* stream, ArrowArray* out) {
+    auto* state = static_cast<FailingStreamState*>(stream->private_data);
+    if (state->next_calls++ == 0) {
+      return state->source->get_next(state->source, out);
+    }
+    // The first full batch has already reached PostgreSQL inside this transaction.
+    adbc::driver::pgwire::UniqueResult count(
+        PQexec(state->connection,
+               "SELECT COUNT(*) FROM adbc_parameterized_insert_stream_error"));
+    if (count != nullptr && PQresultStatus(count.get()) == PGRES_TUPLES_OK &&
+        PQntuples(count.get()) == 1) {
+      state->count_before_failure = PQgetvalue(count.get(), 0, 0);
+    }
+    out->release = nullptr;
+    return EIO;
+  };
+  failing_stream.get_last_error = [](ArrowArrayStream*) {
+    return "injected stream read failure";
+  };
+  failing_stream.release = [](ArrowArrayStream* stream) {
+    stream->release = nullptr;
+    stream->private_data = nullptr;
+  };
+  failing_stream.private_data = &state;
+
+  adbcpq::BindStream bind_stream;
+  bind_stream.SetBind(&failing_stream);
+  ASSERT_TRUE(bind_stream.Begin([] { return adbc::driver::Status::Ok(); }).ok());
+  int64_t rows_affected = -1;
+  adbc::driver::Status status = bind_stream.ExecutePreparedRows(
+      connection.get(), "\"adbc_parameterized_insert_stream_error\"", "\"id\"", resolver,
+      /*connection_autocommit=*/true, /*max_batch_rows=*/16, &rows_affected);
+  EXPECT_FALSE(status.ok());
+  EXPECT_EQ(state.next_calls, 2);
+  EXPECT_EQ(state.count_before_failure, "17");
+  EXPECT_EQ(rows_affected, 0);
+  EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_IDLE);
+
+  adbc::driver::pgwire::UniqueResult count(PQexec(
+      connection.get(), "SELECT COUNT(*) FROM adbc_parameterized_insert_stream_error"));
+  ASSERT_NE(count, nullptr);
+  ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK)
+      << PQerrorMessage(connection.get());
+  ASSERT_EQ(PQntuples(count.get()), 1);
+  EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "1");
 }
 
 TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {

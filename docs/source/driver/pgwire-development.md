@@ -502,6 +502,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Added a second AWS-free regression for the active parameterized
+  ingest helper: an Arrow stream read error after one successful 16-row SQL
+  batch must roll back the entire bind. The callback confirms 17 rows were
+  visible inside the transaction (one seed plus 16 inserted); afterward only
+  the seed remains, affected rows reset to zero, and the connection is idle
+  and reusable. Both focused cases passed against temporary local PostgreSQL
+  18, which was stopped and removed after testing. The direct helper test
+  exposed hidden `PqResultHelper` symbols in the Linux test link, so CMake and
+  Meson now compile that helper into the PostgreSQL test executable. The
+  [first AWS-free five-platform run](https://github.com/vahid110/arrow-adbc/actions/runs/34800116037)
+  failed to link on Linux; a corrected matrix is pending. No Redshift compute
+  was used.
 - 2026-09-14: Added an AWS-free, PostgreSQL-backed regression for the shared
   parameterized ingest helper. It inserts 18 rows across two Arrow batches,
   then verifies that a `23502` error in a second SQL batch after 16 valid rows
