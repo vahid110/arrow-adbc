@@ -391,6 +391,18 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
   PGconn* conn = connection_->conn();
   *has_copy_target_types = false;
 
+  // Validate the Arrow field names before replacement can drop an existing table.
+  // An ArrowSchema child may legitimately have a null name, but SQL columns may not.
+  for (int64_t i = 0; i < source_schema.n_children; ++i) {
+    if (source_schema.children == nullptr || source_schema.children[i] == nullptr ||
+        source_schema.children[i]->name == nullptr ||
+        source_schema.children[i]->name[0] == '\0') {
+      InternalAdbcSetError(
+          error, "[libpq] Bulk ingest column %" PRId64 " must have a nonempty name", i);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
   if (!ingest_.db_schema.empty() && ingest_.temporary) {
     InternalAdbcSetError(error, "[libpq] Cannot set both %s and %s",
                          ADBC_INGEST_OPTION_TARGET_DB_SCHEMA,
