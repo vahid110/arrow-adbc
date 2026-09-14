@@ -169,7 +169,12 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
 
     // Re-prepare with the actual parameter types
-    UNWRAP_STATUS(helper_.Prepare(bind_stream_->param_types));
+    Status prepare_status = helper_.Prepare(bind_stream_->param_types);
+    if (!prepare_status.ok()) {
+      // Preserve the preparation error even if rollback also fails.
+      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+      return prepare_status;
+    }
 
     UNWRAP_STATUS(BindNextAndExecute(nullptr));
 
@@ -287,7 +292,12 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
     }
 
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
-    UNWRAP_STATUS(helper_.Prepare(bind_stream_->param_types));
+    Status prepare_status = helper_.Prepare(bind_stream_->param_types);
+    if (!prepare_status.ok()) {
+      // Preserve the preparation error even if rollback also fails.
+      (void)bind_stream_->RollbackTimezoneTransactionIfOwned(conn_);
+      return prepare_status;
+    }
 
     // Reset affected rows to zero before binding and executing any
     if (affected_rows) {

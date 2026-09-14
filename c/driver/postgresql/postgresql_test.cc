@@ -1917,6 +1917,97 @@ TEST_F(PostgresStatementTest, BindTypeErrorDoesNotChangeTimezone) {
   EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
 }
 
+TEST_F(PostgresStatementTest, BindPrepareErrorRollsBackOwnedTimezoneTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  adbc::driver::pgwire::UniqueResult set_timezone(
+      PQexec(pg_conn, "SET TIME ZONE 'Europe/Berlin'"));
+  ASSERT_EQ(PQresultStatus(set_timezone.get()), PGRES_COMMAND_OK);
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  for (bool request_output : {false, true}) {
+    SCOPED_TRACE(request_output ? "output stream" : "no output stream");
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(&statement, "SELECT $1::timestamptz FROM", &error),
+        IsOkStatus(&error));
+
+    nanoarrow::UniqueSchema bind_schema;
+    ArrowSchemaInit(bind_schema.get());
+    ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 1),
+                adbc_validation::IsOkErrno());
+    ASSERT_THAT(
+        ArrowSchemaSetTypeDateTime(bind_schema->children[0], NANOARROW_TYPE_TIMESTAMP,
+                                   NANOARROW_TIME_UNIT_MICRO, "UTC"),
+        adbc_validation::IsOkErrno());
+    nanoarrow::UniqueArrayStream bind;
+    nanoarrow::EmptyArrayStream(bind_schema.get()).ToArrayStream(bind.get());
+    ASSERT_THAT(AdbcStatementBindStream(&statement, bind.get(), &error),
+                IsOkStatus(&error));
+
+    nanoarrow::UniqueArrayStream output;
+    ArrowArrayStream* output_ptr = request_output ? output.get() : nullptr;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, output_ptr, nullptr, &error),
+                IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_THAT(error.message, ::testing::HasSubstr("Failed to prepare query"));
+
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+    adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+    ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+    adbc::driver::pgwire::UniqueResult usable(PQexec(pg_conn, "SELECT 1"));
+    EXPECT_EQ(PQresultStatus(usable.get()), PGRES_TUPLES_OK);
+
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+  }
+}
+
+TEST_F(PostgresStatementTest, BindPrepareErrorLeavesExplicitTransactionToCaller) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  adbc::driver::pgwire::UniqueResult set_timezone(
+      PQexec(pg_conn, "SET TIME ZONE 'Europe/Berlin'"));
+  ASSERT_EQ(PQresultStatus(set_timezone.get()), PGRES_COMMAND_OK);
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1::timestamptz FROM", &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema bind_schema;
+  ArrowSchemaInit(bind_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 1),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      ArrowSchemaSetTypeDateTime(bind_schema->children[0], NANOARROW_TYPE_TIMESTAMP,
+                                 NANOARROW_TIME_UNIT_MICRO, "UTC"),
+      adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArrayStream bind;
+  nanoarrow::EmptyArrayStream(bind_schema.get()).ToArrayStream(bind.get());
+  ASSERT_THAT(AdbcStatementBindStream(&statement, bind.get(), &error),
+              IsOkStatus(&error));
+
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INERROR);
+
+  // The caller owns this transaction, including the rollback after SQL errors.
+  adbc::driver::pgwire::UniqueResult rollback(PQexec(pg_conn, "ROLLBACK"));
+  ASSERT_EQ(PQresultStatus(rollback.get()), PGRES_COMMAND_OK);
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+  adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+  ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+  EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+}
+
 TEST_F(PostgresStatementTest, SqlIngestJson) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 

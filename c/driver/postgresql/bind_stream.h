@@ -338,6 +338,15 @@ struct BindStream {
     return Status::Ok();
   }
 
+  // A failed query preparation may leave PostgreSQL's transaction aborted, so
+  // Cleanup() cannot reset the timezone with another SET. Only roll back a
+  // transaction that this bind stream opened on behalf of autocommit mode.
+  Status RollbackTimezoneTransactionIfOwned(PGconn* pg_conn) {
+    if (!has_tz_field || !autocommit) return Status::Ok();
+    PqResultHelper rollback(pg_conn, "ROLLBACK");
+    return rollback.Execute();
+  }
+
   Status ExecuteCopy(PGconn* pg_conn, const PostgresTypeResolver& type_resolver,
                      const PostgresType* target_types, bool disable_decimal_fast_path,
                      int64_t* rows_affected) {
