@@ -497,6 +497,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: The output-schema development head passed the
+  [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34792226698)
+  and [seven-platform checked development archive matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34792236582),
+  including Windows x64/ARM64. AWS jobs were skipped. The isolated
+  [output-schema branch](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-output-schema)
+  passed all six broad fork workflows (Dev, Native Unix, Native Windows,
+  vcpkg, Integration, and Rust). The remaining Native Unix run for the
+  isolated trailer branch also passed all 24 jobs. These are development
+  checks, not live Redshift staged-COPY or production-release qualification.
 - 2026-09-14: A read-only review of official S3 documentation confirmed the
   staged-COPY uploader's fail-before-AWS `s3:GetObject` gate for `HeadObject`
   and ETag-conditional deletion. The same docs show that a missing key can
@@ -512,8 +521,8 @@ necessary; this is not a claim of automatic orphan reconciliation.
   infers its own output schema. Published the one-commit generic fix on
   [`feature/upstream-pg-copy-output-schema`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-output-schema)
   from `upstream/main` at `4d50e2e30`; its isolated source build and 26/26
-  offline reader tests pass. Broader fork CI remains pending. No AWS run or
-  Apache PR was used.
+  offline reader tests pass. Broader fork CI is green as recorded above. No AWS
+  run or Apache PR was used.
 - 2026-09-14: Added a Redshift-private staging regression with both parent
   and child Arrow offsets nonzero and a NULL at the combined physical row.
   CSV preparation rejects it with `kNullValue` before any object-store event
@@ -527,7 +536,7 @@ necessary; this is not a claim of automatic orphan reconciliation.
   branches now pass all six broad fork workflows (Dev, Native Unix, Native
   Windows, vcpkg, Integration, and Rust). The isolated field-framing branch
   also completed its six-workflow matrix; the trailer branch's Native Unix
-  check is still in progress. No release claim follows from these development
+  check subsequently passed. No release claim follows from these development
   checks.
 - 2026-09-14: Enforced the binary-COPY trailer at parser and libpq physical
   end-of-stream boundaries. A trailer with bytes after it, additional COPY
