@@ -129,9 +129,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       `DECIMAL(38,0)` values against the live Redshift engine.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
-- [ ] Preflight remaining malformed replace-ingest schemas (such as zero fields,
-      unsupported types, or duplicate names) before destructive DDL; the
-      unnamed-field guard below is a narrow first step.
+- [ ] Address remaining replace-ingest failures after destructive DDL, including
+      zero fields, duplicate names, SQL `CREATE` errors, and later transfer
+      failures. Name and Arrow type preflight are narrow completed steps.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -505,6 +505,14 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Moved shared Arrow column type resolution ahead of replace-ingest
+  `DROP TABLE`. A PostgreSQL-backed regression binds a named unsupported nested
+  type and verifies the original temporary table's sentinel row remains and
+  the statement is reusable. A disposable local PostgreSQL 17 run passed 268
+  tests with 27 expected skips; CMake shared and static PostgreSQL/Redshift
+  artifacts built, and the AWS-free Redshift artifact suite passed. This does
+  not make SQL creation or data transfer after the drop atomic; cross-platform
+  CI for this separate code change is pending.
 - 2026-09-14: Guarded the active shared PostgreSQL/Redshift ingest path against
   unnamed or empty Arrow field names before replace mode can drop an existing
   table. A PostgreSQL-backed ADBC regression verifies an unnamed field returns
@@ -515,7 +523,9 @@ necessary; this is not a claim of automatic orphan reconciliation.
   replace schemas remain a separate preflight checkpoint.
 - 2026-09-14: Added a focused Ubuntu x86-64 Meson build/test step to the
   PostgreSQL 18 GitHub Actions job. It reuses the existing database service and
-  skips Redshift Serverless; Linux Meson parity remains pending CI evidence.
+  skips Redshift Serverless. The [five-platform PostgreSQL 18 and Redshift-
+  artifact run](https://github.com/vahid110/arrow-adbc/actions/runs/34803185570)
+  passed, including the new Linux Meson step, with every AWS-backed job skipped.
 - 2026-09-14: Added a second AWS-free regression for the active parameterized
   ingest helper: an Arrow stream read error after one successful 16-row SQL
   batch must roll back the entire bind. The callback confirms 17 rows were
