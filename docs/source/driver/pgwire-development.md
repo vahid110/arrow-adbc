@@ -511,8 +511,9 @@ necessary; this is not a claim of automatic orphan reconciliation.
   the statement is reusable. A disposable local PostgreSQL 17 run passed 268
   tests with 27 expected skips; CMake shared and static PostgreSQL/Redshift
   artifacts built, and the AWS-free Redshift artifact suite passed. This does
-  not make SQL creation or data transfer after the drop atomic; cross-platform
-  CI for this separate code change is pending.
+  not make SQL creation or data transfer after the drop atomic. The
+  [five-platform PostgreSQL 18 and Ubuntu Meson matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34803561706)
+  passed with all AWS-backed jobs skipped.
 - 2026-09-14: Guarded the active shared PostgreSQL/Redshift ingest path against
   unnamed or empty Arrow field names before replace mode can drop an existing
   table. A PostgreSQL-backed ADBC regression verifies an unnamed field returns
