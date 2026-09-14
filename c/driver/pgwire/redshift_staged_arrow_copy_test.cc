@@ -213,6 +213,36 @@ TEST(RedshiftStagedArrowCopyTest, CsvFailuresHaveNoExternalSideEffects) {
   EXPECT_EQ(copy_calls, 0);
 }
 
+TEST(RedshiftStagedArrowCopyTest, SlicedNullBitmapHasNoExternalSideEffects) {
+  ArrowBatch batch;
+  batch.AppendRow(1, "first");
+  batch.AppendRow(2, "second");
+  batch.AppendNullRow(3);
+  batch.Finish();
+
+  // Select the third logical row through both a parent and child slice. The
+  // child's validity bit is at the sum of the two offsets, not either alone.
+  batch.array()->offset = 1;
+  batch.array()->length = 1;
+  for (int64_t i = 0; i < batch.array()->n_children; ++i) {
+    batch.array()->children[i]->offset = 1;
+    batch.array()->children[i]->length = 2;
+  }
+
+  FakeObjectStore store;
+  int copy_calls = 0;
+  const auto result =
+      RunRedshiftStagedArrowCopy(MakeRequest(&batch), store, [&](std::string_view) {
+        ++copy_calls;
+        return RedshiftCopyExecutionResult::kSucceeded;
+      });
+  EXPECT_EQ(result.csv_status, RedshiftCsvWriteStatus::kNullValue);
+  EXPECT_FALSE(result.staged_copy.has_value());
+  EXPECT_TRUE(store.events.empty());
+  EXPECT_TRUE(store.objects.empty());
+  EXPECT_EQ(copy_calls, 0);
+}
+
 TEST(RedshiftStagedArrowCopyTest, InvalidPlanIsRejectedBeforeUpload) {
   ArrowBatch batch;
   batch.AppendRow(1, "one");
