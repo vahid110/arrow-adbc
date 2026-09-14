@@ -261,7 +261,7 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
 | --- | --- | --- |
 | Ubuntu 24.04 x86-64 | CMake/Meson builds and tests; PostgreSQL 18 and live Redshift; relocated Debug client query against Redshift; checked, short-retention Release development archive with extracted-client PostgreSQL 18 query, Redshift-driver PostgreSQL rejection, and earlier live Redshift connection | Production release artifact and compatibility guarantee |
 | macOS Intel | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
-| macOS Apple Silicon | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
+| macOS Apple Silicon | CMake and Meson builds, including a Meson ASan/UBSan Redshift artifact suite; PostgreSQL 18 suite and clean-prefix manager/client smoke; checked arm64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Windows x86-64 | C++/vcpkg Release build; checked, short-retention x64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Windows ARM64 | Native vcpkg Release build; checked, short-retention ARM64 development ZIP; extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
 | Debian Bookworm x86-64 | CMake build, PostgreSQL 18 suite, clean-prefix manager/client smoke; checked x86-64 development archive with extracted-client PostgreSQL 18 query and Redshift-driver PostgreSQL rejection | Production release artifact and live Redshift installed-client test |
@@ -502,6 +502,11 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Rebuilt the macOS ARM64 Meson target with AddressSanitizer and
+  UndefinedBehaviorSanitizer in a separate temporary tree. The Redshift Meson
+  test executable passed all 49 GoogleTest cases; the build also compiled the
+  PostgreSQL driver and both COPY test targets. This is an AWS-free local
+  sanitizer check, not live Redshift or a cross-platform Meson guarantee.
 - 2026-09-14: Qualified the new private stream source/test lists through an
   isolated Meson 1.11.2/Ninja 1.13.2 build on macOS ARM64 with Homebrew libpq
   18.6. PostgreSQL and Redshift targets compiled, including the stream helper
