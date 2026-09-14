@@ -461,22 +461,9 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
   switch (ingest_.mode) {
     case IngestMode::kCreate:
     case IngestMode::kAppend:
-      // Nothing to do
+    case IngestMode::kReplace:
+      // The replacement DROP is deferred until column mapping succeeds.
       break;
-    case IngestMode::kReplace: {
-      std::string drop = "DROP TABLE IF EXISTS " + *escaped_table;
-      adbc::driver::pgwire::UniqueResult result(
-          PQexecParams(conn, drop.c_str(), /*nParams=*/0,
-                       /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
-                       /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
-                       /*resultFormat=*/1 /*(binary)*/));
-      if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-        return MakeStatus(result.get(), "[libpq] Failed to drop table: {}\nQuery was: {}",
-                          PQerrorMessage(conn), drop)
-            .ToAdbc(error);
-      }
-      break;
-    }
     case IngestMode::kCreateAppend:
       create += "IF NOT EXISTS ";
       break;
@@ -521,6 +508,20 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
     }
     *has_copy_target_types = true;
     return ADBC_STATUS_OK;
+  }
+
+  if (ingest_.mode == IngestMode::kReplace) {
+    std::string drop = "DROP TABLE IF EXISTS " + *escaped_table;
+    adbc::driver::pgwire::UniqueResult result(
+        PQexecParams(conn, drop.c_str(), /*nParams=*/0,
+                     /*paramTypes=*/nullptr, /*paramValues=*/nullptr,
+                     /*paramLengths=*/nullptr, /*paramFormats=*/nullptr,
+                     /*resultFormat=*/1 /*(binary)*/));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+      return MakeStatus(result.get(), "[libpq] Failed to drop table: {}\nQuery was: {}",
+                        PQerrorMessage(conn), drop)
+          .ToAdbc(error);
+    }
   }
 
   create += ")";
