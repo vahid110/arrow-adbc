@@ -1140,15 +1140,20 @@ class PostgresCopyStreamReader {
   }
 
   ArrowErrorCode SetOutputSchema(ArrowSchema* schema, ArrowError* error) {
-    if (std::string(schema_->format) != "+s") {
-      ArrowErrorSet(
-          error,
-          "Expected output schema of type struct but got output schema with format '%s'",
-          schema_->format);  // NOLINT(runtime/int)
+    if (schema == nullptr || schema->release == nullptr || schema->format == nullptr) {
+      ArrowErrorSet(error, "Expected initialized output schema");
       return EINVAL;
     }
 
-    if (schema_->n_children != root_reader_.InputType().n_children()) {
+    if (std::string(schema->format) != "+s") {
+      ArrowErrorSet(
+          error,
+          "Expected output schema of type struct but got output schema with format '%s'",
+          schema->format);  // NOLINT(runtime/int)
+      return EINVAL;
+    }
+
+    if (schema->n_children != root_reader_.InputType().n_children()) {
       ArrowErrorSet(error,
                     "Expected output schema with %ld columns to match Postgres input but "
                     "got schema with %ld columns",

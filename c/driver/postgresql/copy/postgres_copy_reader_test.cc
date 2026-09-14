@@ -77,6 +77,75 @@ static const uint8_t kTestPgCopyZeroLengthField[] = {
     0x00, 0x00, 0x00, 0x00,                                // Zero-byte field
     0xff, 0xff};                                           // COPY trailer
 
+TEST(PostgresCopyUtilsTest, PostgresCopySetOutputSchemaAcceptsCallerSchema) {
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  ASSERT_EQ(reader.Init(input_type), NANOARROW_OK);
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 1), NANOARROW_OK);
+  ASSERT_EQ(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_BOOL), NANOARROW_OK);
+
+  ASSERT_EQ(reader.SetOutputSchema(schema.get(), &error), NANOARROW_OK) << error.message;
+  EXPECT_EQ(schema->release, nullptr);
+  ASSERT_EQ(reader.InitFieldReaders(&error), NANOARROW_OK) << error.message;
+
+  nanoarrow::UniqueSchema output_schema;
+  ASSERT_EQ(reader.GetSchema(output_schema.get()), NANOARROW_OK);
+  EXPECT_STREQ(output_schema->format, "+s");
+  ASSERT_EQ(output_schema->n_children, 1);
+  EXPECT_STREQ(output_schema->children[0]->format, "b");
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopySetOutputSchemaRejectsWrongFormat) {
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  ASSERT_EQ(reader.Init(input_type), NANOARROW_OK);
+
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_BOOL), NANOARROW_OK);
+  EXPECT_EQ(reader.SetOutputSchema(schema.get(), &error), EINVAL);
+  EXPECT_NE(std::string(error.message).find("type struct"), std::string::npos);
+  EXPECT_NE(schema->release, nullptr);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopySetOutputSchemaRejectsWrongChildCount) {
+  PostgresType input_type(PostgresTypeId::kRecord);
+  input_type.AppendChild("col", PostgresType(PostgresTypeId::kBool));
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  ASSERT_EQ(reader.Init(input_type), NANOARROW_OK);
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 0), NANOARROW_OK);
+  EXPECT_EQ(reader.SetOutputSchema(schema.get(), &error), EINVAL);
+  EXPECT_NE(std::string(error.message).find("got schema with 0 columns"),
+            std::string::npos);
+  EXPECT_NE(schema->release, nullptr);
+}
+
+TEST(PostgresCopyUtilsTest, PostgresCopySetOutputSchemaRejectsMissingSchema) {
+  PostgresCopyStreamReader reader;
+  ArrowError error{};
+  EXPECT_EQ(reader.SetOutputSchema(nullptr, &error), EINVAL);
+  EXPECT_STREQ(error.message, "Expected initialized output schema");
+
+  nanoarrow::UniqueSchema schema;
+  EXPECT_EQ(reader.SetOutputSchema(schema.get(), &error), EINVAL);
+  EXPECT_STREQ(error.message, "Expected initialized output schema");
+
+  ArrowSchemaInit(schema.get());
+  EXPECT_EQ(reader.SetOutputSchema(schema.get(), &error), EINVAL);
+  EXPECT_STREQ(error.message, "Expected initialized output schema");
+  EXPECT_NE(schema->release, nullptr);
+}
+
 TEST(PostgresCopyUtilsTest, PostgresCopyRejectBytesAfterTrailer) {
   for (const std::vector<uint8_t>& suffix :
        {std::vector<uint8_t>{0x42}, std::vector<uint8_t>{0xff, 0xff}}) {
