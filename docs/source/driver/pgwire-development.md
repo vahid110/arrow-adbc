@@ -434,11 +434,17 @@ pending a live check of quoted null-marker behavior. Before enabling staged
 ingestion, qualify null
 versus empty string and the remaining Arrow type mappings, an optional S3
 adapter with short-lived credentials, an explicit transaction boundary, and
-exact cleanup. An uploader may need `s3:GetObject` for `HeadObject` ownership
-checks; AWS also requires it for an
-ETag-matched conditional `DeleteObject`. The branch-scoped uploader role does
-not have that permission. No such IAM expansion or SDK dependency has been
-added. Do not dispatch the ETag-conditional manual fixture until a narrow
+exact cleanup. AWS requires `s3:GetObject` for
+[`HeadObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)
+and in addition to `s3:DeleteObject` for an
+[ETag-matched conditional `DeleteObject`](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-deletes.html).
+Without `s3:ListBucket`, `HeadObject` cannot distinguish a nonexistent key
+from an inaccessible one by status alone (403 instead of 404), so ambiguous
+uploads still need independent reconciliation. The branch-scoped uploader
+role does not have `s3:GetObject`; granting it would also permit reading the
+exact objects, not merely checking or deleting them. No such IAM expansion
+or SDK dependency has been added. Do not dispatch the ETag-conditional manual
+fixture until a narrow
 `s3:GetObject` grant for `staging/ci/*` is explicitly approved and verified;
 keep automatic COPY disabled until a lost runner can also be reconciled
 independently.
@@ -491,6 +497,12 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: A read-only review of official S3 documentation confirmed the
+  staged-COPY uploader's fail-before-AWS `s3:GetObject` gate for `HeadObject`
+  and ETag-conditional deletion. The same docs show that a missing key can
+  appear as 403 without `s3:ListBucket`; this cannot safely replace
+  independent reconciliation of ambiguous uploads. No IAM permission, trust
+  policy, AWS resource, or active ingest path changed.
 - 2026-09-14: Corrected `PostgresCopyStreamReader::SetOutputSchema` to validate
   the supplied Arrow schema instead of the reader's previous/uninitialized
   schema, including null, uninitialized, non-struct, and wrong-column-count
@@ -513,9 +525,10 @@ necessary; this is not a claim of automatic orphan reconciliation.
   and [seven-platform development archive/checksum matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34790193554),
   with AWS-backed jobs skipped. The isolated COPY-bounds and COPY-header
   branches now pass all six broad fork workflows (Dev, Native Unix, Native
-  Windows, vcpkg, Integration, and Rust). Field-framing and trailer branches
-  still have Native Unix checks in progress; no release claim follows from
-  these development checks.
+  Windows, vcpkg, Integration, and Rust). The isolated field-framing branch
+  also completed its six-workflow matrix; the trailer branch's Native Unix
+  check is still in progress. No release claim follows from these development
+  checks.
 - 2026-09-14: Enforced the binary-COPY trailer at parser and libpq physical
   end-of-stream boundaries. A trailer with bytes after it, additional COPY
   data after a trailer, a truncated trailer, and a successful physical EOF
