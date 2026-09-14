@@ -19,6 +19,7 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -174,6 +175,7 @@ class FakeObjectStore : public RedshiftStagedObjectStore {
  public:
   RedshiftStagedPutResult PutIfAbsent(std::string_view uri, std::string_view bytes,
                                       std::string_view token) noexcept override {
+    if (events.empty() && before_first_put) before_first_put();
     events.push_back(uri == kDataUrl ? "put:data" : "put:manifest");
     objects.emplace(std::string(uri), std::string(bytes));
     owners.emplace(std::string(uri), std::string(token));
@@ -197,11 +199,17 @@ class FakeObjectStore : public RedshiftStagedObjectStore {
   std::unordered_map<std::string, std::string> objects;
   std::unordered_map<std::string, std::string> owners;
   std::vector<std::string> events;
+  std::function<void()> before_first_put;
 };
 
 TEST(RedshiftStagedArrowStreamCopyTest, TwoBatchesStageOneExactObjectAndCopyOnce) {
   TestStream stream({{{7, "a,b"}}, {{-8, ""}}});
   FakeObjectStore store;
+  store.before_first_put = [&] {
+    EXPECT_EQ(stream.get()->release, nullptr);
+    EXPECT_EQ(stream.stream_releases, 1);
+    EXPECT_EQ(stream.array_releases, 2);
+  };
   int copy_calls = 0;
   const auto result = RunRedshiftStagedArrowStreamCopy(
       MakeRequest(&stream), store, [&](std::string_view sql) {

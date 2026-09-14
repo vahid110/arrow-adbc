@@ -502,6 +502,12 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Strengthened the private stream-preflight success test to assert
+  that the owned Arrow stream and both yielded arrays are released before the
+  first object-store upload, not merely before the later COPY callback. All
+  49 Redshift artifact tests pass under ASan/UBSan after this test-only change.
+  The helper already releases its schema before the same callback; no active
+  ingest path, AWS policy, or S3 object was changed.
 - 2026-09-14: The bounded stream-preflight head passed the
   [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34795497470)
   with AWS-backed jobs explicitly skipped. The first run caught a GCC-only
