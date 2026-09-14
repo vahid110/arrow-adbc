@@ -203,14 +203,27 @@ struct BindStream {
       UNWRAP_STATUS(helper.Execute());
     }
 
+    // Once BEGIN succeeds, failures during timezone setup must not leave the
+    // driver's autocommit-owned transaction open. Keep the original error if
+    // rollback also fails; explicit transactions still belong to the caller.
+    auto fail_setup = [&](Status status) {
+      if (autocommit) {
+        PqResultHelper rollback(pg_conn, "ROLLBACK");
+        (void)rollback.Execute();
+      }
+      return status;
+    };
+
     PqResultHelper get_tz(pg_conn, "SELECT current_setting('TIMEZONE')");
-    UNWRAP_STATUS(get_tz.Execute());
+    Status get_tz_status = get_tz.Execute();
+    if (!get_tz_status.ok()) return fail_setup(std::move(get_tz_status));
     for (auto row : get_tz) {
       tz_setting = row[0].value();
     }
 
     PqResultHelper set_utc(pg_conn, "SET TIME ZONE 'UTC'");
-    UNWRAP_STATUS(set_utc.Execute());
+    Status set_utc_status = set_utc.Execute();
+    if (!set_utc_status.ok()) return fail_setup(std::move(set_utc_status));
 
     return Status::Ok();
   }
