@@ -145,6 +145,7 @@ struct BindStream {
     param_lengths.resize(bind_schema->n_children);
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
     bind_field_writers.resize(bind_schema->n_children);
+    bool needs_utc_timezone = false;
 
     for (size_t i = 0; i < bind_field_writers.size(); i++) {
       PostgresType type;
@@ -171,13 +172,9 @@ struct BindStream {
                                                   &type, &na_error));
       }
 
-      // tz-aware timestamps require special handling to set the timezone to UTC
-      // prior to sending over the binary protocol; must be reset after execute
-      if (!has_tz_field && type.type_id() == PostgresTypeId::kTimestamptz) {
-        UNWRAP_STATUS(SetDatabaseTimezoneUTC(pg_conn, autocommit));
-        has_tz_field = true;
-        this->autocommit = autocommit;
-      }
+      // Delay the session change until all parameter types and writers are valid.
+      // Otherwise a later unsupported field can leave an open transaction and UTC.
+      needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
 
       std::unique_ptr<PostgresCopyFieldWriter> writer;
       UNWRAP_NANOARROW(
@@ -189,6 +186,12 @@ struct BindStream {
       param_types[i] = type.oid();
       param_formats[i] = kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
+    }
+
+    if (needs_utc_timezone && !has_tz_field) {
+      UNWRAP_STATUS(SetDatabaseTimezoneUTC(pg_conn, autocommit));
+      has_tz_field = true;
+      this->autocommit = autocommit;
     }
 
     return Status::Ok();

@@ -38,6 +38,7 @@
 
 #include "common/options.h"
 #include "common/utils.h"
+#include "connection.h"
 #include "validation/adbc_validation.h"
 #include "validation/adbc_validation_util.h"
 
@@ -1873,6 +1874,47 @@ TEST_F(PostgresStatementTest, SqlIngestTimestampOverflow) {
         ::testing::HasSubstr(
             "Row 0 timestamp value -9223372036854775808 with unit 0 would overflow"));
   }
+}
+
+TEST_F(PostgresStatementTest, BindTypeErrorDoesNotChangeTimezone) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  adbc::driver::pgwire::UniqueResult set_timezone(
+      PQexec(pg_conn, "SET TIME ZONE 'Europe/Berlin'"));
+  ASSERT_EQ(PQresultStatus(set_timezone.get()), PGRES_COMMAND_OK);
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(&statement, "SELECT $1::timestamptz, $2::text", &error),
+      IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema bind_schema;
+  ArrowSchemaInit(bind_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 2),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(
+      ArrowSchemaSetTypeDateTime(bind_schema->children[0], NANOARROW_TYPE_TIMESTAMP,
+                                 NANOARROW_TIME_UNIT_SECOND, "UTC"),
+      adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema->children[1], 0),
+              adbc_validation::IsOkErrno());
+
+  nanoarrow::UniqueArrayStream bind;
+  nanoarrow::EmptyArrayStream(bind_schema.get()).ToArrayStream(bind.get());
+  ASSERT_THAT(AdbcStatementBindStream(&statement, bind.get(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INTERNAL, &error));
+  ASSERT_THAT(error.message, ::testing::HasSubstr("Can't map Arrow type 'struct'"));
+
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+  adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+  ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+  ASSERT_EQ(PQntuples(timezone.get()), 1);
+  EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
 }
 
 TEST_F(PostgresStatementTest, SqlIngestJson) {
