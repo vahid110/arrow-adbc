@@ -310,7 +310,7 @@ TEST(RedshiftStagedArrowStreamCopyTest, AggregateLimitRejectsBeforeUpload) {
 }
 
 TEST(RedshiftStagedArrowStreamCopyTest, EmptyAndUnboundedStreamsAreNotUploaded) {
-  TestStream stream({{}, {}});
+  TestStream stream(std::vector<Batch>{{}, {}});
   FakeObjectStore store;
   const auto result = RunRedshiftStagedArrowStreamCopy(
       MakeRequest(&stream), store,
