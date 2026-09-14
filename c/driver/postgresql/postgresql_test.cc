@@ -2204,6 +2204,76 @@ TEST_F(PostgresStatementTest, BindRowErrorLeavesExplicitTransactionToCaller) {
   EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "0");
 }
 
+TEST_F(PostgresStatementTest, BindArrowErrorRestoresExplicitTransactionTimezone) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueResult setup(PQexec(
+      pg_conn,
+      "SET TIME ZONE 'Europe/Berlin'; CREATE TEMP TABLE adbc_tz_arrow_failure (id INT)"));
+  ASSERT_EQ(PQresultStatus(setup.get()), PGRES_COMMAND_OK);
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  for (bool request_output : {false, true}) {
+    SCOPED_TRACE(request_output ? "output stream" : "no output stream");
+    adbc::driver::pgwire::UniqueResult begin(
+        PQexec(pg_conn, "BEGIN; INSERT INTO pg_temp.adbc_tz_arrow_failure VALUES (1)"));
+    ASSERT_EQ(PQresultStatus(begin.get()), PGRES_COMMAND_OK);
+    ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+
+    adbc_validation::Handle<struct AdbcStatement> bound_statement;
+    ASSERT_THAT(AdbcStatementNew(&connection, &bound_statement.value, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetSqlQuery(&bound_statement.value, "SELECT $1::timestamptz",
+                                         &error),
+                IsOkStatus(&error));
+    nanoarrow::UniqueSchema bind_schema;
+    ArrowSchemaInit(bind_schema.get());
+    ASSERT_THAT(ArrowSchemaSetTypeStruct(bind_schema.get(), 1),
+                adbc_validation::IsOkErrno());
+    ASSERT_THAT(
+        ArrowSchemaSetTypeDateTime(bind_schema->children[0], NANOARROW_TYPE_TIMESTAMP,
+                                   NANOARROW_TIME_UNIT_SECOND, "UTC"),
+        adbc_validation::IsOkErrno());
+    nanoarrow::UniqueArray bind_batch;
+    ASSERT_THAT(
+        (adbc_validation::MakeBatch<int64_t>(bind_schema.get(), bind_batch.get(), nullptr,
+                                             {std::numeric_limits<int64_t>::max()})),
+        adbc_validation::IsOkErrno());
+    ASSERT_THAT(AdbcStatementBind(&bound_statement.value, bind_batch.get(),
+                                  bind_schema.get(), &error),
+                IsOkStatus(&error));
+
+    nanoarrow::UniqueArrayStream output;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&bound_statement.value,
+                                          request_output ? output.get() : nullptr,
+                                          nullptr, &error),
+                IsStatus(ADBC_STATUS_INTERNAL, &error));
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_THAT(error.message, ::testing::HasSubstr("would overflow"));
+    error.release(&error);
+    error = ADBC_ERROR_INIT;
+
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+    adbc::driver::pgwire::UniqueResult timezone(PQexec(pg_conn, "SHOW TIME ZONE"));
+    ASSERT_EQ(PQresultStatus(timezone.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(timezone.get(), 0, 0), "Europe/Berlin");
+    adbc::driver::pgwire::UniqueResult count(
+        PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_arrow_failure"));
+    ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "1");
+
+    ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+    adbc::driver::pgwire::UniqueResult rolled_back(
+        PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_arrow_failure"));
+    ASSERT_EQ(PQresultStatus(rolled_back.get()), PGRES_TUPLES_OK);
+    EXPECT_STREQ(PQgetvalue(rolled_back.get(), 0, 0), "0");
+  }
+}
+
 TEST_F(PostgresStatementTest, SqlIngestJson) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 

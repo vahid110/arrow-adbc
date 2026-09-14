@@ -256,6 +256,13 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       // later get_next() skip the failed row and run outside that transaction.
       bind_stream_.reset();
       if (affected_rows != nullptr) *affected_rows = 0;
+    } else if (bind_stream_->has_tz_field && !bind_stream_->autocommit &&
+               PQtransactionStatus(conn_) == PQTRANS_INTRANS) {
+      // A local Arrow/binary-writer error has not aborted the caller's
+      // transaction. Restore its session timezone, but do not commit or roll
+      // back that transaction. A failed stream must not retry the bind.
+      (void)bind_stream_->Cleanup(conn_);
+      bind_stream_.reset();
     }
     return status;
   };
