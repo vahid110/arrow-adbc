@@ -87,6 +87,7 @@ class TestStream {
     auto* state = new State;
     state->basic.reset(basic.get());
     state->stream_releases = &stream_releases;
+    state->schema_releases = &schema_releases;
     state->array_releases = &array_releases;
     state->fail_next_call = fail_next_call;
     state->malformed_first_empty = malformed_first_empty;
@@ -100,12 +101,14 @@ class TestStream {
   ArrowArrayStream* get() { return stream_.get(); }
 
   int stream_releases = 0;
+  int schema_releases = 0;
   int array_releases = 0;
 
  private:
   struct State {
     nanoarrow::UniqueArrayStream basic;
     int* stream_releases;
+    int* schema_releases;
     int* array_releases;
     int fail_next_call;
     bool malformed_first_empty;
@@ -119,13 +122,26 @@ class TestStream {
     int64_t original_n_children;
   };
 
+  struct SchemaReleaseState {
+    void (*original_release)(ArrowSchema*);
+    void* original_private_data;
+    int* schema_releases;
+  };
+
   static State* GetState(ArrowArrayStream* self) {
     return static_cast<State*>(self->private_data);
   }
 
   static int GetSchema(ArrowArrayStream* self, ArrowSchema* out) {
     State* state = GetState(self);
-    return state->basic->get_schema(state->basic.get(), out);
+    const int status = state->basic->get_schema(state->basic.get(), out);
+    if (status == NANOARROW_OK && out->release) {
+      auto* release_state =
+          new SchemaReleaseState{out->release, out->private_data, state->schema_releases};
+      out->private_data = release_state;
+      out->release = ReleaseSchema;
+    }
+    return status;
   }
 
   static int GetNext(ArrowArrayStream* self, ArrowArray* out) {
@@ -145,6 +161,15 @@ class TestStream {
   }
 
   static const char* GetLastError(ArrowArrayStream*) { return "injected stream error"; }
+
+  static void ReleaseSchema(ArrowSchema* schema) {
+    auto* state = static_cast<SchemaReleaseState*>(schema->private_data);
+    ++*state->schema_releases;
+    schema->release = state->original_release;
+    schema->private_data = state->original_private_data;
+    delete state;
+    schema->release(schema);
+  }
 
   static void ReleaseArray(ArrowArray* array) {
     auto* state = static_cast<ArrayReleaseState*>(array->private_data);
@@ -208,6 +233,7 @@ TEST(RedshiftStagedArrowStreamCopyTest, TwoBatchesStageOneExactObjectAndCopyOnce
   store.before_first_put = [&] {
     EXPECT_EQ(stream.get()->release, nullptr);
     EXPECT_EQ(stream.stream_releases, 1);
+    EXPECT_EQ(stream.schema_releases, 1);
     EXPECT_EQ(stream.array_releases, 2);
   };
   int copy_calls = 0;
@@ -233,6 +259,7 @@ TEST(RedshiftStagedArrowStreamCopyTest, TwoBatchesStageOneExactObjectAndCopyOnce
   EXPECT_EQ(copy_calls, 1);
   EXPECT_EQ(stream.get()->release, nullptr);
   EXPECT_EQ(stream.stream_releases, 1);
+  EXPECT_EQ(stream.schema_releases, 1);
   EXPECT_EQ(stream.array_releases, 2);
   EXPECT_TRUE(store.objects.empty());
   EXPECT_EQ(store.events, (std::vector<std::string>{"put:data", "put:manifest",

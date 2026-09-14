@@ -502,6 +502,18 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Added an AWS-free, PostgreSQL-backed regression for the shared
+  parameterized ingest helper. It inserts 18 rows across two Arrow batches,
+  then verifies that a `23502` error in a second SQL batch after 16 valid rows
+  rolls back the entire later bind, reports zero affected rows, and leaves the connection
+  reusable. The focused test passed against a temporary local PostgreSQL
+  17.11 server; the server and its files were removed afterward. This does not
+  replace the live Redshift ingest qualification.
+- 2026-09-14: Extended the first-upload staged-`COPY` lifetime assertion to
+  track the Arrow schema release as well as the stream and yielded arrays.
+  The full AWS-free Redshift Meson test executable passed 49/49 cases under
+  AddressSanitizer and UndefinedBehaviorSanitizer on macOS ARM64. No AWS role,
+  S3 object, or active ingest path was changed.
 - 2026-09-14: Rebuilt the macOS ARM64 Meson target with AddressSanitizer and
   UndefinedBehaviorSanitizer in a separate temporary tree. The Redshift Meson
   test executable passed all 49 GoogleTest cases; the build also compiled the

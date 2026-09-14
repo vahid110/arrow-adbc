@@ -34,6 +34,7 @@
 
 #include "bind_stream.h"
 #include "driver/framework/objects.h"
+#include "driver/pgwire/libpq_raii.h"
 #include "validation/adbc_validation_util.h"
 
 using adbc_validation::IsOkStatus;
@@ -45,6 +46,99 @@ TEST(ParameterizedInsertQueryTest, NumbersParametersAcrossRows) {
       adbcpq::BuildParameterizedInsertQuery("\"target\"", "\"id\", \"label\"", 2, 3),
       "INSERT INTO \"target\" (\"id\", \"label\") VALUES "
       "($1, $2), ($3, $4), ($5, $6)");
+}
+
+TEST(ParameterizedInsertTest, RollsBackWholeBindAcrossSqlBatches) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (uri == nullptr) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_NE(connection, nullptr);
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK)
+      << PQerrorMessage(connection.get());
+  adbc::driver::pgwire::UniqueResult create(
+      PQexec(connection.get(),
+             "CREATE TEMP TABLE adbc_parameterized_insert_atomic (id INTEGER NOT NULL)"));
+  ASSERT_NE(create, nullptr);
+  ASSERT_EQ(PQresultStatus(create.get()), PGRES_COMMAND_OK)
+      << PQerrorMessage(connection.get());
+
+  adbcpq::PostgresTypeResolver resolver;
+  ArrowError arrow_error;
+  ArrowErrorInit(&arrow_error);
+  ASSERT_EQ(resolver.Insert({23, "int4", "int4recv", 0, 0, 0}, &arrow_error),
+            NANOARROW_OK)
+      << ArrowErrorMessage(&arrow_error);
+
+  auto execute_rows = [&](const std::vector<std::optional<int32_t>>& first,
+                          const std::vector<std::optional<int32_t>>& second,
+                          int64_t* rows_affected) -> adbc::driver::Status {
+    nanoarrow::UniqueSchema schema;
+    if (ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_STRUCT) != NANOARROW_OK ||
+        ArrowSchemaSetTypeStruct(schema.get(), 1) != NANOARROW_OK ||
+        ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32) != NANOARROW_OK ||
+        ArrowSchemaSetName(schema->children[0], "id") != NANOARROW_OK) {
+      return adbc::driver::Status::Internal(
+          "Could not build parameterized ingest test schema");
+    }
+
+    nanoarrow::UniqueArray first_array;
+    nanoarrow::UniqueArray second_array;
+    if (adbc_validation::MakeBatch<int32_t>(schema.get(), first_array.get(), nullptr,
+                                            first) != NANOARROW_OK ||
+        adbc_validation::MakeBatch<int32_t>(schema.get(), second_array.get(), nullptr,
+                                            second) != NANOARROW_OK) {
+      return adbc::driver::Status::Internal(
+          "Could not build parameterized ingest test batches");
+    }
+    std::vector<ArrowArray> batches(2);
+    ArrowArrayMove(first_array.get(), &batches[0]);
+    ArrowArrayMove(second_array.get(), &batches[1]);
+    nanoarrow::UniqueArrayStream stream;
+    adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+
+    adbcpq::BindStream bind_stream;
+    bind_stream.SetBind(stream.get());
+    adbc::driver::Status status =
+        bind_stream.Begin([] { return adbc::driver::Status::Ok(); });
+    if (!status.ok()) return status;
+    return bind_stream.ExecutePreparedRows(
+        connection.get(), "\"adbc_parameterized_insert_atomic\"", "\"id\"", resolver,
+        /*connection_autocommit=*/true, /*max_batch_rows=*/16, rows_affected);
+  };
+
+  std::vector<std::optional<int32_t>> first_success;
+  std::vector<std::optional<int32_t>> second_success;
+  for (int32_t id = 1; id <= 10; ++id) first_success.emplace_back(id);
+  for (int32_t id = 11; id <= 18; ++id) second_success.emplace_back(id);
+  int64_t rows_affected = -1;
+  ASSERT_TRUE(execute_rows(first_success, second_success, &rows_affected).ok());
+  EXPECT_EQ(rows_affected, 18);
+
+  std::vector<std::optional<int32_t>> first_failure;
+  for (int32_t id = 19; id <= 34; ++id) first_failure.emplace_back(id);
+  rows_affected = -1;
+  adbc::driver::Status failure_status =
+      execute_rows(first_failure, {35, std::nullopt}, &rows_affected);
+  ASSERT_FALSE(failure_status.ok());
+  AdbcError failure_error = ADBC_ERROR_INIT;
+  EXPECT_NE(failure_status.ToAdbc(&failure_error), ADBC_STATUS_OK);
+  EXPECT_EQ(std::string_view(failure_error.sqlstate, 5), "23502");
+  if (failure_error.release != nullptr) failure_error.release(&failure_error);
+  EXPECT_EQ(rows_affected, 0);
+  EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_IDLE);
+
+  // The second SQL batch failed, so its preceding successful batch was also
+  // rolled back. This query additionally proves the connection can be reused.
+  adbc::driver::pgwire::UniqueResult count(
+      PQexec(connection.get(), "SELECT COUNT(*) FROM adbc_parameterized_insert_atomic"));
+  ASSERT_NE(count, nullptr);
+  ASSERT_EQ(PQresultStatus(count.get()), PGRES_TUPLES_OK)
+      << PQerrorMessage(connection.get());
+  ASSERT_EQ(PQntuples(count.get()), 1);
+  EXPECT_STREQ(PQgetvalue(count.get(), 0, 0), "18");
 }
 
 TEST(RedshiftDriverConstructionTest, RejectsPostgreSQLServer) {
