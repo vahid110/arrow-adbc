@@ -36,6 +36,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -399,12 +400,23 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
 
   // Validate the Arrow field names before replacement can drop an existing table.
   // An ArrowSchema child may legitimately have a null name, but SQL columns may not.
+  // Only byte-identical names are checked here; other identifier equivalence is
+  // backend-specific.
+  std::unordered_set<std::string_view> seen_field_names;
   for (int64_t i = 0; i < source_schema.n_children; ++i) {
     if (source_schema.children == nullptr || source_schema.children[i] == nullptr ||
         source_schema.children[i]->name == nullptr ||
         source_schema.children[i]->name[0] == '\0') {
       InternalAdbcSetError(
           error, "[libpq] Bulk ingest column %" PRId64 " must have a nonempty name", i);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+
+    const std::string_view field_name(source_schema.children[i]->name);
+    if (!seen_field_names.insert(field_name).second) {
+      InternalAdbcSetError(
+          error, "[libpq] Bulk ingest column %" PRId64 " duplicates column name %s", i,
+          source_schema.children[i]->name);
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
   }
