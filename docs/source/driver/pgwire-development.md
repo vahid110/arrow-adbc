@@ -512,8 +512,9 @@ necessary; this is not a claim of automatic orphan reconciliation.
   exposed hidden `PqResultHelper` symbols in the Linux test link, so CMake and
   Meson now compile that helper into the PostgreSQL test executable. The
   [first AWS-free five-platform run](https://github.com/vahid110/arrow-adbc/actions/runs/34800116037)
-  failed to link on Linux; a corrected matrix is pending. No Redshift compute
-  was used.
+  failed to link on Linux; the [corrected five-platform PostgreSQL 18 and
+  Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34800679139)
+  passed with every AWS-backed job skipped. No Redshift compute was used.
 - 2026-09-14: Added an AWS-free, PostgreSQL-backed regression for the shared
   parameterized ingest helper. It inserts 18 rows across two Arrow batches,
   then verifies that a `23502` error in a second SQL batch after 16 valid rows
