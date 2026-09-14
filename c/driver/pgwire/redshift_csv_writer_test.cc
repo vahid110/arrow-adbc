@@ -94,6 +94,27 @@ TEST(RedshiftCsvWriterTest, SerializesExactFieldOrderAndQuotesText) {
             "0,0,\"Grüße\"\n");
 }
 
+TEST(RedshiftCsvWriterTest, SerializesAllEmptyStringsWithoutDataBuffer) {
+  auto batch = MakeBatch();
+  batch.AppendRow(1, 2, "");
+  batch.AppendRow(3, 4, "");
+  batch.Finish();
+
+  // The builder may reserve storage even though the Arrow data buffer is
+  // logically empty. Release that allocation to exercise the valid absent
+  // buffer representation.
+  ArrowArray* text_array = batch.array()->children[2];
+  ArrowBuffer* data = ArrowArrayBuffer(text_array, 2);
+  ASSERT_EQ(data->size_bytes, 0);
+  ArrowBufferReset(data);
+  text_array->buffers[2] = nullptr;
+
+  ASSERT_EQ(text_array->buffers[2], nullptr);
+  std::string csv;
+  EXPECT_EQ(Write(&batch, &csv), RedshiftCsvWriteStatus::kSucceeded);
+  EXPECT_EQ(csv, "1,2,\"\"\n3,4,\"\"\n");
+}
+
 TEST(RedshiftCsvWriterTest, RejectsWrongColumnOrderWithoutChangingOutput) {
   auto batch = MakeBatch();
   batch.AppendRow(1, 2, "three");

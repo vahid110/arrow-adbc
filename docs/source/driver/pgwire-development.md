@@ -497,6 +497,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Added an AWS-free regression for an all-empty Arrow string
+  column with a valid absent data buffer. The private Redshift CSV writer
+  emits the exact quoted empty fields without pointer arithmetic on a null
+  buffer; all 41 focused staging/CSV tests pass under ASan/UBSan. This does
+  not select staged `COPY` in the active ingest path.
+- 2026-09-14: Apache `main` advanced from this branch's `4d50e2e30` base to
+  `86667c4d7` by a driver-manager profile interpolation fix and widened
+  ingest-value validation comparisons. Neither touches the PostgreSQL or
+  PgWire source paths, so no design change is indicated. A future rebase
+  should rerun PostgreSQL/Redshift ingest validation and installed-client
+  package smoke checks; no history rewrite was done for this read-only audit.
 - 2026-09-14: The output-schema development head passed the
   [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34792226698)
   and [seven-platform checked development archive matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34792236582),
