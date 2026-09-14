@@ -214,6 +214,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       local `upstream/main`: reject trailing data and missing or truncated
       trailers while retaining server-error precedence. This is a fork
       branch, not an Apache PR.
+- [x] Publish a thirteenth standalone PostgreSQL binary-COPY output-schema
+      fix from local `upstream/main`: validate the supplied Arrow schema and
+      retain caller ownership on rejection. This is a fork branch, not an
+      Apache PR.
 - [ ] Publish open-source release artifacts, install instructions, checksums,
       dependency requirements, and a tested platform matrix.
 - [x] Start with a short-retention Ubuntu x86-64 development archive containing
@@ -470,7 +474,7 @@ exact-object manifest and validates `COPY` SQL with an explicit, ordered ingest
 column list. An AWS-free staging coordinator tests conditional creation and
 owned-object cleanup. A conservative CSV writer covers three non-null Arrow
 types, and a one-batch adapter composes it with the coordinator while owning
-the CSV buffer; none is selected by the active driver ingest path. Twelve
+the CSV buffer; none is selected by the active driver ingest path. Thirteen
 PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
@@ -493,7 +497,11 @@ necessary; this is not a claim of automatic orphan reconciliation.
   rejection without taking ownership of invalid input. Four offline
   regressions bring the binary-COPY reader suite to 49/49 under ASan/UBSan.
   This is a latent API-correctness fix; the active query path currently
-  infers its own output schema. No AWS run was needed.
+  infers its own output schema. Published the one-commit generic fix on
+  [`feature/upstream-pg-copy-output-schema`](https://github.com/vahid110/arrow-adbc/tree/feature/upstream-pg-copy-output-schema)
+  from `upstream/main` at `4d50e2e30`; its isolated source build and 26/26
+  offline reader tests pass. Broader fork CI remains pending. No AWS run or
+  Apache PR was used.
 - 2026-09-14: Added a Redshift-private staging regression with both parent
   and child Arrow offsets nonzero and a NULL at the combined physical row.
   CSV preparation rejects it with `kNullValue` before any object-store event
