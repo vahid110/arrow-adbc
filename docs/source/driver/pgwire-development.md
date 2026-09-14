@@ -132,9 +132,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
       zero fields, duplicate names, SQL `CREATE` errors, and later transfer
       failures. Name and Arrow type preflight are narrow completed steps.
-- [ ] Make timezone-aware bound queries release their owned transaction and
-      restore session state on preparation/execution errors and early result-
-      stream release; a field-mapping guard alone does not close this gap.
+- [ ] Complete timezone-aware bound-query cleanup for timezone-setup failures,
+      output-schema/decoding failures, early result-stream release, and local
+      Arrow errors in explicit transactions. Typed-prepare and bound-row SQL
+      errors now have scoped autocommit rollback.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -508,6 +509,17 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: A bound-row error after successful timezone setup now rolls back
+  only the driver's autocommit-owned transaction, clears its affected-row count,
+  and makes the result stream terminal so a retry cannot execute remaining
+  rows outside that transaction. PostgreSQL 17 tests insert one valid row then
+  fail on division by zero in the second: no-output and lazy output modes
+  restore timezone, leave the connection idle/reusable, and persist zero rows;
+  an explicit-transaction case remains caller-owned. The local statement suite
+  passed 106 cases with six expected skips, two focused ASan/UBSan tests passed,
+  CMake shared/static driver artifacts built, and the AWS-free Redshift artifact
+  suite passed. Other cleanup paths remain in the roadmap above; cross-platform
+  CI for this narrow fix is pending.
 - 2026-09-14: On a failed typed-query `Prepare`, the bound-query reader now
   rolls back only the timezone transaction it opened for autocommit and
   preserves the original SQL error. PostgreSQL 17 tests cover both output
@@ -516,8 +528,9 @@ necessary; this is not a claim of automatic orphan reconciliation.
   passed under Meson ASan/UBSan; local CMake shared/static PostgreSQL and
   Redshift artifacts built and the AWS-free Redshift artifact suite passed.
   Failures inside timezone setup, after successful preparation, and early
-  result-stream release remain the separate cleanup item above. Cross-platform
-  CI for this narrow fix is pending.
+  result-stream release remain the separate cleanup item above. The
+  [five-platform PostgreSQL 18 and Ubuntu Meson matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34806953242)
+  passed with all AWS-backed jobs skipped.
 - 2026-09-14: Deferred timezone-sensitive parameter setup until all Arrow
   fields have valid PostgreSQL mappings and binary writers. A PostgreSQL
   regression reproduced the old leak (open transaction and UTC session after
