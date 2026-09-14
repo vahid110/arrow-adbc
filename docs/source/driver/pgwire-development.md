@@ -133,13 +133,14 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       zero fields, duplicate names, SQL `CREATE` errors, and later transfer
       failures. Name and Arrow type preflight are narrow completed steps.
 - [ ] Complete timezone-aware bound-query cleanup for output-schema/decoding
-      failures and early result-stream release, including post-export Arrow
-      errors. Timezone-setup, typed-prepare, and bound-row SQL errors now have
-      scoped autocommit rollback; synchronous bind/writer errors in healthy
-      explicit transactions restore the prior timezone without committing.
-      Early stream release needs a connection-
-      lifetime-aware finalizer; the reader's raw `PGconn*` cannot safely be used
-      after an explicit ADBC connection release.
+      failures, including post-export Arrow errors and cleanup failures.
+      Timezone-setup, typed-prepare, and bound-row SQL errors have scoped
+      autocommit rollback; synchronous bind/writer errors in healthy explicit
+      transactions restore the prior timezone without committing. Early bound
+      stream release now has best-effort, connection-lifetime-guarded cleanup
+      and a per-connection active-stream lease that rejects competing ADBC SQL
+      and transaction changes. Do not treat it as a guarantee under concurrent
+      connection use or failed rollback/restore SQL.
 - [x] Qualify Redshift query cancellation with a bounded, cleanup-safe live
       query; do not reuse PostgreSQL's `pg_sleep()` fixture, which Redshift
       documents as unsupported.
@@ -513,6 +514,23 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: An unfinished bound result stream now holds a weak reference to
+  its ADBC connection and a per-connection active-stream lease. On ordinary
+  early release it rolls back a driver-owned autocommit transaction, or
+  restores the prior timezone without ending a healthy caller-owned
+  transaction. The lease prevents another ADBC query, schema/parameter
+  discovery, commit, rollback, or option change from replacing that
+  transaction while the stream is unfinished. After explicit connection
+  close, `get_next` and a retained statement's execute report an error and
+  stream release skips the stale libpq pointer. PostgreSQL 17 tests cover
+  release before and after reading the first batch, explicit transaction
+  ownership and competing-operation rejection, and connection close before
+  stream release. Both full PostgreSQL C++ suites, three focused ASan/UBSan
+  tests, shared/static PostgreSQL and Redshift builds, and the AWS-free
+  Redshift artifact suite passed locally. Cross-platform CI for this
+  checkpoint is pending. Cleanup SQL failures, concurrent connection use,
+  and post-export decoder errors still need separate qualification. The
+  disposable PostgreSQL cluster was stopped and removed.
 - 2026-09-14: A synchronous Arrow/binary-writer bind error in a healthy
   explicit transaction now restores the caller's timezone, leaves that
   transaction open, and terminalizes the failed bind. A PostgreSQL 17 test
@@ -521,8 +539,10 @@ necessary; this is not a claim of automatic orphan reconciliation.
   its uncommitted marker row is still visible, and only the caller's later
   rollback discards that row. Both full PostgreSQL C++ suites, three focused
   ASan/UBSan tests, shared/static PostgreSQL and Redshift builds, and the
-  AWS-free Redshift artifact suite passed locally. Cross-platform CI for this
-  narrow fix is pending. Post-export decoding and early release remain open.
+  AWS-free Redshift artifact suite passed locally. The
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34808790422)
+  passed with all AWS-backed jobs skipped. Post-export decoding remained open;
+  ordinary early release is addressed in the subsequent checkpoint above.
 - 2026-09-14: If timezone lookup or UTC setup fails after the driver opens an
   autocommit transaction, the setup path now rolls it back while preserving the
   original error. A PostgreSQL 17 regression shadows `current_setting(text)`
