@@ -130,9 +130,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
-      duplicate names, SQL `CREATE` errors, and later transfer failures. Zero
-      fields, missing names, and unsupported Arrow types are narrow completed
-      preflight steps; they do not make replacement atomic after `DROP`.
+      backend-specific identifier collisions, SQL `CREATE` errors, and later
+      transfer failures. Zero fields, byte-identical duplicate names, missing
+      names, and unsupported Arrow types are narrow completed preflight steps;
+      they do not make replacement atomic after `DROP`.
 - [ ] Complete timezone-aware bound-query cleanup for output-schema failures,
       cleanup SQL failures, and concurrent connection use. Post-export decoder
       errors now terminalize the bound stream and clean up the timezone state.
@@ -307,6 +308,12 @@ behavior tests. Do not infer Debian support from Ubuntu alone.
   The compute-usage panel was not opened because the console warns that
   retrieving it may consume workgroup capacity.
 - Keep test runs focused and batched; do not run Redshift for PostgreSQL-only changes.
+- [x] Gate the billed Redshift Serverless smoke job behind manual workflow
+  dispatch. Ordinary pushes continue the five-platform PostgreSQL 18 and
+  Redshift-artifact checks without AWS. Run the live job deliberately at a
+  Redshift-relevant milestone, and inspect its temporary ingress cleanup. Give
+  manual live runs their own non-canceling concurrency group so a source push
+  cannot interrupt cleanup.
 - [x] Harden the opt-in COPY fixture's temporary CI ingress cleanup for an
   ambiguous authorize or revoke response. It marks an attempt before calling
   AWS and reconciles only a rule matching this run's unique description,
@@ -509,7 +516,7 @@ PostgreSQL-only fixes are published on separate Apache-facing fork branches.
 Current work is production hardening and platform qualification through
 short-lived evaluation archives.
 
-Ordinary live Redshift CI now marks each temporary runner `/32` ingress rule
+Manually dispatched live Redshift CI marks each temporary runner `/32` ingress rule
 with a run-specific `adbc-pgwire-live-<run-id>-<attempt>` description. It refuses
 to alter a pre-existing exact-CIDR rule, saves the authorization attempt before
 the AWS call, and revokes only a verified owned rule ID even if the authorize
@@ -521,14 +528,34 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: Replace ingest now rejects byte-identical duplicate Arrow column
+  names before dropping the target. The shared preflight deliberately does not
+  fold case: PostgreSQL and Redshift quoted-identifier equivalence can differ.
+  A PostgreSQL 17 sentinel test confirms `INVALID_ARGUMENT`, target-row
+  preservation, and same-statement reuse. Both full PostgreSQL C++ suites,
+  the AWS-free Redshift suite, shared/static PostgreSQL and Redshift builds,
+  and two focused ASan/UBSan tests passed locally. A separate workflow change
+  makes live Redshift Serverless testing manual-only and isolates its
+  concurrency group so small source pushes neither open billed compute windows
+  nor cancel in-flight ingress cleanup. The disposable PostgreSQL cluster was
+  stopped and removed. Server-side identifier collisions and failures after
+  `DROP` remain open.
 - 2026-09-14: Replace ingest now rejects a zero-field Arrow schema before it
   can drop an existing table. A PostgreSQL 17 test binds an empty STRUCT stream
   for a temporary target, checks `INVALID_ARGUMENT`, then reads the original
   sentinel row through the same statement. Both full PostgreSQL C++ suites,
   the AWS-free Redshift suite, shared/static PostgreSQL and Redshift builds,
   and two focused ASan/UBSan tests passed locally. The disposable PostgreSQL
-  cluster was stopped and removed. Duplicate names, server-side `CREATE`
-  failures, and transfer failures remain separate replace-ingest gaps.
+  cluster was stopped and removed. The
+  [five-platform PostgreSQL 18 and live Redshift smoke run](https://github.com/vahid110/arrow-adbc/actions/runs/34814158326)
+  passed, including its in-job temporary-ingress revoke; the
+  [seven-platform development-package run](https://github.com/vahid110/arrow-adbc/actions/runs/34814158082)
+  passed all archives and the final checksum gate. These are development
+  artifacts, not a production release. An independent post-run security-group
+  read remains pending because the AWS Console session was signed out.
+  Backend-specific identifier collisions, server-side `CREATE` failures, and
+  transfer failures remain separate replace-ingest gaps; exact duplicates are
+  addressed in the subsequent checkpoint above.
 - 2026-09-14: Bound-result finalization is now one-shot. A rollback, timezone
   restore, or COMMIT failure marks the ADBC connection unusable while preserving
   the primary bind/decode error; subsequent SQL, transaction, schema, metadata,
@@ -542,7 +569,8 @@ necessary; this is not a claim of automatic orphan reconciliation.
   PostgreSQL cluster was stopped and removed. The same-head
   [seven-platform development-package run](https://github.com/vahid110/arrow-adbc/actions/runs/34813621804)
   passed all extracted-client archives and the final checksum gate. This is
-  not a production release; the five-platform PostgreSQL matrix is pending.
+  not a production release. The subsequent zero-column checkpoint above has a
+  green five-platform PostgreSQL and live Redshift run covering this code.
 - 2026-09-14: Post-export Arrow decoding errors now finalize a timezone-aware
   bound stream immediately: discard remaining bound rows, clear the current
   result, and roll back only a driver-owned autocommit transaction; a healthy
