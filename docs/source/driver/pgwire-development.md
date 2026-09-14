@@ -502,6 +502,15 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-14: The bounded stream-preflight head passed the
+  [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34795497470)
+  with AWS-backed jobs explicitly skipped. The first run caught a GCC-only
+  ambiguous empty-list constructor in the test fixture; the explicit
+  `std::vector<Batch>` correction passed the replacement Debian job and all
+  four other platforms. The preceding code commit passed the
+  [seven-platform development archive/checksum matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34795275226);
+  the later correction changes only a test initializer, not packaged code.
+  Neither run is a live staged-COPY or production-release qualification.
 - 2026-09-14: Added a Redshift-private, AWS-free multi-batch stream preflight.
   It moves and releases the input stream, validates empty and nonempty batches,
   caps the aggregate CSV at 8 MiB and the batch count at 128, then calls the
@@ -511,9 +520,9 @@ necessary; this is not a claim of automatic orphan reconciliation.
   excessive batch streams, and invalid callback handles; failed preflights
   make zero store/COPY calls. CMake shared/static builds and all 49 Redshift
   artifact tests pass under ASan/UBSan. Meson source/test lists are kept in
-  parity but its executable was unavailable locally; the AWS-free CI gate is
-  still pending. No S3 adapter, IAM change, active ingest selection, or live
-  Redshift support claim follows.
+  parity but its executable was unavailable locally; the AWS-free CI gate
+  passed as recorded above. No S3 adapter, IAM change, active ingest
+  selection, or live Redshift support claim follows.
 - 2026-09-14: The all-empty-string CSV regression head passed the
   [five-platform PostgreSQL 18 and Redshift-artifact matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34794342952)
   and [seven-platform development archive plus checksum verification](https://github.com/vahid110/arrow-adbc/actions/runs/34794351261).
