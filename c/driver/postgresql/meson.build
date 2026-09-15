@@ -116,7 +116,10 @@ foreach name, conf : postgres_tests
         dependencies: [libpq_dep, adbc_validation_dep, fmt_dep],
         cpp_args: cpp_args,
     )
-    test('adbc-' + name, exc)
+    # The full integration suite includes large decimal/result round trips.
+    # Sanitized CI can exceed Meson's 30-second default; retain a bounded
+    # allowance for that executable without relaxing COPY/unit-test timeouts.
+    test('adbc-' + name, exc, timeout: name == 'driver-postgresql' ? 120 : 30)
 endforeach
 
 redshift_exc = executable(
