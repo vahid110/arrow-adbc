@@ -136,6 +136,10 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       PostgreSQL autocommit now owns a transactional `DROP`/`CREATE` pair and
       rolls it back on server-side `CREATE` failure. Explicit transactions need
       a separate savepoint design; transfer failures remain non-atomic.
+- [x] Terminalize PostgreSQL binary ingest COPY after client/server errors,
+      preserving the primary failure and reporting zero affected rows; retire
+      the connection when protocol cleanup cannot be confirmed. Explicit
+      transactions remain caller-owned.
 - [ ] Complete timezone-aware bound-query cleanup for output-schema failures,
       cleanup SQL failures, and concurrent connection use. Post-export decoder
       errors now terminalize the bound stream and clean up the timezone state.
@@ -531,6 +535,35 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-15: PostgreSQL binary ingest COPY now sends CopyFail for any
+  client-side stream/writer error after entering COPY mode, then drains terminal
+  results to NULL as required by the
+  [libpq COPY protocol](https://www.postgresql.org/docs/current/libpq-copy.html).
+  Server errors retain SQLSTATE/details, client errors retain their original
+  message, and affected rows stay zero unless the complete transfer succeeds.
+  Failed/unconfirmed termination marks the connection unusable instead of
+  attempting SQL in COPY mode. Explicit ADBC transactions are not rolled back
+  automatically, and Redshift's parameterized-ingest path is unchanged.
+  Four PostgreSQL 17 regressions cover second-batch EIO with successful reuse,
+  CHECK violation after earlier data, caller-owned aborted transaction with
+  caller rollback, and backend loss while aborting COPY. All four pass normally
+  and under ASan/UBSan; the complete normal PostgreSQL, COPY, and AWS-free
+  Redshift suites pass, as do both static/shared driver builds. The full
+  sanitized Meson suites passed as recorded below; cross-platform CI for this
+  checkpoint is pending. Replace transfer atomicity is the next bounded
+  checkpoint, not claimed here. No AWS call or billed Redshift test was used.
+- 2026-09-15: The previous replace-DDL head `0c6cf3932` passed the
+  [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34816442359)
+  and [seven-platform development-package/checksum gate](https://github.com/vahid110/arrow-adbc/actions/runs/34816441823).
+  AWS-backed jobs were skipped. Its
+  [broader Unix run](https://github.com/vahid110/arrow-adbc/actions/runs/34816441863)
+  passed the unsanitized PostgreSQL suite but terminated the sanitized full
+  PostgreSQL executable at Meson's default 30-second timeout, without a reported
+  assertion or sanitizer diagnostic. The full integration executable now has a
+  bounded 120-second Meson timeout; COPY/unit executables retain 30 seconds.
+  A local macOS ARM64 sanitized Meson run passed the complete PostgreSQL,
+  COPY, and AWS-free Redshift suites (8.65s, 3.53s, and 1.24s respectively).
+  This is not a live Redshift or production-package qualification.
 - 2026-09-14: PostgreSQL autocommit replace ingest now wraps its `DROP` and
   `CREATE` DDL pair in a driver-owned transaction only when the backend
   advertises transactional DDL. A `CREATE` error rolls back the preceding
@@ -542,7 +575,8 @@ necessary; this is not a claim of automatic orphan reconciliation.
   sentinel and raw-transaction tests, both full PostgreSQL C++ suites, the
   AWS-free Redshift suite, shared/static PostgreSQL and Redshift builds, and
   three focused ASan/UBSan tests passed locally. The disposable PostgreSQL
-  cluster was stopped and removed. Cross-platform CI is pending; explicit
+  cluster was stopped and removed. Cross-platform CI subsequently passed as
+  recorded above; explicit
   transaction savepoints, Redshift DDL, and later transfer failures remain.
 - 2026-09-14: Replace ingest now rejects byte-identical duplicate Arrow column
   names before dropping the target. The shared preflight deliberately does not

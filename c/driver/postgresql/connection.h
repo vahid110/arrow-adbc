@@ -38,6 +38,7 @@ class PostgresConnection {
     kNone,
     kBoundStreamCleanup,
     kReplaceIngestDdlFinalization,
+    kCopyIngestCleanup,
     kUnknownTransactionState,
   };
 
@@ -104,6 +105,7 @@ class PostgresConnection {
   void MarkUnknownTransactionState() {
     MarkUnusable(UnusableReason::kUnknownTransactionState);
   }
+  void MarkCopyIngestCleanupFailed() { MarkUnusable(UnusableReason::kCopyIngestCleanup); }
   bool unusable() const { return unusable_reason_ != UnusableReason::kNone; }
   bool HasActiveBoundStream() const { return !active_bound_stream_.expired(); }
   bool TryClaimBoundStream(const std::shared_ptr<void>& lease) {

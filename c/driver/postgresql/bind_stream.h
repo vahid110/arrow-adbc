@@ -365,55 +365,93 @@ struct BindStream {
 
   Status ExecuteCopy(PGconn* pg_conn, const PostgresTypeResolver& type_resolver,
                      const PostgresType* target_types, bool disable_decimal_fast_path,
-                     int64_t* rows_affected) {
+                     int64_t* rows_affected, bool* copy_cleanup_failed) {
     if (rows_affected) *rows_affected = 0;
+    *copy_cleanup_failed = false;
+    int64_t copied_rows = 0;
 
-    PostgresCopyStreamWriter writer;
-    UNWRAP_ERRNO(Internal, writer.Init(&bind_schema.value));
-    UNWRAP_NANOARROW(na_error, Internal,
-                     writer.InitFieldWriters(type_resolver, target_types,
-                                             disable_decimal_fast_path, &na_error));
+    // This driver uses blocking libpq connections. COPY_IN is already active.
+    // Every client-side failure below must end the
+    // protocol before another SQL command (including ROLLBACK) can be issued.
+    // Keep the primary stream/writer error if COPY abort itself also fails.
+    Status execution_status = [&]() -> Status {
+      PostgresCopyStreamWriter writer;
+      UNWRAP_ERRNO(Internal, writer.Init(&bind_schema.value));
+      UNWRAP_NANOARROW(na_error, Internal,
+                       writer.InitFieldWriters(type_resolver, target_types,
+                                               disable_decimal_fast_path, &na_error));
 
-    UNWRAP_NANOARROW(na_error, Internal, writer.WriteHeader(&na_error));
+      UNWRAP_NANOARROW(na_error, Internal, writer.WriteHeader(&na_error));
 
-    while (true) {
-      UNWRAP_STATUS(PullNextArray());
-      if (!current->release) break;
+      while (true) {
+        UNWRAP_STATUS(PullNextArray());
+        if (!current->release) break;
 
-      UNWRAP_ERRNO(Internal, writer.SetArray(&current.value));
+        UNWRAP_ERRNO(Internal, writer.SetArray(&current.value));
 
-      // build writer buffer
-      int write_result;
-      do {
-        write_result = writer.WriteRecord(&na_error);
-      } while (write_result == NANOARROW_OK);
+        // build writer buffer
+        int write_result;
+        do {
+          write_result = writer.WriteRecord(&na_error);
+        } while (write_result == NANOARROW_OK);
 
-      // check if not ENODATA at exit
-      if (write_result != ENODATA) {
-        return Status::IO("Error occurred writing COPY data: ", PQerrorMessage(pg_conn));
+        // check if not ENODATA at exit
+        if (write_result != ENODATA) {
+          return Status::IO("Error occurred writing COPY data: ", na_error.message);
+        }
+
+        UNWRAP_STATUS(FlushCopyWriterToConn(pg_conn, writer));
+
+        copied_rows += current->length;
+        writer.Rewind();
       }
 
-      UNWRAP_STATUS(FlushCopyWriterToConn(pg_conn, writer));
+      // If there were no arrays in the stream, we haven't flushed yet
+      return FlushCopyWriterToConn(pg_conn, writer);
+    }();
 
-      if (rows_affected) *rows_affected += current->length;
-      writer.Rewind();
-    }
-
-    // If there were no arrays in the stream, we haven't flushed yet
-    UNWRAP_STATUS(FlushCopyWriterToConn(pg_conn, writer));
-
-    if (PQputCopyEnd(pg_conn, NULL) <= 0) {
+    const char* copy_error = execution_status.ok() ? nullptr : "ADBC COPY input failed";
+    if (PQputCopyEnd(pg_conn, copy_error) <= 0) {
+      // Do not attempt another SQL command while COPY termination is uncertain.
+      *copy_cleanup_failed = true;
+      if (!execution_status.ok()) return execution_status;
       return Status::IO("Error message returned by PQputCopyEnd: ",
                         PQerrorMessage(pg_conn));
     }
 
-    adbc::driver::pgwire::UniqueResult result(PQgetResult(pg_conn));
-    ExecStatusType pg_status = PQresultStatus(result.get());
-    if (pg_status != PGRES_COMMAND_OK) {
-      return MakeStatus(result.get(), "[libpq] Failed to execute COPY statement: {} {}",
-                        PQresStatus(pg_status), PQerrorMessage(pg_conn));
+    // Even a failed COPY must be drained to NULL. A fatal result is the expected
+    // response to CopyFail; it does not by itself make the connection unusable.
+    bool saw_final_result = false;
+    while (true) {
+      adbc::driver::pgwire::UniqueResult result(PQgetResult(pg_conn));
+      if (!result) break;
+      saw_final_result = true;
+      ExecStatusType pg_status = PQresultStatus(result.get());
+      if (pg_status != PGRES_COMMAND_OK && execution_status.ok()) {
+        execution_status =
+            MakeStatus(result.get(), "[libpq] Failed to execute COPY statement: {} {}",
+                       PQresStatus(pg_status), PQerrorMessage(pg_conn));
+      }
+      if (pg_status != PGRES_COMMAND_OK && pg_status != PGRES_FATAL_ERROR) {
+        // An unexpected protocol state may require its own data transfer; do
+        // not block trying to fetch another result and never reuse this handle.
+        *copy_cleanup_failed = true;
+        break;
+      }
     }
-    return Status::Ok();
+
+    const PGTransactionStatusType transaction_status = PQtransactionStatus(pg_conn);
+    if (!saw_final_result || PQstatus(pg_conn) != CONNECTION_OK ||
+        (transaction_status != PQTRANS_IDLE && transaction_status != PQTRANS_INTRANS &&
+         transaction_status != PQTRANS_INERROR)) {
+      *copy_cleanup_failed = true;
+    }
+    if (*copy_cleanup_failed && execution_status.ok()) {
+      return Status::IO("[libpq] COPY protocol cleanup could not be confirmed: ",
+                        PQerrorMessage(pg_conn));
+    }
+    if (execution_status.ok() && rows_affected) *rows_affected = copied_rows;
+    return execution_status;
   }
 
   Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,

@@ -941,11 +941,13 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
                       PQerrorMessage(connection_->conn()), query)
         .ToAdbc(error);
   }
-  RAISE_STATUS(
-      error, bind_stream.ExecuteCopy(connection_->conn(), *connection_->type_resolver(),
-                                     has_copy_target_types ? &copy_target_types : nullptr,
-                                     disable_decimal_fast_path_, rows_affected));
-  return ADBC_STATUS_OK;
+  bool copy_cleanup_failed = false;
+  Status copy_status = bind_stream.ExecuteCopy(
+      connection_->conn(), *connection_->type_resolver(),
+      has_copy_target_types ? &copy_target_types : nullptr, disable_decimal_fast_path_,
+      rows_affected, &copy_cleanup_failed);
+  if (copy_cleanup_failed) connection_->MarkCopyIngestCleanupFailed();
+  return copy_status.ToAdbc(error);
 }
 
 AdbcStatusCode PostgresStatement::GetOption(const char* key, char* value, size_t* length,

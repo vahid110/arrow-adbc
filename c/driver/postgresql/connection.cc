@@ -294,6 +294,11 @@ AdbcStatusCode PostgresConnection::CheckConnectionUsable(struct AdbcError* error
         error,
         "[libpq] Connection is unusable after replace-ingest DDL finalization failed; "
         "release it and create a new connection");
+  } else if (unusable_reason_ == UnusableReason::kCopyIngestCleanup) {
+    InternalAdbcSetError(
+        error,
+        "[libpq] Connection is unusable after COPY ingest cleanup failed; "
+        "release it and create a new connection");
   } else {
     InternalAdbcSetError(
         error,

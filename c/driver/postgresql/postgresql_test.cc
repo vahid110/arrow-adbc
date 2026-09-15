@@ -1823,6 +1823,381 @@ TEST_F(PostgresStatementTest, SqlIngestReplaceRejectsUnsupportedTypeBeforeDrop) 
       adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
 }
 
+struct CopyFailingStreamState {
+  ArrowArrayStream* source;
+  int next_calls = 0;
+  PGconn* killer = nullptr;
+  int backend_pid = 0;
+  bool terminated = false;
+};
+
+static ArrowArrayStream MakeCopyFailingStream(CopyFailingStreamState* state) {
+  ArrowArrayStream stream = {};
+  stream.get_schema = [](ArrowArrayStream* stream, ArrowSchema* out) {
+    auto* state = static_cast<CopyFailingStreamState*>(stream->private_data);
+    return state->source->get_schema(state->source, out);
+  };
+  stream.get_next = [](ArrowArrayStream* stream, ArrowArray* out) {
+    auto* state = static_cast<CopyFailingStreamState*>(stream->private_data);
+    if (state->next_calls++ == 0) {
+      return state->source->get_next(state->source, out);
+    }
+    // The first batch has been serialized and sent before COPY asks for more.
+    if (state->killer != nullptr) {
+      const std::string query =
+          "SELECT pg_terminate_backend(" + std::to_string(state->backend_pid) + ")";
+      adbc::driver::pgwire::UniqueResult terminate(PQexec(state->killer, query.c_str()));
+      state->terminated = terminate != nullptr &&
+                          PQresultStatus(terminate.get()) == PGRES_TUPLES_OK &&
+                          PQntuples(terminate.get()) == 1 &&
+                          std::strcmp(PQgetvalue(terminate.get(), 0, 0), "t") == 0;
+    }
+    out->release = nullptr;
+    return EIO;
+  };
+  stream.get_last_error = [](ArrowArrayStream*) {
+    return "injected COPY stream read failure";
+  };
+  stream.release = [](ArrowArrayStream* stream) {
+    stream->release = nullptr;
+    stream->private_data = nullptr;
+  };
+  stream.private_data = state;
+  return stream;
+}
+
+TEST_F(PostgresStatementTest, SqlIngestCopyStreamErrorAfterFirstBatchPreservesTarget) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TEMP TABLE adbc_copy_stream_error (id BIGINT)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "INSERT INTO adbc_copy_stream_error VALUES (42)", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray batch;
+  ASSERT_THAT(
+      adbc_validation::MakeBatch<int64_t>(schema.get(), batch.get(), nullptr, {1, 2, 3}),
+      adbc_validation::IsOkErrno());
+  std::vector<ArrowArray> batches(1);
+  ArrowArrayMove(batch.get(), &batches[0]);
+  nanoarrow::UniqueArrayStream source;
+  adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+
+  CopyFailingStreamState state{source.get()};
+  ArrowArrayStream failing_stream = MakeCopyFailingStream(&state);
+
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_copy_stream_error", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, &failing_stream, &error),
+              IsOkStatus(&error));
+  int64_t rows_affected = -1;
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsStatus(ADBC_STATUS_IO, &error));
+  EXPECT_EQ(state.next_calls, 2);
+  EXPECT_EQ(rows_affected, 0);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("injected COPY stream read failure"));
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  // COPY must be aborted, not successfully finished with the preceding batch.
+  // This also proves its terminal result was drained before the next query.
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT id FROM pg_temp.adbc_copy_stream_error", &error),
+              IsOkStatus(&error));
+  {
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                          &reader.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    ASSERT_NE(reader.array->release, nullptr);
+    ASSERT_NO_FATAL_FAILURE(
+        adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    ASSERT_EQ(reader.array->release, nullptr);
+  }
+
+  // The same statement can subsequently execute another successful COPY.
+  nanoarrow::UniqueSchema retry_schema;
+  ArrowSchemaInit(retry_schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(retry_schema.get(), 1),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(retry_schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(retry_schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray retry_batch;
+  ASSERT_THAT(adbc_validation::MakeBatch<int64_t>(retry_schema.get(), retry_batch.get(),
+                                                  nullptr, {5, 6}),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_copy_stream_error", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementBind(&statement, retry_batch.get(), retry_schema.get(), &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsOkStatus(&error));
+  EXPECT_EQ(rows_affected, 2);
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+}
+
+TEST_F(PostgresStatementTest, SqlIngestCopyServerErrorPreservesSqlStateAndTarget) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
+                                       "CREATE TEMP TABLE adbc_copy_server_error "
+                                       "(id BIGINT CHECK (id > 0))",
+                                       &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "INSERT INTO adbc_copy_server_error VALUES (42)", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray first_batch;
+  nanoarrow::UniqueArray second_batch;
+  ASSERT_THAT(adbc_validation::MakeBatch<int64_t>(schema.get(), first_batch.get(),
+                                                  nullptr, {1, 2, 3}),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(adbc_validation::MakeBatch<int64_t>(schema.get(), second_batch.get(),
+                                                  nullptr, {4, -1}),
+              adbc_validation::IsOkErrno());
+  std::vector<ArrowArray> batches(2);
+  ArrowArrayMove(first_batch.get(), &batches[0]);
+  ArrowArrayMove(second_batch.get(), &batches[1]);
+  nanoarrow::UniqueArrayStream stream;
+  adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_copy_server_error", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+              IsOkStatus(&error));
+  int64_t rows_affected = -1;
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsStatus(ADBC_STATUS_INTEGRITY, &error));
+  EXPECT_EQ(std::string(error.sqlstate, 5), "23514");
+  EXPECT_EQ(rows_affected, 0);
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT id FROM pg_temp.adbc_copy_server_error", &error),
+              IsOkStatus(&error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->release, nullptr);
+}
+
+TEST_F(PostgresStatementTest, SqlIngestCopyStreamErrorLeavesCallerTransactionAborted) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement,
+                  "CREATE TEMP TABLE adbc_copy_caller_transaction (id BIGINT)", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "INSERT INTO adbc_copy_caller_transaction VALUES (42)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray batch;
+  ASSERT_THAT(
+      adbc_validation::MakeBatch<int64_t>(schema.get(), batch.get(), nullptr, {1, 2, 3}),
+      adbc_validation::IsOkErrno());
+  std::vector<ArrowArray> batches(1);
+  ArrowArrayMove(batch.get(), &batches[0]);
+  nanoarrow::UniqueArrayStream source;
+  adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+  CopyFailingStreamState state{source.get()};
+  ArrowArrayStream failing_stream = MakeCopyFailingStream(&state);
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_copy_caller_transaction", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, &failing_stream, &error),
+              IsOkStatus(&error));
+  int64_t rows_affected = -1;
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsStatus(ADBC_STATUS_IO, &error));
+  EXPECT_EQ(state.next_calls, 2);
+  EXPECT_EQ(rows_affected, 0);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("injected COPY stream read failure"));
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  // The driver must drain COPY without rolling back a transaction it does not own.
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INERROR);
+  ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+  EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "SELECT id FROM pg_temp.adbc_copy_caller_transaction", &error),
+      IsOkStatus(&error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_EQ(reader.array->release, nullptr);
+}
+
+TEST_F(PostgresStatementTest, SqlIngestCopyAbortFailureMakesConnectionUnusable) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueConnection killer(
+      PQconnectdb(std::getenv("ADBC_POSTGRESQL_TEST_URI")));
+  ASSERT_NE(killer, nullptr);
+  ASSERT_EQ(PQstatus(killer.get()), CONNECTION_OK) << PQerrorMessage(killer.get());
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TEMP TABLE adbc_copy_abort_failure (id BIGINT)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT64),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "id"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray batch;
+  ASSERT_THAT(
+      adbc_validation::MakeBatch<int64_t>(schema.get(), batch.get(), nullptr, {1, 2, 3}),
+      adbc_validation::IsOkErrno());
+  std::vector<ArrowArray> batches(1);
+  ArrowArrayMove(batch.get(), &batches[0]);
+  nanoarrow::UniqueArrayStream source;
+  adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+  CopyFailingStreamState state{source.get(), 0, killer.get(), PQbackendPID(pg_conn)};
+  ArrowArrayStream failing_stream = MakeCopyFailingStream(&state);
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_copy_abort_failure", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, &failing_stream, &error),
+              IsOkStatus(&error));
+  int64_t rows_affected = -1;
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsStatus(ADBC_STATUS_IO, &error));
+  EXPECT_EQ(state.next_calls, 2);
+  ASSERT_TRUE(state.terminated);
+  EXPECT_EQ(rows_affected, 0);
+  ASSERT_NE(error.message, nullptr);
+  // Preserve the original Arrow failure even when COPY termination also fails.
+  EXPECT_THAT(error.message, ::testing::HasSubstr("injected COPY stream read failure"));
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(PQstatus(pg_conn), CONNECTION_BAD);
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("COPY ingest cleanup failed"));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionRelease(&connection, &error), IsOkStatus(&error));
+}
+
 TEST_F(PostgresStatementTest, SqlIngestAppendIntegerIntoNumeric) {
   ASSERT_THAT(quirks()->DropTable(&connection, "numeric_ingest", &error),
               IsOkStatus(&error));
