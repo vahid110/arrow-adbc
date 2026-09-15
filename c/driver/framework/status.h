@@ -118,6 +118,15 @@ class Status {
       return Status();
     }
     auto status = Status(code, error.message ? error.message : "(unknown error)");
+    std::memcpy(status.impl_->sql_state, error.sqlstate, sizeof(error.sqlstate));
+    // Only this framework's release callback proves the private payload is a
+    // Status. Other drivers may use the same vendor-code marker for another
+    // layout, so never reinterpret arbitrary foreign private_data.
+    if (error.vendor_code == ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA &&
+        error.release == &CRelease && error.private_data != nullptr) {
+      auto* error_status = static_cast<Status*>(error.private_data);
+      if (error_status->impl_) status.impl_->details = error_status->impl_->details;
+    }
     if (error.release) {
       error.release(&error);
     }
