@@ -289,10 +289,10 @@ AdbcStatusCode PostgresConnection::CheckConnectionUsable(struct AdbcError* error
         error,
         "[libpq] Connection is unusable after bound result cleanup failed; "
         "release it and create a new connection");
-  } else if (unusable_reason_ == UnusableReason::kReplaceIngestDdlFinalization) {
+  } else if (unusable_reason_ == UnusableReason::kReplaceIngestFinalization) {
     InternalAdbcSetError(
         error,
-        "[libpq] Connection is unusable after replace-ingest DDL finalization failed; "
+        "[libpq] Connection is unusable after replace-ingest finalization failed; "
         "release it and create a new connection");
   } else if (unusable_reason_ == UnusableReason::kCopyIngestCleanup) {
     InternalAdbcSetError(

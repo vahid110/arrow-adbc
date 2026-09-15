@@ -60,23 +60,31 @@ namespace adbcpq {
 
 namespace {
 
-// Only PostgreSQL autocommit replace ingest owns this short DDL transaction.
+// Only autocommit replace ingest on a transactional-DDL backend owns this
+// transaction. PostgreSQL binary COPY can keep it open through data transfer.
 // Redshift and caller-owned transactions retain their existing behavior.
-class ScopedReplaceIngestDdlTransaction {
+class ScopedReplaceIngestTransaction {
  public:
-  ScopedReplaceIngestDdlTransaction(PostgresConnection* connection, bool enabled)
+  ScopedReplaceIngestTransaction(PostgresConnection* connection, bool enabled)
       : connection_(connection), conn_(connection->conn()), enabled_(enabled) {}
 
-  ~ScopedReplaceIngestDdlTransaction() {
-    if (!open_) return;
+  ~ScopedReplaceIngestTransaction() {
     // This is a last-resort cleanup for an unexpected exit. Explicit error
     // paths call Rollback() so their original SQL error can be returned.
+    // Avoid allocating a diagnostic Status from this noexcept destructor.
+    if (!open_) return;
     open_ = false;
+    const PGTransactionStatusType txn_status = PQtransactionStatus(conn_);
+    if (connection_->unusable() || PQstatus(conn_) != CONNECTION_OK ||
+        (txn_status != PQTRANS_INTRANS && txn_status != PQTRANS_INERROR)) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return;
+    }
     adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "ROLLBACK"));
-    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK ||
+    if (!result || PQresultStatus(result.get()) != PGRES_COMMAND_OK ||
         std::strcmp(PQcmdStatus(result.get()), "ROLLBACK") != 0 ||
         PQtransactionStatus(conn_) != PQTRANS_IDLE) {
-      connection_->MarkReplaceIngestDdlFinalizationFailed();
+      connection_->MarkReplaceIngestFinalizationFailed();
     }
   }
 
@@ -88,7 +96,7 @@ class ScopedReplaceIngestDdlTransaction {
     if (txn_status == PQTRANS_UNKNOWN) {
       connection_->MarkUnknownTransactionState();
       return Status::IO(
-          "[libpq] Cannot determine transaction state before replace-ingest DDL");
+          "[libpq] Cannot determine transaction state before replace ingest");
     }
     if (txn_status != PQTRANS_IDLE) {
       return Status::InvalidState(
@@ -98,17 +106,17 @@ class ScopedReplaceIngestDdlTransaction {
     adbc::driver::pgwire::UniqueResult result(PQexec(conn_, "BEGIN"));
     if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
       Status failure = MakeStatus(
-          result.get(), "[libpq] Failed to begin replace-ingest DDL transaction: {}",
+          result.get(), "[libpq] Failed to begin replace-ingest transaction: {}",
           PQerrorMessage(conn_));
       if (PQtransactionStatus(conn_) != PQTRANS_IDLE) {
-        connection_->MarkReplaceIngestDdlFinalizationFailed();
+        connection_->MarkReplaceIngestFinalizationFailed();
       }
       return failure;
     }
     if (std::strcmp(PQcmdStatus(result.get()), "BEGIN") != 0 ||
         PQtransactionStatus(conn_) != PQTRANS_INTRANS) {
-      connection_->MarkReplaceIngestDdlFinalizationFailed();
-      return Status::IO("[libpq] Replace-ingest DDL transaction did not begin cleanly");
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return Status::IO("[libpq] Replace-ingest transaction did not begin cleanly");
     }
     open_ = true;
     return Status::Ok();
@@ -116,6 +124,9 @@ class ScopedReplaceIngestDdlTransaction {
 
   Status Rollback() { return Finalize("ROLLBACK"); }
   Status Commit() { return Finalize("COMMIT"); }
+  // A failed COPY termination or lost connection forbids further SQL. The
+  // caller has already retired the connection; closing it releases the txn.
+  void Abandon() { open_ = false; }
 
  private:
   Status Finalize(const char* command) {
@@ -123,17 +134,24 @@ class ScopedReplaceIngestDdlTransaction {
     // Disarm before issuing SQL: a failed COMMIT can have an uncertain outcome,
     // and must not prompt an accidental second rollback from the destructor.
     open_ = false;
+    const PGTransactionStatusType txn_status = PQtransactionStatus(conn_);
+    if (connection_->unusable() || PQstatus(conn_) != CONNECTION_OK ||
+        (txn_status != PQTRANS_INTRANS && txn_status != PQTRANS_INERROR)) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return Status::IO(
+          "[libpq] Cannot finalize replace ingest while protocol state is uncertain");
+    }
     adbc::driver::pgwire::UniqueResult result(PQexec(conn_, command));
     if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
-      connection_->MarkReplaceIngestDdlFinalizationFailed();
-      return MakeStatus(result.get(), "[libpq] Failed to finalize replace-ingest DDL: {}",
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return MakeStatus(result.get(), "[libpq] Failed to finalize replace ingest: {}",
                         PQerrorMessage(conn_));
     }
     if (std::strcmp(PQcmdStatus(result.get()), command) != 0 ||
         PQtransactionStatus(conn_) != PQTRANS_IDLE) {
-      connection_->MarkReplaceIngestDdlFinalizationFailed();
+      connection_->MarkReplaceIngestFinalizationFailed();
       return Status::IO(
-          "[libpq] Replace-ingest DDL finalization had an unexpected "
+          "[libpq] Replace-ingest finalization had an unexpected "
           "command tag or transaction state");
     }
     return Status::Ok();
@@ -471,13 +489,11 @@ AdbcStatusCode PostgresStatement::Cancel(struct AdbcError* error) {
   return connection_->Cancel(error);
 }
 
-AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_schema,
-                                                  const struct ArrowSchema& source_schema,
-                                                  std::string* escaped_table,
-                                                  std::string* escaped_field_list,
-                                                  PostgresType* copy_target_types,
-                                                  bool* has_copy_target_types,
-                                                  struct AdbcError* error) {
+AdbcStatusCode PostgresStatement::CreateBulkTable(
+    const std::string& current_schema, const struct ArrowSchema& source_schema,
+    std::string* escaped_table, std::string* escaped_field_list,
+    PostgresType* copy_target_types, bool* has_copy_target_types,
+    const std::function<Status()>& before_replace_ddl, struct AdbcError* error) {
   PGconn* conn = connection_->conn();
   *has_copy_target_types = false;
 
@@ -620,8 +636,12 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(const std::string& current_sch
   create += ")";
   const bool own_replace_ddl =
       ingest_.mode == IngestMode::kReplace && connection_->autocommit() &&
-      connection_->backend_profile().transactions.transactional_ddl;
-  ScopedReplaceIngestDdlTransaction ddl_transaction(connection_.get(), own_replace_ddl);
+      connection_->backend_profile().transactions.transactional_ddl &&
+      !before_replace_ddl;
+  ScopedReplaceIngestTransaction ddl_transaction(connection_.get(), own_replace_ddl);
+  if (ingest_.mode == IngestMode::kReplace && before_replace_ddl) {
+    RAISE_STATUS(error, before_replace_ddl());
+  }
   RAISE_STATUS(error, ddl_transaction.Begin());
 
   if (ingest_.mode == IngestMode::kReplace) {
@@ -911,43 +931,70 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   std::string escaped_field_list;
   PostgresType copy_target_types;
   bool has_copy_target_types = false;
-  RAISE_STATUS(error, bind_stream.Begin([&]() -> Status {
-    struct AdbcError tmp_error = ADBC_ERROR_INIT;
-    AdbcStatusCode status_code = CreateBulkTable(
-        current_schema, bind_stream.bind_schema.value, &escaped_table,
-        &escaped_field_list, &copy_target_types, &has_copy_target_types, &tmp_error);
-    return Status::FromAdbc(status_code, tmp_error);
-  }));
-
-  if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kParameterizedInsert) {
-    RAISE_STATUS(
-        error,
-        bind_stream.ExecutePreparedRows(
-            connection_->conn(), escaped_table, escaped_field_list,
-            *connection_->type_resolver(), connection_->autocommit(),
-            connection_->backend_profile().capabilities.parameterized_ingest_batch_rows,
-            rows_affected));
-    return ADBC_STATUS_OK;
+  const bool own_replace_copy =
+      ingest_.mode == IngestMode::kReplace && connection_->autocommit() &&
+      connection_->backend_profile().transactions.transactional_ddl &&
+      bulk_mode == adbc::driver::pgwire::BulkIngestMode::kBinaryCopy;
+  ScopedReplaceIngestTransaction replace_transaction(connection_.get(), own_replace_copy);
+  std::function<Status()> before_replace_ddl;
+  if (own_replace_copy) {
+    if (rows_affected) *rows_affected = 0;
+    before_replace_ddl = [&]() { return replace_transaction.Begin(); };
   }
 
-  std::string query = "COPY ";
-  query += escaped_table;
-  query += " (";
-  query += escaped_field_list;
-  query += ") FROM STDIN WITH (FORMAT binary)";
-  adbc::driver::pgwire::UniqueResult result(PQexec(connection_->conn(), query.c_str()));
-  if (PQresultStatus(result.get()) != PGRES_COPY_IN) {
-    return MakeStatus(result.get(), "[libpq] COPY query failed: {}\nQuery was: {}",
-                      PQerrorMessage(connection_->conn()), query)
-        .ToAdbc(error);
-  }
   bool copy_cleanup_failed = false;
-  Status copy_status = bind_stream.ExecuteCopy(
-      connection_->conn(), *connection_->type_resolver(),
-      has_copy_target_types ? &copy_target_types : nullptr, disable_decimal_fast_path_,
-      rows_affected, &copy_cleanup_failed);
-  if (copy_cleanup_failed) connection_->MarkCopyIngestCleanupFailed();
-  return copy_status.ToAdbc(error);
+  Status execution_status = [&]() -> Status {
+    UNWRAP_STATUS(bind_stream.Begin([&]() -> Status {
+      struct AdbcError tmp_error = ADBC_ERROR_INIT;
+      AdbcStatusCode status_code =
+          CreateBulkTable(current_schema, bind_stream.bind_schema.value, &escaped_table,
+                          &escaped_field_list, &copy_target_types, &has_copy_target_types,
+                          before_replace_ddl, &tmp_error);
+      return Status::FromAdbc(status_code, tmp_error);
+    }));
+
+    if (bulk_mode == adbc::driver::pgwire::BulkIngestMode::kParameterizedInsert) {
+      return bind_stream.ExecutePreparedRows(
+          connection_->conn(), escaped_table, escaped_field_list,
+          *connection_->type_resolver(), connection_->autocommit(),
+          connection_->backend_profile().capabilities.parameterized_ingest_batch_rows,
+          rows_affected);
+    }
+
+    std::string query = "COPY ";
+    query += escaped_table;
+    query += " (";
+    query += escaped_field_list;
+    query += ") FROM STDIN WITH (FORMAT binary)";
+    adbc::driver::pgwire::UniqueResult result(PQexec(connection_->conn(), query.c_str()));
+    const ExecStatusType pg_status = PQresultStatus(result.get());
+    if (pg_status != PGRES_COPY_IN) {
+      // An unexpected COPY direction still owns an active wire protocol. Do
+      // not let transaction finalization issue SQL on this connection.
+      if (pg_status == PGRES_COPY_OUT || pg_status == PGRES_COPY_BOTH) {
+        copy_cleanup_failed = true;
+      }
+      return MakeStatus(result.get(), "[libpq] COPY query failed: {}\nQuery was: {}",
+                        PQerrorMessage(connection_->conn()), query);
+    }
+    return bind_stream.ExecuteCopy(connection_->conn(), *connection_->type_resolver(),
+                                   has_copy_target_types ? &copy_target_types : nullptr,
+                                   disable_decimal_fast_path_, rows_affected,
+                                   &copy_cleanup_failed);
+  }();
+
+  if (copy_cleanup_failed) {
+    connection_->MarkCopyIngestCleanupFailed();
+    replace_transaction.Abandon();
+  } else if (!execution_status.ok()) {
+    // COPY must already be terminal before this rollback. Keep its original
+    // error if finalization fails and retires the connection too.
+    (void)replace_transaction.Rollback();
+  } else {
+    execution_status = replace_transaction.Commit();
+  }
+  if (own_replace_copy && !execution_status.ok() && rows_affected) *rows_affected = 0;
+  return execution_status.ToAdbc(error);
 }
 
 AdbcStatusCode PostgresStatement::GetOption(const char* key, char* value, size_t* length,

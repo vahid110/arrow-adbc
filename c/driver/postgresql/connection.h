@@ -37,7 +37,7 @@ class PostgresConnection {
   enum class UnusableReason {
     kNone,
     kBoundStreamCleanup,
-    kReplaceIngestDdlFinalization,
+    kReplaceIngestFinalization,
     kCopyIngestCleanup,
     kUnknownTransactionState,
   };
@@ -99,8 +99,8 @@ class PostgresConnection {
   bool bound_stream_cleanup_failed() const {
     return unusable_reason_ == UnusableReason::kBoundStreamCleanup;
   }
-  void MarkReplaceIngestDdlFinalizationFailed() {
-    MarkUnusable(UnusableReason::kReplaceIngestDdlFinalization);
+  void MarkReplaceIngestFinalizationFailed() {
+    MarkUnusable(UnusableReason::kReplaceIngestFinalization);
   }
   void MarkUnknownTransactionState() {
     MarkUnusable(UnusableReason::kUnknownTransactionState);

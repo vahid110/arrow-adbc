@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -28,6 +29,7 @@
 
 #include "copy/reader.h"
 #include "driver/common/utils.h"
+#include "driver/framework/status.h"
 #include "driver/pgwire/libpq_raii.h"
 #include "postgres_type.h"
 
@@ -140,12 +142,12 @@ class PostgresStatement {
   // Helper methods
 
   void ClearResult();
-  AdbcStatusCode CreateBulkTable(const std::string& current_schema,
-                                 const struct ArrowSchema& source_schema,
-                                 std::string* escaped_table,
-                                 std::string* escaped_field_list,
-                                 PostgresType* copy_target_types,
-                                 bool* has_copy_target_types, struct AdbcError* error);
+  AdbcStatusCode CreateBulkTable(
+      const std::string& current_schema, const struct ArrowSchema& source_schema,
+      std::string* escaped_table, std::string* escaped_field_list,
+      PostgresType* copy_target_types, bool* has_copy_target_types,
+      const std::function<adbc::driver::Status()>& before_replace_ddl,
+      struct AdbcError* error);
   AdbcStatusCode ResolveCopyTargetTypes(
       const std::string& escaped_table,
       const std::vector<std::string>& source_field_names, PostgresType* copy_target_types,

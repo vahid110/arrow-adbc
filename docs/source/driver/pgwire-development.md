@@ -133,9 +133,11 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       backend-specific identifier collisions, Redshift SQL `CREATE` errors,
       and later transfer failures. Zero fields, byte-identical duplicate names,
       missing names, and unsupported Arrow types have preflight checks.
-      PostgreSQL autocommit now owns a transactional `DROP`/`CREATE` pair and
-      rolls it back on server-side `CREATE` failure. Explicit transactions need
-      a separate savepoint design; transfer failures remain non-atomic.
+      PostgreSQL autocommit now owns one transaction through `DROP`/`CREATE`
+      and binary COPY, rolling back confirmed DDL/transfer failures. Explicit
+      transactions need a separate savepoint design; Redshift replacement
+      remains non-atomic across DDL and transfer. Lost finalization replies
+      retire the connection rather than claiming rollback or retrying.
 - [x] Terminalize PostgreSQL binary ingest COPY after client/server errors,
       preserving the primary failure and reporting zero affected rows; retire
       the connection when protocol cleanup cannot be confirmed. Explicit
@@ -165,6 +167,29 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       compatibility tests green; preserve observed public behavior and ordering.
 - [x] Define a documented support matrix with explicit unsupported features and
       test evidence for each claim.
+
+#### Next bounded correctness checkpoint (not implemented)
+
+PostgreSQL explicit-transaction replace will compose a private savepoint guard
+with the existing pre-DDL callback and terminal COPY seam, without new public
+options. Require `PQTRANS_INTRANS`, create and confirm a savepoint after
+preflight/before DROP, release on success without COMMIT, and recover confirmed
+failures with `ROLLBACK TO` followed by `RELEASE`. Neither recovery nor the
+allocation-free destructor may roll back the caller's whole transaction;
+uncertain COPY/recovery retires the connection without retry. Arm only after
+confirmed creation so fallback never targets a caller's older savepoint.
+PostgreSQL retains older identically named savepoints, while rollback-to keeps
+the selected savepoint alive and release alone cannot recover an aborted
+transaction. [SAVEPOINT](https://www.postgresql.org/docs/current/sql-savepoint.html),
+[ROLLBACK TO](https://www.postgresql.org/docs/current/sql-rollback-to.html),
+[RELEASE](https://www.postgresql.org/docs/current/sql-release-savepoint.html).
+
+Small test milestones: preserve unrelated pending user inserts and original
+schema/data after CREATE, stream, and server COPY errors; leave successful
+replacement uncommitted so caller rollback restores it; preserve the caller's
+older same-named savepoint; retire on backend loss. Initially restrict this to
+PostgreSQL explicit ADBC transactions and binary COPY. Redshift and raw-SQL
+transactions on autocommit connections retain their documented behavior.
 
 ### 3. Redshift-native capabilities
 
@@ -535,6 +560,33 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-15: PostgreSQL autocommit replace ingest now keeps its owned
+  transaction open through the complete binary COPY transfer, committing
+  `DROP`/`CREATE` and data together. A private, small pre-DDL callback delays
+  BEGIN until all schema/name/type preflight succeeds. Confirmed stream, writer,
+  and server COPY failures roll back to the original target; cleanup uncertainty
+  abandons the owner without SQL and retires the connection. Explicit
+  finalization and the allocation-free best-effort destructor refuse SQL on an
+  unusable connection or unexpected transaction state. Failed/unconfirmed
+  COMMIT reports zero confirmed affected rows and never retries; a lost reply
+  can still mean an uncertain durable outcome, not guaranteed rollback.
+  Redshift, explicit ADBC transactions, and parameterized ingestion retain
+  their prior behavior, and no public ADBC option or ABI changes.
+  Three PostgreSQL 17 regressions verify original schema/data preservation on
+  second-batch EIO with successful same-statement replacement retry, backend
+  loss with observer-side original-table verification/cleanup, and server TIME
+  rejection with preserved `INVALID_DATA`/SQLSTATE `22008`. All fourteen focused
+  COPY/replace tests and the complete normal PostgreSQL, COPY, and AWS-free
+  Redshift suites pass. Both static/shared drivers compile. The full macOS
+  ARM64 ASan/UBSan Meson PostgreSQL, COPY, and AWS-free Redshift suites pass
+  (9.44s, 2.80s, and 0.78s). Cross-platform CI is pending;
+  explicit transaction savepoints, Redshift replacement DDL,
+  deterministic lost-finalization-reply tests, and concurrent-use/exception
+  injection remain follow-up checkpoints. No AWS compute or permission grant
+  was used. The independent AWS temporary-rule audit still requires fresh
+  Console sign-in; the existing-account sign-in form is open in the in-app
+  browser, without opening any Redshift dashboard/compute metrics.
+  The disposable local PostgreSQL cluster was stopped and removed after tests.
 - 2026-09-15: PostgreSQL binary ingest COPY now sends CopyFail for any
   client-side stream/writer error after entering COPY mode, then drains terminal
   results to NULL as required by the
