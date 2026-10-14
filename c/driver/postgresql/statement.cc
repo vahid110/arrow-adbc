@@ -670,9 +670,9 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       *value = std::string((*it)[0].value());
       return Status::Ok();
     };
-    RAISE_STATUS(error, adbc::driver::pgwire::PreflightRedshiftReplace(
-                            ingest_.target, ingest_.db_schema, column_names,
-                            read_setting));
+    RAISE_STATUS(error,
+                 adbc::driver::pgwire::PreflightRedshiftReplace(
+                     ingest_.target, ingest_.db_schema, column_names, read_setting));
   }
 
   {

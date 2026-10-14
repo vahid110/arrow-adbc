@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 
 #include <arrow-adbc/adbc.h>
 #include "driver/framework/base_driver.h"

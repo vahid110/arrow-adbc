@@ -21,6 +21,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace adbc::driver::pgwire {
@@ -79,8 +80,7 @@ TEST(RedshiftReplacePreflightTest, RejectsEmptyAndExactDuplicateNames) {
   ExpectRejected(CheckRedshiftReplaceIdentifiers("table", "public", {}));
   ExpectRejected(CheckRedshiftReplaceIdentifiers("table", "public", {""}));
   ExpectRejected(CheckRedshiftReplaceIdentifiers("table", "public", {"id", "id"}));
-  ExpectRejected(
-      CheckRedshiftReplaceIdentifiers("table", "public", {"id", "ID", "id"}));
+  ExpectRejected(CheckRedshiftReplaceIdentifiers("table", "public", {"id", "ID", "id"}));
 }
 
 TEST(RedshiftReplacePreflightTest, AllowsOmittedSchema) {
@@ -120,13 +120,13 @@ TEST(RedshiftReplacePreflightTest, MeasuresLogicalBytesBeforeQuoteEscaping) {
 }
 
 TEST(RedshiftReplacePreflightTest, DoesNotFoldNonAsciiCase) {
-  auto result = CheckRedshiftReplaceIdentifiers("table", "public",
-                                                {"\xc3\x84", "\xc3\xa4"});
+  auto result =
+      CheckRedshiftReplaceIdentifiers("table", "public", {"\xc3\x84", "\xc3\xa4"});
   EXPECT_TRUE(result.status.ok());
   EXPECT_FALSE(result.needs_case_setting);
 
-  auto ascii_collision = CheckRedshiftReplaceIdentifiers(
-      "table", "public", {"\xc3\x84ID", "\xc3\x84id"});
+  auto ascii_collision =
+      CheckRedshiftReplaceIdentifiers("table", "public", {"\xc3\x84ID", "\xc3\x84id"});
   EXPECT_TRUE(ascii_collision.status.ok());
   EXPECT_TRUE(ascii_collision.needs_case_setting);
 }
@@ -152,8 +152,11 @@ TEST(RedshiftReplacePreflightTest, FailsClosedOnUnknownCaseSettings) {
 }
 
 struct FakeSettingReader {
+  explicit FakeSettingReader(std::string setting, AdbcStatusCode code = ADBC_STATUS_OK)
+      : value(std::move(setting)), fail_code(code) {}
+
   std::string value;
-  AdbcStatusCode fail_code = ADBC_STATUS_OK;
+  AdbcStatusCode fail_code;
   int calls = 0;
   std::string last_query;
 

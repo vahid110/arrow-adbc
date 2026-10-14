@@ -1025,12 +1025,12 @@ TEST_F(RedshiftSmokeTest, ReplaceIngestRejectsCollidingIdentifiersBeforeDrop) {
     }
     nanoarrow::UniqueArray batch;
     if (names.size() == 1) {
-      ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(schema.get(), batch.get(), nullptr,
-                                                       {7})),
-                  adbc_validation::IsOkErrno());
+      ASSERT_THAT(
+          (adbc_validation::MakeBatch<int32_t>(schema.get(), batch.get(), nullptr, {7})),
+          adbc_validation::IsOkErrno());
     } else {
-      ASSERT_THAT((adbc_validation::MakeBatch<int32_t, int32_t>(
-                      schema.get(), batch.get(), nullptr, {7}, {8})),
+      ASSERT_THAT((adbc_validation::MakeBatch<int32_t, int32_t>(schema.get(), batch.get(),
+                                                                nullptr, {7}, {8})),
                   adbc_validation::IsOkErrno());
     }
 
@@ -1059,10 +1059,10 @@ TEST_F(RedshiftSmokeTest, ReplaceIngestRejectsCollidingIdentifiersBeforeDrop) {
   // Rejection happened before DROP: the original schema and rows survive.
   struct AdbcStatement query = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &query, "SELECT id FROM adbc_redshift_replace_preflight ORDER BY id",
-                  &error_),
-              IsOkStatus(&error_));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &query, "SELECT id FROM adbc_redshift_replace_preflight ORDER BY id", &error_),
+      IsOkStatus(&error_));
   adbc_validation::StreamReader reader;
   ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
                                         &reader.rows_affected, &error_),

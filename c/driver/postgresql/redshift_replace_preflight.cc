@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace adbc::driver::pgwire {
 
@@ -41,7 +42,7 @@ RedshiftReplacePreflightResult CheckRedshiftReplaceIdentifiers(
   for (std::size_t i = 0; i < columns.size(); ++i) {
     if (columns[i].size() > kMaxIdentifierBytes) {
       return {Status::InvalidArgument("Redshift replacement column ", i,
-                                       " name exceeds 127 logical bytes")};
+                                      " name exceeds 127 logical bytes")};
     }
   }
 
@@ -59,11 +60,11 @@ RedshiftReplacePreflightResult CheckRedshiftReplaceIdentifiers(
     const std::string_view name = columns[i];
     if (name.empty()) {
       return {Status::InvalidArgument("Redshift replacement column ", i,
-                                       " must have a nonempty name")};
+                                      " must have a nonempty name")};
     }
     if (!exact_names.insert(name).second) {
       return {Status::InvalidArgument("Redshift replacement column ", i,
-                                       " duplicates another column name")};
+                                      " duplicates another column name")};
     }
 
     // AWS specifies ASCII letter folding. Leave all non-ASCII bytes untouched;
