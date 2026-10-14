@@ -23,12 +23,12 @@ Current state only; history is in git and PR descriptions.
 
 ## Active
 
-- Task 000 (coordination setup: this file, `CLAUDE.md`, `V1_PLAN.md`, PR CI triggers): in review.
-- Task 001 (land parked work): queued; parked snapshot on `origin/task/001-land-pending`.
+- Task 001 (land parked work): PR open, fixing CI.
 
 ## Known issues
 
-- `Integration` workflow is red on `feature/pgwire-core-redshift` (2026-09-15 run); task 002.
+- None blocking. `Integration` and other unrelated Apache workflows are disabled
+  in this fork.
 
 ## Live Redshift log
 

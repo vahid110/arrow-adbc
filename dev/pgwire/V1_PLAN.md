@@ -37,7 +37,7 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | # | Task | Done when |
 |---|---|---|
 | 001 | Land parked work from `task/001-land-pending`: (a) SQLSTATE-preserving error import, (b) PostgreSQL explicit-transaction savepoint recovery for replace ingest, (c) Redshift identifier-collision preflight wired into replace. Split into reviewable commits/PRs if large. | Merged, CI green |
-| 002 | Make `Integration` green on the base branch or restrict it to paths/jobs relevant to this fork, with the reason in the PR. | `Integration` green or intentionally scoped |
+| 002 | Dropped: `Integration` is disabled in this fork (Apache-wide integration is out of scope). | - |
 | 003 | Cut `docs/source/driver/pgwire-development.md` (1,900 lines) to a concise developer guide: architecture, extension points, test commands, support matrix. History stays in git. | < 400 lines, no information needed by a developer lost |
 | 004 | Release workflow: on tag `redshift-v*`, build the 7 targets with the existing package jobs, attach archives + `SHA256SUMS` + license bundle to a **draft** GitHub Release; include an ADBC driver manifest (`.toml`) so the driver manager can load the driver by name. | Draft release produced from a test tag, then deleted |
 | 005 | Python package `adbc_driver_redshift`, mirroring `python/adbc_driver_postgresql` (wheels for the same targets, DBAPI `connect()`), built in CI. | Wheels built and smoke-tested against PostgreSQL rejection + packaged import |

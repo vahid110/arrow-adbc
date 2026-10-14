@@ -50,28 +50,49 @@ upstream code.
 ## Hard rules
 
 - Never push to `main`, never push to `upstream`, never open PRs against
-  `apache/arrow-adbc`. Push only `task/*` branches to `origin`.
+  `apache/arrow-adbc`. Workers push only `task/*` branches to `origin`. The
+  coordinator may also push and delete `redshift-v*` tags for release tasks.
   Only the coordinator merges into `feature/pgwire-core-redshift` (squash).
-- Merge requires: required CI green on the PR head, reviewer `APPROVE`, and
-  `STATUS.md`/`V1_PLAN.md` updated if the task changes scope or state.
+- Merge requires: every gate below that the PR triggered is green on the PR
+  head, reviewer `APPROVE`, and `STATUS.md`/`V1_PLAN.md` updated in the same PR
+  if the task changes scope or state.
 - No heavy local builds (the host has 8 GB RAM and other jobs). GitHub Actions is
-  the build and test machine. Local work is limited to editing, `git`, `gh`, and
-  cheap checks (e.g. `clang-format` on changed files, `pre-commit` on changed
-  files if it is installed).
+  the build and test machine. Before every push, run the pinned linters on the
+  changed files: `SKIP=dotnet-format ~/.venvs/adbc-lint/bin/pre-commit run --files <files>`
+  (clang-format 18.1.7, cpplint, cmake-format, whitespace). Batch fixes into one
+  push; each push costs a CI round.
 - AWS: never run the `aws` CLI or create/modify cloud resources. Live Redshift
-  tests run only through the `PgWire PostgreSQL` workflow's `workflow_dispatch`,
-  started by the coordinator under the budget below.
+  tests run only through the `PgWire Drivers` workflow's `workflow_dispatch`
+  (file `pgwire-postgresql.yml`), started by the coordinator under the budget
+  below.
 - Keep docs short. A task's PR description is its record; do not append long
   narrative to the docs. `STATUS.md` holds current state, not history.
 
+## PR conventions
+
+- Title: Conventional Commits, `type(component): subject`, where `component` is
+  an existing path, e.g. `feat(c/driver/postgresql): ...`, `chore(dev): ...`,
+  `docs(docs): ...`. The `Dev` workflow rejects other titles.
+- Body: what / why / testing; no `@` mentions (`Dev` rejects them). End with the
+  Claude Code attribution line.
+
 ## CI gates
 
-Required on every PR (triggered by the PR or by the `task/*` push):
-`PgWire PostgreSQL`, `PgWire Development Package` (when driver sources change),
-`PgWire AWS Safety Mocks` (when its scripts change), `Native Libraries (Unix)`,
-`Native Libraries (Windows)`, `Native Libraries (vcpkg)`, `Dev` (pre-commit).
-`Integration` is known red on the base branch; it is not a gate until fixed.
-Inspect failures with `gh run view <id> --log-failed`.
+Each gate is required **when its path filter triggers it** (by the PR or by the
+`task/*` push); a gate that did not trigger is not required.
+
+| Workflow (as shown in checks) | Triggers on |
+|---|---|
+| `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` |
+| `PgWire Development Package` | driver sources and build files |
+| `PgWire AWS Safety Mocks` | its scripts |
+| `Native Libraries (Unix)`, `Native Libraries (Windows)` | `c/**`, `ci/**`, ... (push only) |
+| `Dev` (pre-commit, PR title) | every PR and push |
+
+Apache workflows unrelated to this fork (Rust, R, Java, C#, JavaScript,
+Integration, vcpkg, verification, website, bots) are disabled with
+`gh workflow disable`; GitHub once paused Actions on this fork for excessive
+use. Inspect failures with `gh run view <id> --log-failed`.
 
 ## Live Redshift budget (shared with the ODBCPP project, same AWS account)
 
@@ -80,8 +101,9 @@ Inspect failures with `gh run view <id> --log-failed`.
   deactivation limit.
 - At most one live batch per 12 hours, only when Redshift-affecting code merged
   since the last batch, only on a merged head with green CI. No automatic retry.
-- Every live run is logged in `STATUS.md` with run id and estimated cost
-  (4 RPU x billed minutes x USD 0.374/RPU-hour, minimum 60 s).
+- Every live run is logged with run id and estimated cost
+  (4 RPU x billed minutes x USD 0.374/RPU-hour, minimum 60 s) in the
+  `STATUS.md` of the next task PR; no separate PR just for the log.
 - Anything else (new resources, capacity, IAM changes, a projected total above
   USD 120) requires human approval.
 
