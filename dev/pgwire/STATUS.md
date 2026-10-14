@@ -33,6 +33,9 @@ Current state only; history is in git and PR descriptions.
 
 - Live Redshift job cannot assume the `adbc-redshift-ci` OIDC role (run
   38563931739); the next live batch is blocked until the role trust is checked.
+  The next live batch must run
+  `RedshiftSmokeTest.ReplaceIngestRejectsCollidingIdentifiersBeforeDrop`; the
+  Redshift replace preflight is not yet live-qualified.
 - `Integration` and other unrelated Apache workflows are disabled
   in this fork.
 
