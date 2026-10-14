@@ -68,6 +68,10 @@ class ScopedReplaceIngestTransaction {
   ScopedReplaceIngestTransaction(PostgresConnection* connection, bool enabled)
       : connection_(connection), conn_(connection->conn()), enabled_(enabled) {}
 
+  ScopedReplaceIngestTransaction(const ScopedReplaceIngestTransaction&) = delete;
+  ScopedReplaceIngestTransaction& operator=(const ScopedReplaceIngestTransaction&) =
+      delete;
+
   ~ScopedReplaceIngestTransaction() {
     // This is a last-resort cleanup for an unexpected exit. Explicit error
     // paths call Rollback() so their original SQL error can be returned.
@@ -157,6 +161,118 @@ class ScopedReplaceIngestTransaction {
     return Status::Ok();
   }
 
+  PostgresConnection* connection_;
+  PGconn* conn_;
+  bool enabled_;
+  bool open_ = false;
+};
+
+// A recoverable replacement inside a caller-owned transaction. Never COMMIT
+// or roll back the whole transaction. The backend profile explicitly opts into
+// PostgreSQL's nested same-name savepoint semantics.
+class ScopedReplaceIngestSavepoint {
+ public:
+  ScopedReplaceIngestSavepoint(PostgresConnection* connection, bool enabled)
+      : connection_(connection), conn_(connection->conn()), enabled_(enabled) {}
+
+  ScopedReplaceIngestSavepoint(const ScopedReplaceIngestSavepoint&) = delete;
+  ScopedReplaceIngestSavepoint& operator=(const ScopedReplaceIngestSavepoint&) = delete;
+
+  ~ScopedReplaceIngestSavepoint() {
+    // Allocation-free last resort: recover only our confirmed newest point.
+    if (!open_) return;
+    open_ = false;
+    if (!CanRecover()) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return;
+    }
+    adbc::driver::pgwire::UniqueResult rollback(PQexec(conn_, kRollback));
+    if (!Confirmed(rollback.get(), "ROLLBACK")) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return;
+    }
+    adbc::driver::pgwire::UniqueResult release(PQexec(conn_, kRelease));
+    if (!Confirmed(release.get(), "RELEASE")) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+    }
+  }
+
+  Status Begin() {
+    if (!enabled_) return Status::Ok();
+    const PGTransactionStatusType txn_status = PQtransactionStatus(conn_);
+    if (PQstatus(conn_) != CONNECTION_OK || txn_status == PQTRANS_ACTIVE ||
+        txn_status == PQTRANS_UNKNOWN) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return Status::IO("[libpq] Cannot begin replace savepoint in uncertain state");
+    }
+    if (connection_->unusable() || txn_status != PQTRANS_INTRANS) {
+      return Status::InvalidState(
+          "[libpq] Replace-ingest savepoint requires an active healthy transaction");
+    }
+    adbc::driver::pgwire::UniqueResult result(PQexec(conn_, kBegin));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+      // No confirmed point means recovery must never target a caller's older
+      // same-named point. A known SQL failure remains caller-recoverable.
+      if (!CanRecover()) connection_->MarkReplaceIngestFinalizationFailed();
+      return MakeStatus(result.get(), "[libpq] Failed to begin replace savepoint: {}",
+                        PQerrorMessage(conn_));
+    }
+    if (!Confirmed(result.get(), "SAVEPOINT")) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return Status::IO("[libpq] Replace-ingest savepoint did not begin cleanly");
+    }
+    open_ = true;
+    return Status::Ok();
+  }
+
+  Status Rollback() { return Finalize(/*recover=*/true); }
+  Status Release() { return Finalize(/*recover=*/false); }
+  void Abandon() { open_ = false; }
+
+ private:
+  bool CanRecover() const {
+    const PGTransactionStatusType txn_status = PQtransactionStatus(conn_);
+    return !connection_->unusable() && PQstatus(conn_) == CONNECTION_OK &&
+           (txn_status == PQTRANS_INTRANS || txn_status == PQTRANS_INERROR);
+  }
+
+  bool Confirmed(PGresult* result, const char* tag) const {
+    return result && PQresultStatus(result) == PGRES_COMMAND_OK &&
+           std::strcmp(PQcmdStatus(result), tag) == 0 &&
+           PQstatus(conn_) == CONNECTION_OK &&
+           PQtransactionStatus(conn_) == PQTRANS_INTRANS;
+  }
+
+  Status Finalize(bool recover) {
+    if (!open_) return Status::Ok();
+    // Never retry uncertain recovery or address an older caller savepoint.
+    open_ = false;
+    if (!CanRecover() || (!recover && PQtransactionStatus(conn_) != PQTRANS_INTRANS)) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return Status::IO("[libpq] Cannot finalize replace savepoint in uncertain state");
+    }
+    if (recover) {
+      adbc::driver::pgwire::UniqueResult rollback(PQexec(conn_, kRollback));
+      if (!Confirmed(rollback.get(), "ROLLBACK")) {
+        connection_->MarkReplaceIngestFinalizationFailed();
+        return MakeStatus(rollback.get(),
+                          "[libpq] Failed to recover replace savepoint: {}",
+                          PQerrorMessage(conn_));
+      }
+    }
+    adbc::driver::pgwire::UniqueResult release(PQexec(conn_, kRelease));
+    if (!Confirmed(release.get(), "RELEASE")) {
+      connection_->MarkReplaceIngestFinalizationFailed();
+      return MakeStatus(release.get(), "[libpq] Failed to release replace savepoint: {}",
+                        PQerrorMessage(conn_));
+    }
+    return Status::Ok();
+  }
+
+  static constexpr const char* kBegin = "SAVEPOINT \"adbc_pgwire_replace\"";
+  static constexpr const char* kRollback =
+      "ROLLBACK TO SAVEPOINT \"adbc_pgwire_replace\"";
+  static constexpr const char* kRelease = "RELEASE SAVEPOINT \"adbc_pgwire_replace\"";
   PostgresConnection* connection_;
   PGconn* conn_;
   bool enabled_;
@@ -935,11 +1051,21 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
       ingest_.mode == IngestMode::kReplace && connection_->autocommit() &&
       connection_->backend_profile().transactions.transactional_ddl &&
       bulk_mode == adbc::driver::pgwire::BulkIngestMode::kBinaryCopy;
+  const bool use_replace_savepoint =
+      ingest_.mode == IngestMode::kReplace && !connection_->autocommit() &&
+      connection_->backend_profile().transactions.transactional_ddl &&
+      connection_->backend_profile().transactions.replace_savepoints &&
+      bulk_mode == adbc::driver::pgwire::BulkIngestMode::kBinaryCopy;
   ScopedReplaceIngestTransaction replace_transaction(connection_.get(), own_replace_copy);
+  ScopedReplaceIngestSavepoint replace_savepoint(connection_.get(),
+                                                 use_replace_savepoint);
   std::function<Status()> before_replace_ddl;
-  if (own_replace_copy) {
+  if (own_replace_copy || use_replace_savepoint) {
     if (rows_affected) *rows_affected = 0;
-    before_replace_ddl = [&]() { return replace_transaction.Begin(); };
+    before_replace_ddl = [&]() {
+      UNWRAP_STATUS(replace_transaction.Begin());
+      return replace_savepoint.Begin();
+    };
   }
 
   bool copy_cleanup_failed = false;
@@ -986,14 +1112,20 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   if (copy_cleanup_failed) {
     connection_->MarkCopyIngestCleanupFailed();
     replace_transaction.Abandon();
+    replace_savepoint.Abandon();
   } else if (!execution_status.ok()) {
     // COPY must already be terminal before this rollback. Keep its original
     // error if finalization fails and retires the connection too.
     (void)replace_transaction.Rollback();
+    (void)replace_savepoint.Rollback();
   } else {
     execution_status = replace_transaction.Commit();
+    if (execution_status.ok()) execution_status = replace_savepoint.Release();
   }
-  if (own_replace_copy && !execution_status.ok() && rows_affected) *rows_affected = 0;
+  if ((own_replace_copy || use_replace_savepoint) && !execution_status.ok() &&
+      rows_affected) {
+    *rows_affected = 0;
+  }
   return execution_status.ToAdbc(error);
 }
 

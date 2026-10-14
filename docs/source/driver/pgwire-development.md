@@ -135,8 +135,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       missing names, and unsupported Arrow types have preflight checks.
       PostgreSQL autocommit now owns one transaction through `DROP`/`CREATE`
       and binary COPY, rolling back confirmed DDL/transfer failures. Explicit
-      transactions need a separate savepoint design; Redshift replacement
-      remains non-atomic across DDL and transfer. Lost finalization replies
+      PostgreSQL ADBC transactions use a confirmed private savepoint to recover
+      replacement failures without discarding unrelated caller work. Redshift
+      replacement remains non-atomic across DDL and transfer. Lost finalization replies
       retire the connection rather than claiming rollback or retrying.
 - [x] Terminalize PostgreSQL binary ingest COPY after client/server errors,
       preserving the primary failure and reporting zero affected rows; retire
@@ -168,28 +169,45 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Define a documented support matrix with explicit unsupported features and
       test evidence for each claim.
 
-#### Next bounded correctness checkpoint (not implemented)
+#### PostgreSQL explicit-transaction replacement checkpoint
 
-PostgreSQL explicit-transaction replace will compose a private savepoint guard
-with the existing pre-DDL callback and terminal COPY seam, without new public
-options. Require `PQTRANS_INTRANS`, create and confirm a savepoint after
-preflight/before DROP, release on success without COMMIT, and recover confirmed
+Explicit ADBC transaction replacement composes a private savepoint guard with
+the existing pre-DDL callback and terminal COPY seam, without new public
+options. It requires `PQTRANS_INTRANS`, creates and confirms a savepoint after
+preflight/before DROP, releases on success without COMMIT, and recovers confirmed
 failures with `ROLLBACK TO` followed by `RELEASE`. Neither recovery nor the
-allocation-free destructor may roll back the caller's whole transaction;
-uncertain COPY/recovery retires the connection without retry. Arm only after
-confirmed creation so fallback never targets a caller's older savepoint.
+allocation-free destructor rolls back the caller's whole transaction;
+uncertain COPY/recovery retires the connection without retry. The guard arms only
+after confirmed creation so fallback never targets a caller's older savepoint.
 PostgreSQL retains older identically named savepoints, while rollback-to keeps
 the selected savepoint alive and release alone cannot recover an aborted
 transaction. [SAVEPOINT](https://www.postgresql.org/docs/current/sql-savepoint.html),
 [ROLLBACK TO](https://www.postgresql.org/docs/current/sql-rollback-to.html),
 [RELEASE](https://www.postgresql.org/docs/current/sql-release-savepoint.html).
 
-Small test milestones: preserve unrelated pending user inserts and original
+PostgreSQL 17 tests preserve unrelated pending user inserts and original
 schema/data after CREATE, stream, and server COPY errors; leave successful
 replacement uncommitted so caller rollback restores it; preserve the caller's
-older same-named savepoint; retire on backend loss. Initially restrict this to
-PostgreSQL explicit ADBC transactions and binary COPY. Redshift and raw-SQL
-transactions on autocommit connections retain their documented behavior.
+older same-named savepoint; and retire on backend loss while an independent
+observer verifies only previously committed work survives. This remains
+restricted to PostgreSQL explicit ADBC transactions and binary COPY through a
+small backend transaction capability. Redshift and raw-SQL transactions on
+autocommit connections retain their documented behavior. Deterministic lost
+savepoint-finalization replies and concurrent-use/exception injection remain
+unqualified.
+
+#### Next bounded correctness checkpoint (not implemented)
+
+Prevent documented Redshift identifier truncation and case-fold collisions
+before replace-ingest DROP, with Redshift-private preflight and AWS-free tests.
+Reject logical identifiers exceeding 127 bytes rather than emulate truncation;
+for possible ASCII case-fold collisions, inspect the current session's
+`enable_case_sensitive_identifier` setting without changing or caching it.
+Preserve PostgreSQL behavior and distinguish documentation-derived validation
+from later live Redshift sentinel qualification.
+[CREATE TABLE](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_NEW.html),
+[Names and identifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_names.html),
+[Case-sensitive setting](https://docs.aws.amazon.com/redshift/latest/dg/r_enable_case_sensitive_identifier.html).
 
 ### 3. Redshift-native capabilities
 
@@ -560,6 +578,39 @@ necessary; this is not a claim of automatic orphan reconciliation.
 
 ## Progress log
 
+- 2026-09-15: PostgreSQL explicit-transaction binary-COPY replacement now uses
+  a small private confirmed savepoint guard instead of relying on caller-wide
+  rollback. It composes with preflight and the terminal COPY seam, preserves
+  primary errors, recovers known CREATE/stream/server failures with rollback-to
+  and release, and never COMMITs or rolls back unrelated caller work. The guard
+  arms only after confirmed SAVEPOINT creation and disarms before finalization;
+  allocation-free fallback and explicit recovery refuse uncertain protocol or
+  transaction state. Backend loss abandons cleanup without SQL and retires the
+  connection. PostgreSQL's backend profile alone enables nested savepoints;
+  Redshift and other ingest modes retain prior behavior and no public ABI or
+  option changes.
+  Two PostgreSQL 17 regressions cover four recovery/success cases, pending caller
+  work, original schema/data, caller rollback, older same-name savepoints, and
+  backend loss with observer-side committed-work verification and bounded fixture
+  cleanup. All sixteen focused COPY/replace tests pass. Full normal suites pass
+  (PostgreSQL 5.94s, COPY 1.55s, AWS-free Redshift 0.26s), as do both shared/static
+  drivers. Full macOS ARM64 ASan/UBSan Meson suites pass (12.84s, 4.93s, 0.91s);
+  cross-platform CI for this checkpoint is pending. Lost finalization replies,
+  concurrent-use/exception injection, and Redshift replacement failures remain
+  follow-ups. No AWS compute or IAM change was used; independent temporary-rule
+  inspection still awaits fresh existing-account Console sign-in.
+- 2026-09-15: The savepoint CREATE regression exposed a shared diagnostic gap:
+  `Status::FromAdbc` preserved category/message but discarded SQLSTATE and owned
+  structured details. Commit `bf4369f53` copies SQLSTATE before releasing the
+  source and copies details only when the exact framework release callback
+  proves the private payload is its own Status; foreign private layouts are
+  never cast. Three new regressions verify binary detail ownership, foreign
+  private-data safety, and an exact-size ADBC 1.0 error-prefix allocation. All
+  five framework tests pass normally and under ASan/UBSan. The CREATE failure
+  now retains `ALREADY_EXISTS`/`42701`, and the server TIME failure retains
+  `INVALID_DATA`/`22008`. This common diagnostic fix is committed separately
+  from Redshift/savepoint semantics as an Apache-compatible contribution
+  candidate; no Apache PR was opened.
 - 2026-09-15: PostgreSQL autocommit replace ingest now keeps its owned
   transaction open through the complete binary COPY transfer, committing
   `DROP`/`CREATE` and data together. A private, small pre-DDL callback delays
@@ -579,8 +630,13 @@ necessary; this is not a claim of automatic orphan reconciliation.
   COPY/replace tests and the complete normal PostgreSQL, COPY, and AWS-free
   Redshift suites pass. Both static/shared drivers compile. The full macOS
   ARM64 ASan/UBSan Meson PostgreSQL, COPY, and AWS-free Redshift suites pass
-  (9.44s, 2.80s, and 0.78s). Cross-platform CI is pending;
-  explicit transaction savepoints, Redshift replacement DDL,
+  (9.44s, 2.80s, and 0.78s). Head `7e720d6bf` passed the
+  [five-platform PostgreSQL matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34974980599)
+  and [seven-platform package/checksum gate](https://github.com/vahid110/arrow-adbc/actions/runs/34974979848).
+  The Meson sanitizer job and clang-tidy in its
+  [broader Unix run](https://github.com/vahid110/arrow-adbc/actions/runs/34974980053)
+  also passed; unrelated integration jobs are tracked separately.
+  explicit transaction savepoints (completed above), Redshift replacement DDL,
   deterministic lost-finalization-reply tests, and concurrent-use/exception
   injection remain follow-up checkpoints. No AWS compute or permission grant
   was used. The independent AWS temporary-rule audit still requires fresh
@@ -601,9 +657,13 @@ necessary; this is not a claim of automatic orphan reconciliation.
   caller rollback, and backend loss while aborting COPY. All four pass normally
   and under ASan/UBSan; the complete normal PostgreSQL, COPY, and AWS-free
   Redshift suites pass, as do both static/shared driver builds. The full
-  sanitized Meson suites passed as recorded below; cross-platform CI for this
-  checkpoint is pending. Replace transfer atomicity is the next bounded
-  checkpoint, not claimed here. No AWS call or billed Redshift test was used.
+  sanitized Meson suites passed as recorded below. Head `7e603dfeb` passed the
+  [five-platform PostgreSQL matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34973625901),
+  [seven-platform package/checksum gate](https://github.com/vahid110/arrow-adbc/actions/runs/34973625623),
+  and the Meson sanitizer job in its
+  [broader Unix run](https://github.com/vahid110/arrow-adbc/actions/runs/34973625654).
+  Replace transfer atomicity was the next bounded checkpoint, completed above.
+  No AWS call or billed Redshift test was used.
 - 2026-09-15: The previous replace-DDL head `0c6cf3932` passed the
   [five-platform PostgreSQL 18 matrix](https://github.com/vahid110/arrow-adbc/actions/runs/34816442359)
   and [seven-platform development-package/checksum gate](https://github.com/vahid110/arrow-adbc/actions/runs/34816441823).
