@@ -23,5 +23,6 @@ known-first-party = [
   "adbc_driver_flightsql",
   "adbc_driver_manager",
   "adbc_driver_postgresql",
+  "adbc_driver_redshift",
   "adbc_driver_sqlite",
 ]

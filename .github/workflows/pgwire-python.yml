@@ -1,0 +1,171 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire Python
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-python.yml"
+      - "ci/scripts/python_wheel_fix_tag.py"
+      - "python/adbc_driver_manager/**"
+      - "python/adbc_driver_redshift/**"
+      - "c/driver/postgresql/**"
+      - "c/driver/pgwire/**"
+      - "c/driver/common/**"
+      - "c/driver/framework/**"
+      - "c/driver_manager/**"
+      - "c/CMakeLists.txt"
+      - "c/cmake_modules/**"
+      - "!c/**/*.md"
+      - "!c/**/*_test.cc"
+  push:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-python.yml"
+      - "ci/scripts/python_wheel_fix_tag.py"
+      - "python/adbc_driver_manager/**"
+      - "python/adbc_driver_redshift/**"
+      - "c/driver/postgresql/**"
+      - "c/driver/pgwire/**"
+      - "c/driver/common/**"
+      - "c/driver/framework/**"
+      - "c/driver_manager/**"
+      - "c/CMakeLists.txt"
+      - "c/cmake_modules/**"
+      - "!c/**/*.md"
+      - "!c/**/*_test.cc"
+
+concurrency:
+  group: pgwire-python-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: Python adbc_driver_redshift wheel (Ubuntu x86-64)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADBC_POSTGRESQL_TEST_URI: postgresql://postgres:5432/postgres?user=postgres&password=password
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          apt-get update -o Acquire::Retries=3
+          apt-get install --yes build-essential ca-certificates cmake git libpq-dev \
+            ninja-build pkg-config python3 python3-dev python3-venv
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build the Redshift C driver
+        run: |
+          cmake -S c -B build/pgwire-python -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DADBC_BUILD_SHARED=ON \
+            -DADBC_BUILD_STATIC=OFF \
+            -DADBC_BUILD_TESTS=OFF \
+            -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_MANAGER=OFF \
+            -DADBC_DRIVER_SQLITE=OFF \
+            -DADBC_DRIVER_FLIGHTSQL=OFF
+          cmake --build build/pgwire-python --target adbc_driver_redshift_shared --parallel 4
+          library="$(find "$PWD/build/pgwire-python" -name 'libadbc_driver_redshift.so' | head -n1)"
+          test -n "$library"
+          nm --dynamic --defined-only "$library" | grep -q ' T AdbcDriverRedshiftInit$'
+          echo "ADBC_REDSHIFT_LIBRARY=$library" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip wheel --no-deps -w dist python/adbc_driver_manager
+          python -m pip wheel --no-deps -w dist python/adbc_driver_redshift
+          python ci/scripts/python_wheel_fix_tag.py dist/adbc_driver_redshift-*.whl
+          ls -l dist
+          python - <<'EOF'
+          import glob
+          import zipfile
+
+          (wheel,) = glob.glob("dist/adbc_driver_redshift-*-py3-none-linux_x86_64.whl")
+          names = zipfile.ZipFile(wheel).namelist()
+          for name in (
+              "adbc_driver_redshift/libadbc_driver_redshift.so",
+              "adbc_driver_redshift/__init__.py",
+              "adbc_driver_redshift/dbapi.py",
+              "adbc_driver_redshift/py.typed",
+          ):
+              assert name in names, (name, names)
+          print(wheel, "OK")
+          EOF
+
+      - name: Install wheels
+        run: |
+          python -m pip install dist/adbc_driver_manager-*.whl dist/adbc_driver_redshift-*.whl
+          python -m pip install pandas 'pyarrow>=14.0.1' pytest
+          rm -f python/adbc_driver_redshift/adbc_driver_redshift/libadbc_driver_redshift.so
+          cd "$RUNNER_TEMP"
+          python - <<'EOF'
+          import sys
+
+          import adbc_driver_redshift
+          import adbc_driver_redshift.dbapi
+
+          path = adbc_driver_redshift._driver_path()
+          print(adbc_driver_redshift.__version__, path)
+          assert path.startswith(sys.prefix), path
+          assert path.endswith("adbc_driver_redshift/libadbc_driver_redshift.so"), path
+          EOF
+
+      - name: Test against PostgreSQL (expects Redshift rejection)
+        run: |
+          # --import-mode append: test the installed wheel, not the source tree
+          python -m pytest -vv -rs --import-mode append \
+            python/adbc_driver_redshift/tests | tee "$RUNNER_TEMP/pytest.log"
+          # Only the live Redshift test may skip (ADBC_REDSHIFT_TEST_URI unset).
+          grep -Eq '[0-9]+ passed, 1 skipped' "$RUNNER_TEMP/pytest.log"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-python-wheel-ubuntu24-x86_64
+          retention-days: 7
+          if-no-files-found: error
+          path: dist/adbc_driver_redshift-*.whl
