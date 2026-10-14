@@ -20,6 +20,7 @@ import shutil
 from pathlib import Path
 
 from setuptools import setup
+from setuptools.command.build_py import build_py
 
 source_root = Path(__file__).parent
 repo_root = source_root.joinpath("../../")
@@ -63,9 +64,29 @@ def get_version(pkg_path):
 
 version = get_version("adbc_driver_redshift")
 
+
+class build_py_with_version(build_py):
+    """Record a SETUPTOOLS_SCM_PRETEND_VERSION build in the built package.
+
+    Without this, the installed ``__version__`` would come from the source
+    ``_static_version.py`` instead of the wheel's version.
+    """
+
+    def run(self):
+        super().run()
+        if os.environ.get("SETUPTOOLS_SCM_PRETEND_VERSION"):
+            target = Path(self.build_lib, "adbc_driver_redshift", "_static_version.py")
+            target.write_text(
+                "# Written by setup.py from SETUPTOOLS_SCM_PRETEND_VERSION.\n"
+                f"version = {version!r}\n",
+                encoding="utf-8",
+            )
+
+
 # ------------------------------------------------------------
 # Setup
 
 setup(
+    cmdclass={"build_py": build_py_with_version},
     version=version,
 )
