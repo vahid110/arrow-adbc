@@ -23,7 +23,7 @@ This fork builds a distinct `libadbc_driver_redshift` from the shared
 PostgreSQL-wire C++ core and Redshift-specific semantics. It is an MVP, **not a
 production-ready or published binary package**. The existing Apache PostgreSQL
 driver remains a separate artifact and compatibility baseline. See the
-[tracked roadmap](../../../docs/source/driver/pgwire-development.md) for test
+[developer guide](../../../docs/source/driver/pgwire-development.md) for test
 evidence, gaps, and platform qualification.
 
 ## Build and install
@@ -128,6 +128,6 @@ which is smaller than the maximum `SUPER` value. Do not use this expression as
 an implicit driver conversion for arbitrary-sized values.
 
 PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
-the development branch. The roadmap records what each gate proves and what it
-does not. Report unsupported behavior as an issue rather than assuming a
-PostgreSQL-compatible operation is safe on Redshift.
+the development branch. The developer guide records what each gate proves and
+what it does not. Report unsupported behavior as an issue rather than assuming
+a PostgreSQL-compatible operation is safe on Redshift.
