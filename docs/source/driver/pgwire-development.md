@@ -317,14 +317,50 @@ The budget, frequency limit and cost formula are in
   group after each run.
 - Delete temporary schemas, tables and objects. Do not add capacity, buy
   reservations or change IAM without human approval.
-- The staged-`COPY` fixture uses bucket `adbc-pgwire-ci-149112076833-euc1`
-  (prefix `staging/` expires after one day, which is only a backstop) and the
-  read-only role `adbc-pgwire-ci-copy`, trusted through the exact database-user
-  `sts:ExternalId` for `IAMR:adbc-redshift-ci`. Uploads are conditional
-  (`If-None-Match: *`) and deletes match the confirmed ETag. ETag deletion also
-  needs `s3:GetObject`, which the uploader does not have, so the fixture stays
-  blocked until that grant is approved and the workflow sets
-  `PGWIRE_COPY_GETOBJECT_VERIFIED=true`.
+- When Redshift testing is no longer active, evaluate deleting the workgroup
+  and namespace to stop storage cost, and recreate them when needed. Do not
+  open the console's compute-usage panel casually: the console warns that
+  retrieving it may consume workgroup capacity.
+
+CI AWS identity (account `149112076833`, `eu-central-1`):
+
+- The OIDC role `adbc-redshift-ci` trusts only the immutable subject
+  `vahid110@5770674/arrow-adbc@1363017696` on branch
+  `feature/pgwire-core-redshift`. Check this first when
+  `AssumeRoleWithWebIdentity` is denied.
+- Its resource permissions are only authorizing and revoking ingress on
+  security group `sg-00551344e2efb9c68`.
+- Inline policy `RedshiftCiIngressInspect` grants
+  `ec2:DescribeSecurityGroupRules` with `Resource: "*"` (the action requires
+  it), limited by `aws:RequestedRegion=eu-central-1`.
+- Inline policy `RedshiftCiCopyFixture` grants
+  `redshift-serverless:GetCredentials` on the `pgwire-ci` workgroup ARN and
+  `s3:PutObject`/`s3:DeleteObject` under `staging/ci/*` only. Its database
+  user is `IAMR:adbc-redshift-ci`.
+
+Staged-`COPY` fixture (not driver support):
+
+- Bucket `adbc-pgwire-ci-149112076833-euc1` blocks public access, disables
+  ACLs and uses SSE-S3. Versioning is off; if it is ever enabled, cleanup must
+  delete exact object versions, not rely on delete markers. The `staging/`
+  prefix and incomplete multipart uploads expire after one day, which is only a
+  backstop. CI uploads go under `staging/ci/<run-id>-<attempt>/`.
+- Role `adbc-pgwire-ci-copy` (attached to namespace `pgwire-ci`) may only
+  `s3:ListBucket` and `s3:GetObject` on `staging/*`; it has no write access.
+  Its trust uses both Redshift service principals, `aws:SourceAccount` and the
+  exact database-user `sts:ExternalId` for `IAMR:adbc-redshift-ci`. An
+  `aws:SourceArn` condition failed with both the workgroup-name and the
+  workgroup-ID (UUID) ARN forms, so it is not used.
+- A manual run first checks the connected user and its `ASSUMEROLE`
+  privilege, uses unique per-run keys and a `mandatory: true` manifest,
+  verifies exactly two rows, and deletes only objects it confirmed it created.
+- Uploads are conditional (`If-None-Match: *`) and deletes match the confirmed
+  ETag. ETag deletion and `HeadObject` need `s3:GetObject`, which the uploader
+  lacks, so the fixture stays blocked until a grant scoped to `staging/ci/*` is
+  approved and the workflow sets `PGWIRE_COPY_GETOBJECT_VERIFIED=true`.
+- Without `s3:ListBucket`, `HeadObject` returns 403 rather than 404 for a
+  missing key, so an ambiguous upload still needs independent reconciliation.
+  Automatic COPY stays disabled until a lost runner can be reconciled too.
 
 ## Upstream alignment
 
@@ -337,5 +373,7 @@ on Apache `main`, with no Redshift code: `feature/pgwire-libpq-raii-upstream`,
 `feature/upstream-pg-jsonb-validation`, `feature/upstream-pg-copy-bounds`,
 `feature/upstream-pg-copy-framing` (stacked on bounds),
 `feature/upstream-pg-copy-header`, `feature/upstream-pg-copy-trailer` and
-`feature/upstream-pg-copy-output-schema`. No Apache PR has been opened. After a
-rebase, rerun the PostgreSQL, Redshift artifact and installed-client checks.
+`feature/upstream-pg-copy-output-schema`. Stacking: cancel is on raii, stream
+is on cancel, and parameter-schema is on stream. No Apache PR has been opened.
+After a rebase, rerun the PostgreSQL, Redshift artifact and installed-client
+checks.

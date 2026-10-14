@@ -42,4 +42,4 @@ Workgroup `pgwire-ci` (eu-central-1), 4 RPU, shared budget with ODBCPP.
 
 | Date | Run | Head | Purpose | Result | Est. cost (USD) |
 |---|---|---|---|---|---|
-| 2026-10-14 | [38563931739](https://github.com/vahid110/arrow-adbc/actions/runs/38563931739) | `fc6f13029` | post-#2 live batch | failed: OIDC `AssumeRoleWithWebIdentity` denied before ingress; no live tests ran | pending |
+| 2026-10-14 | [38563931739](https://github.com/vahid110/arrow-adbc/actions/runs/38563931739) | `fc6f13029` | post-#2 live batch | failed: OIDC `AssumeRoleWithWebIdentity` denied before ingress; no live tests ran | 0.00 |
