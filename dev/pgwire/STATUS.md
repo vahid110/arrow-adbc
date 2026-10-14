@@ -42,7 +42,8 @@ Current state only; history is in git and PR descriptions.
 
 ## Live Redshift log
 
-Workgroup `pgwire-ci` (eu-central-1), 4 RPU, shared budget with ODBCPP.
+Workgroup `odbcpp-redshift-pilot` (eu-north-1, account 385207570137), 4 RPU,
+shared with ODBCPP.
 
 | Date | Run | Head | Purpose | Result | Est. cost (USD) |
 |---|---|---|---|---|---|

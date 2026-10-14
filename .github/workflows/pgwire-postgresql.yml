@@ -36,17 +36,17 @@ on:
         type: string
         default: ""
       credential_probe:
-        description: Verify non-root Redshift OIDC database identity only (no database connection)
+        description: Verify non-root Redshift OIDC database identity only (no database connection) [not provisioned; fails]
         required: false
         type: boolean
         default: false
       copy_probe:
-        description: Manually run a two-row non-root staged COPY fixture with exact cleanup
+        description: Manually run a two-row non-root staged COPY fixture with exact cleanup [not provisioned; fails]
         required: false
         type: boolean
         default: false
       copy_csv_semantics_probe:
-        description: Manually probe nine-row Redshift CSV semantics (staged COPY grant gate)
+        description: Manually probe nine-row Redshift CSV semantics (staged COPY grant gate) [not provisioned; fails]
         required: false
         type: boolean
         default: false
@@ -318,8 +318,11 @@ jobs:
       id-token: write
 
     env:
-      AWS_REGION: eu-central-1
-      REDSHIFT_SECURITY_GROUP_ID: sg-00551344e2efb9c68
+      AWS_REGION: eu-north-1
+      REDSHIFT_SECURITY_GROUP_ID: sg-06227a706295e3f05
+      REDSHIFT_WORKGROUP: odbcpp-redshift-pilot
+      REDSHIFT_DBNAME: odbcpp_pilot
+      REDSHIFT_HOST: odbcpp-redshift-pilot.385207570137.eu-north-1.redshift-serverless.amazonaws.com
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -398,7 +401,30 @@ jobs:
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # Not a secret; the role trusts only feature/pgwire-core-redshift.
+          role-to-assume: arn:aws:iam::385207570137:role/adbc-redshift-ci
+
+      - name: Fetch temporary Redshift database credentials
+        run: |
+          set +x
+          credentials="$(aws redshift-serverless get-credentials \
+            --workgroup-name "$REDSHIFT_WORKGROUP" --db-name "$REDSHIFT_DBNAME" \
+            --duration-seconds 3600 --output json)"
+          password="$(jq -er '.dbPassword | select(type == "string" and length > 0)' <<< "$credentials")"
+          echo "::add-mask::$password"
+          user="$(jq -er '.dbUser | select(type == "string" and length > 0)' <<< "$credentials")"
+          unset credentials
+          encoded_password="$(jq -rn --arg value "$password" '$value | @uri')"
+          echo "::add-mask::$encoded_password"
+          encoded_user="$(jq -rn --arg value "$user" '$value | @uri')"
+          uri="postgresql://${encoded_user}:${encoded_password}@${REDSHIFT_HOST}:5439/${REDSHIFT_DBNAME}?sslmode=require"
+          echo "::add-mask::$uri"
+          if [[ "$uri" == *$'\n'* ]]; then
+            echo '::error::Redshift credentials contain a newline.'
+            exit 1
+          fi
+          echo "ADBC_REDSHIFT_TEST_URI=$uri" >> "$GITHUB_ENV"
+          echo "Fetched temporary credentials for database user $user."
 
       - name: Resolve runner address
         id: runner-address
@@ -416,7 +442,7 @@ jobs:
 
       - name: Run live Redshift tests
         env:
-          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
           --gtest_filter='RedshiftSmokeTest.*'
@@ -424,7 +450,7 @@ jobs:
       - name: Benchmark parameterized inserts (manual runs only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
         env:
-          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
           ADBC_REDSHIFT_BENCHMARK: "1"
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
@@ -433,7 +459,7 @@ jobs:
       - name: Qualify Redshift query cancellation (manual runs only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.cancel_test }}
         env:
-          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
           ADBC_REDSHIFT_CANCEL_TEST: "1"
         run: >-
           build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
@@ -441,7 +467,7 @@ jobs:
 
       - name: Connect through relocated Redshift driver manager
         env:
-          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
         run: >-
           "$RUNNER_TEMP/redshift-install-smoke"
           "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
@@ -450,7 +476,7 @@ jobs:
       - name: Connect through downloaded Release archive (manual runs only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_run_id != '' }}
         env:
-          ADBC_REDSHIFT_TEST_URI: ${{ secrets.ADBC_REDSHIFT_TEST_URI }}
+          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
         run: >-
           "$RUNNER_TEMP/redshift-release-smoke"
           "$RUNNER_TEMP/pgwire-release-extracted/lib/libadbc_driver_redshift.so"
