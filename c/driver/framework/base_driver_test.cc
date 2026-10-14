@@ -133,8 +133,16 @@ TEST(TestDriverBase, StatusFromAdbcDoesNotCastForeignPrivateData) {
 TEST(TestDriverBase, StatusFromAdbcAcceptsLegacyErrorPrefix) {
   // A 1.0 caller can allocate only the public legacy prefix. ASan catches
   // accidental reads of newer private fields beyond this allocation.
+  // GCC 14+ flags the intentionally undersized allocation (-Walloc-size).
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Walloc-size"
+#endif
   std::unique_ptr<AdbcError, decltype(&std::free)> legacy(
       static_cast<AdbcError*>(std::malloc(ADBC_ERROR_1_0_0_SIZE)), &std::free);
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14
+#pragma GCC diagnostic pop
+#endif
   ASSERT_NE(legacy, nullptr);
   std::memset(legacy.get(), 0, ADBC_ERROR_1_0_0_SIZE);
   legacy->message = const_cast<char*>("legacy failure");
