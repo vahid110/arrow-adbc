@@ -43,6 +43,7 @@ on:
       - ".github/workflows/pgwire-python-wheels.yml"
       - "ci/scripts/install_vcpkg.sh"
       - "ci/scripts/pgwire_python_wheel_test.sh"
+      - "ci/scripts/test_pgwire_python_wheel_verify.py"
       - "ci/scripts/python_util.sh"
       - "ci/scripts/python_wheel_fix_tag.py"
       - "ci/scripts/python_wheel_unix_build.sh"
@@ -70,6 +71,13 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       python_version: ${{ steps.version.outputs.python_version }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test wheel verification offline
+        run: python3 ci/scripts/test_pgwire_python_wheel_verify.py
+
       - name: Use the caller's versions or a development version
         id: version
         env:
@@ -392,24 +400,70 @@ jobs:
           set -euo pipefail
           cd wheels
           ls -l
-          test "$(ls | wc -l)" -eq 5
-          prefix="adbc_driver_redshift-${PYTHON_VERSION_EXPECTED}-py3-none"
-          for platform in manylinux_2_28_x86_64 manylinux_2_28_aarch64 \
-                          'macosx_*_x86_64' 'macosx_*_arm64' win_amd64; do
-            # shellcheck disable=SC2206 # the platform is a glob
-            matches=(${prefix}-${platform}.whl)
-            if [ "${#matches[@]}" -ne 1 ] || [ ! -f "${matches[0]}" ]; then
-              echo "::error::expected one ${prefix}-${platform}.whl"
-              exit 1
-            fi
-            wheel="${matches[0]}"
-            tag="${wheel#"${prefix}"-}"
-            tag="py3-none-${tag%.whl}"
-            unzip -p "$wheel" '*.dist-info/METADATA' | grep -Fx "Version: $PYTHON_VERSION_EXPECTED"
-            unzip -p "$wheel" '*.dist-info/WHEEL' | grep -Fx "Root-Is-Purelib: false"
-            unzip -p "$wheel" '*.dist-info/WHEEL' | grep -Fx "Tag: $tag"
-            unzip -p "$wheel" adbc_driver_redshift/_static_version.py |
-              grep -Fx "version = '$PYTHON_VERSION_EXPECTED'"
-            unzip -Z1 "$wheel" | grep -Fx adbc_driver_redshift/libadbc_driver_redshift.so
-            echo "OK $wheel"
-          done
+          python3 - <<'PY'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import zipfile
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(f"::error::{message}")
+
+          version = os.environ["PYTHON_VERSION_EXPECTED"]
+          prefix = f"adbc_driver_redshift-{version}-py3-none-"
+          targets = {"manylinux-x86_64", "manylinux-aarch64",
+                     "macos-x86_64", "macos-arm64", "windows-amd64"}
+          wheels = sorted(pathlib.Path(".").iterdir())
+          require(len(wheels) == 5, "expected exactly five wheels")
+          seen = set()
+          for wheel in wheels:
+              require(wheel.is_file() and wheel.name.startswith(prefix)
+                      and wheel.name.endswith(".whl"), f"unexpected wheel: {wheel}")
+              platforms = wheel.name[len(prefix):-4].split(".")
+              require(len(platforms) == len(set(platforms)), f"duplicate platform: {wheel}")
+              linux = [re.fullmatch(r"manylinux_2_([0-9]+)_(x86_64|aarch64)", p)
+                       for p in platforms]
+              if all(linux):
+                  arch = linux[0][2]
+                  require(all(m[2] == arch and int(m[1]) <= 28 for m in linux)
+                          and f"manylinux_2_28_{arch}" in platforms,
+                          f"invalid manylinux platforms: {wheel}")
+                  target = f"manylinux-{arch}"
+              else:
+                  require(len(platforms) == 1, f"unexpected platform combination: {wheel}")
+                  macos = re.fullmatch(r"macosx_[0-9]+_[0-9]+_(x86_64|arm64)", platforms[0])
+                  if macos:
+                      target = f"macos-{macos[1]}"
+                  else:
+                      require(platforms == ["win_amd64"], f"unexpected platform: {wheel}")
+                      target = "windows-amd64"
+              require(target not in seen, f"duplicate wheel target: {target}")
+              seen.add(target)
+              with zipfile.ZipFile(wheel) as archive:
+                  names = archive.namelist()
+                  dist_info = f"adbc_driver_redshift-{version}.dist-info"
+                  def metadata(filename):
+                      path = f"{dist_info}/{filename}"
+                      require([n for n in names if n.endswith(f".dist-info/{filename}")]
+                              == [path], f"expected one {path}: {wheel}")
+                      return email.parser.Parser().parsestr(archive.read(path).decode())
+                  require(metadata("METADATA").get_all("Version") == [version],
+                          f"METADATA version mismatch: {wheel}")
+                  info = metadata("WHEEL")
+                  require(info.get_all("Root-Is-Purelib") == ["false"],
+                          f"expected a non-pure wheel: {wheel}")
+                  # Compressed filename platforms expand to separate WHEEL Tag headers.
+                  tags = info.get_all("Tag", [])
+                  require(len(tags) == len(platforms)
+                          and set(tags) == {f"py3-none-{p}" for p in platforms},
+                          f"filename/WHEEL tag mismatch: {wheel}")
+                  static_version = archive.read("adbc_driver_redshift/_static_version.py")
+                  require(f"version = '{version}'" in static_version.decode().splitlines(),
+                          f"static version mismatch: {wheel}")
+                  require("adbc_driver_redshift/libadbc_driver_redshift.so" in names,
+                          f"missing bundled library: {wheel}")
+              print(f"OK {wheel}")
+          require(seen == targets, f"missing wheel targets: {targets - seen}")
+          PY
