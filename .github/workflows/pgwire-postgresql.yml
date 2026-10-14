@@ -409,7 +409,7 @@ jobs:
           set +x
           credentials="$(aws redshift-serverless get-credentials \
             --workgroup-name "$REDSHIFT_WORKGROUP" --db-name "$REDSHIFT_DBNAME" \
-            --duration-seconds 900 --output json)"
+            --duration-seconds 3600 --output json)"
           password="$(jq -er '.dbPassword | select(type == "string" and length > 0)' <<< "$credentials")"
           echo "::add-mask::$password"
           user="$(jq -er '.dbUser | select(type == "string" and length > 0)' <<< "$credentials")"

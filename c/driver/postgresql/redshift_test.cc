@@ -326,6 +326,31 @@ struct ScopedSqlCleanup {
   }
 };
 
+// GetObjects reports the connected database as its catalog; do not assume
+// the Redshift default "dev".
+void CurrentDatabase(struct AdbcConnection* connection, std::string* database,
+                     struct AdbcError* error) {
+  struct AdbcStatement statement = {};
+  ASSERT_THAT(AdbcStatementNew(connection, &statement, error), IsOkStatus(error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT current_database()", error),
+              IsOkStatus(error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, error),
+              IsOkStatus(error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.fields.size(), 1U);
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_EQ(reader.array->length, 1);
+  ASSERT_FALSE(ArrowArrayViewIsNull(reader.array_view->children[0], 0));
+  const ArrowStringView name =
+      ArrowArrayViewGetStringUnsafe(reader.array_view->children[0], 0);
+  *database = std::string(name.data, name.size_bytes);
+  ASSERT_FALSE(database->empty());
+  EXPECT_THAT(AdbcStatementRelease(&statement, error), IsOkStatus(error));
+}
+
 TEST_F(RedshiftSmokeTest, DetectsVendorAndExecutesTextResultQuery) {
   const std::string version = adbc_validation::GetDriverVendorVersion(&connection_);
   EXPECT_FALSE(version.empty());
@@ -670,8 +695,10 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   auto objects = adbc_validation::GetObjectsReader{&reader.array_view.value};
   ASSERT_NE(*objects, nullptr);
-  auto* table = InternalAdbcGetObjectsDataGetTableByName(*objects, "dev", "public",
-                                                         kTableName.data());
+  std::string database;
+  ASSERT_NO_FATAL_FAILURE(CurrentDatabase(&connection_, &database, &error_));
+  auto* table = InternalAdbcGetObjectsDataGetTableByName(*objects, database.c_str(),
+                                                         "public", kTableName.data());
   ASSERT_NE(table, nullptr);
   EXPECT_EQ(table->n_table_columns, 4);
   EXPECT_EQ(table->n_table_constraints, 0);
@@ -687,7 +714,7 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
       adbc_validation::GetObjectsReader{&filtered_reader.array_view.value};
   ASSERT_NE(*filtered_objects, nullptr);
   auto* filtered_table = InternalAdbcGetObjectsDataGetTableByName(
-      *filtered_objects, "dev", "public", kTableName.data());
+      *filtered_objects, database.c_str(), "public", kTableName.data());
   ASSERT_NE(filtered_table, nullptr);
   ASSERT_EQ(filtered_table->n_table_columns, 1);
   const ArrowStringView filtered_column = filtered_table->table_columns[0]->column_name;
@@ -725,8 +752,10 @@ TEST_F(RedshiftSmokeTest, MetadataQuotesTableAndColumnNames) {
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   auto objects = adbc_validation::GetObjectsReader{&reader.array_view.value};
   ASSERT_NE(*objects, nullptr);
-  auto* table =
-      InternalAdbcGetObjectsDataGetTableByName(*objects, "dev", "public", kTableName);
+  std::string database;
+  ASSERT_NO_FATAL_FAILURE(CurrentDatabase(&connection_, &database, &error_));
+  auto* table = InternalAdbcGetObjectsDataGetTableByName(*objects, database.c_str(),
+                                                         "public", kTableName);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->n_table_columns, 1);
   const ArrowStringView column_name = table->table_columns[0]->column_name;

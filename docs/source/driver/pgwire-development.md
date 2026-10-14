@@ -333,7 +333,7 @@ CI AWS identity (account `385207570137`, `eu-north-1`, shared with ODBCPP):
 - It may only call `redshift-serverless:GetCredentials` on that workgroup,
   authorize/revoke ingress on that security group, and describe security
   groups and rules in `eu-north-1`.
-- The job builds the test URI from 900-second `GetCredentials` output (database
+- The job builds the test URI from 3600-second `GetCredentials` output (database
   user `IAMR:adbc-redshift-ci`) and masks the password, its URL-encoded form
   and the URI. No URI secret is used.
 
