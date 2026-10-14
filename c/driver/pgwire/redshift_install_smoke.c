@@ -122,12 +122,75 @@ cleanup:
   return verified;
 }
 
+// Checks ADBC_INFO_DRIVER_VERSION, a dense-union string in the GetInfo result.
+static bool VerifyDriverVersion(struct AdbcConnection* connection, const char* expected,
+                                struct AdbcError* error) {
+  const uint32_t code = ADBC_INFO_DRIVER_VERSION;
+  struct ArrowArrayStream stream = {0};
+  struct ArrowSchema schema = {0};
+  struct ArrowArray batch = {0};
+  bool verified = false;
+  AdbcStatusCode status = AdbcConnectionGetInfo(connection, &code, 1, &stream, error);
+  if (status != ADBC_STATUS_OK) {
+    fprintf(stderr, "installed ADBC driver GetInfo failed (status %d): %s\n", (int)status,
+            error->message == NULL ? "no error message" : error->message);
+    return false;
+  }
+  if (stream.get_schema(&stream, &schema) != 0 || schema.n_children != 2 ||
+      schema.children[1]->format == NULL ||
+      strncmp(schema.children[1]->format, "+ud:", 4) != 0 ||
+      schema.children[1]->n_children < 1 ||
+      strcmp(schema.children[1]->children[0]->format, "u") != 0) {
+    fprintf(stderr, "installed ADBC driver returned an unexpected GetInfo schema: %s\n",
+            StreamError(&stream));
+    goto cleanup;
+  }
+  if (stream.get_next(&stream, &batch) != 0 || batch.release == NULL ||
+      batch.length != 1 || batch.offset != 0 || batch.n_children != 2) {
+    fprintf(stderr, "installed ADBC driver returned an unexpected GetInfo batch: %s\n",
+            StreamError(&stream));
+    goto cleanup;
+  }
+  const struct ArrowArray* names = batch.children[0];
+  const struct ArrowArray* values = batch.children[1];
+  uint32_t name = 0;
+  memcpy(&name, (const uint8_t*)names->buffers[1] + names->offset * sizeof(name),
+         sizeof(name));
+  const int8_t type_id = ((const int8_t*)values->buffers[0])[values->offset];
+  const int32_t value_index = ((const int32_t*)values->buffers[1])[values->offset];
+  if (name != code || type_id != 0 || values->n_children < 1) {
+    fputs("installed ADBC driver did not return a string driver version\n", stderr);
+    goto cleanup;
+  }
+  const struct ArrowArray* strings = values->children[0];
+  const int32_t* string_offsets = (const int32_t*)strings->buffers[1];
+  const int32_t start = string_offsets[strings->offset + value_index];
+  const int32_t end = string_offsets[strings->offset + value_index + 1];
+  const char* actual = (const char*)strings->buffers[2] + start;
+  const size_t actual_length = (size_t)(end - start);
+  if (actual_length != strlen(expected) || memcmp(actual, expected, actual_length) != 0) {
+    fprintf(stderr, "installed ADBC driver reports version '%.*s', expected '%s'\n",
+            (int)actual_length, actual, expected);
+    goto cleanup;
+  }
+  printf("installed ADBC driver reports driver version %s\n", expected);
+  verified = true;
+
+cleanup:
+  if (batch.release != NULL) batch.release(&batch);
+  if (schema.release != NULL) schema.release(&schema);
+  if (stream.release != NULL) stream.release(&stream);
+  return verified;
+}
+
 int main(int argc, char** argv) {
-  if (argc != 3 && argc != 4) {
+  if (argc < 3 || argc > 6) {
     fprintf(stderr,
             "usage: %s DRIVER_LIBRARY URI [--expect-postgresql-rejection]\n"
+            "       %s DRIVER_LIBRARY URI --expect-driver-version VERSION "
+            "[ENTRYPOINT]\n"
             "       %s DRIVER_LIBRARY --load-only\n",
-            argv[0], argv[0]);
+            argv[0], argv[0], argv[0]);
     return 2;
   }
 
@@ -158,6 +221,11 @@ int main(int argc, char** argv) {
   const bool expect_rejection =
       argc == 4 && strcmp(argv[3], "--expect-postgresql-rejection") == 0;
   if (argc == 4 && !expect_rejection) return 2;
+  const bool expect_version =
+      argc >= 5 && strcmp(argv[3], "--expect-driver-version") == 0;
+  if (argc >= 5 && !expect_version) return 2;
+  const char* expected_version = expect_version ? argv[4] : NULL;
+  const char* entrypoint = argc == 6 ? argv[5] : NULL;
 
   struct AdbcError error = ADBC_ERROR_INIT;
   struct AdbcDatabase database = {0};
@@ -165,6 +233,9 @@ int main(int argc, char** argv) {
   AdbcStatusCode status = AdbcDatabaseNew(&database, &error);
   if (status == ADBC_STATUS_OK) {
     status = AdbcDatabaseSetOption(&database, "driver", argv[1], &error);
+  }
+  if (status == ADBC_STATUS_OK && entrypoint != NULL) {
+    status = AdbcDatabaseSetOption(&database, "entrypoint", entrypoint, &error);
   }
   if (status == ADBC_STATUS_OK) {
     status = AdbcDatabaseSetOption(&database, "uri", argv[2], &error);
@@ -198,7 +269,9 @@ int main(int argc, char** argv) {
     fprintf(stderr, "installed ADBC driver could not connect (status %d): %s\n",
             (int)status, error.message == NULL ? "no error message" : error.message);
   }
-  const bool queried = connected && VerifyScalarQuery(&connection, &error);
+  const bool queried = connected && VerifyScalarQuery(&connection, &error) &&
+                       (expected_version == NULL ||
+                        VerifyDriverVersion(&connection, expected_version, &error));
   if (connection.private_data != NULL) AdbcConnectionRelease(&connection, &error);
   if (database.private_data != NULL) AdbcDatabaseRelease(&database, &error);
   ReleaseError(&error);

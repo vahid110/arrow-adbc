@@ -54,6 +54,23 @@ option to the absolute path of `lib/libadbc_driver_redshift.so` and the `uri`
 option to a libpq-style Redshift connection URI. Do not store passwords in
 scripts, logs, or committed configuration.
 
+## Load by name
+
+Release archives (`adbc-driver-redshift-<version>-<platform>`) also contain
+`redshift.toml`, an ADBC driver manifest. Its `Driver.shared` path starts with
+the placeholder `@PREFIX@`, which must become the absolute path of the
+extracted directory before the driver manager can use it. Run this inside the
+extracted directory to install the manifest for the current user, then set the
+database's `driver` option to `redshift` instead of a library path:
+
+```sh
+mkdir -p ~/.config/adbc/drivers
+sed "s|'@PREFIX@/|'$PWD/|" redshift.toml > ~/.config/adbc/drivers/redshift.toml
+```
+
+Any directory listed in `ADBC_DRIVER_PATH` also works (CI loads the driver by
+name that way). The extracted path must not contain `'` or `|`.
+
 The development driver supports the tested query, metadata, transaction, and
 bounded parameterized-ingest MVP. It does not yet include built-in IAM token
 generation, S3-staged `COPY`/`UNLOAD`, or qualified `SUPER`/spatial mappings.

@@ -21,7 +21,10 @@ name: PgWire Redshift Release
 # pgwire-package.yml, repackages them with the version and an ADBC driver
 # manifest, and creates a DRAFT GitHub Release. Publishing the draft is a
 # manual step. A workflow_dispatch (dry_run=true) or a pull request touching
-# this file builds the same assets and uploads them only as a workflow artifact.
+# this file, pgwire-package.yml or the manifest smoke client builds the same
+# assets and uploads them only as a workflow artifact. The binaries are built
+# with the release version (dry runs: 0.0.0-dev+<commit>); tag runs rebuild the
+# Windows vcpkg dependencies instead of restoring them from the cache.
 on:
   push:
     tags:
@@ -38,6 +41,9 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-release.yml"
+      - ".github/workflows/pgwire-package.yml"
+      - "c/driver/pgwire/install_smoke/**"
+      - "c/driver/pgwire/redshift_manifest_smoke.c"
 
 concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
@@ -65,7 +71,7 @@ jobs:
           if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
             version="${REF_NAME#redshift-v}"
             if ! printf '%s\n' "$version" |
-                grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+                grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'; then
               echo "::error::tag $REF_NAME is not redshift-v<MAJOR>.<MINOR>.<PATCH>[-<pre>]"
               exit 1
             fi
@@ -80,9 +86,14 @@ jobs:
 
   package:
     name: Build checked archives
+    needs: [version]
     permissions:
       contents: read
     uses: ./.github/workflows/pgwire-package.yml  # zizmor: ignore[self-repository]
+    with:
+      version: ${{ needs.version.outputs.version }}
+      # Release binaries never come from a restored vcpkg binary cache.
+      use_cache: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
 
   assemble:
     name: Assemble release assets
@@ -91,6 +102,10 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: adbc-redshift-dev-*
@@ -101,6 +116,23 @@ jobs:
           set -euo pipefail
           out="$GITHUB_WORKSPACE/release-assets"
           mkdir -p "$out"
+          # Deterministic packaging: entries sorted, owner 0, normalised modes,
+          # every mtime set to the commit time, no gzip name/timestamp, no zip
+          # extra fields. The same inputs give byte-identical archives.
+          epoch="$(git log -1 --format=%ct HEAD)"
+          echo "Archive mtime: $epoch ($(date -u -d "@$epoch" +%FT%TZ))"
+          pack() {  # pack <parent dir> <top-level name> <output file>
+            find "$1/$2" -exec touch -h -d "@$epoch" {} +
+            chmod -R u+rwX,go+rX,go-w "$1/$2"
+            case "$3" in
+              *.zip)
+                (cd "$1" && find "$2" -print | LC_ALL=C sort |
+                  TZ=UTC zip -q -X -@ "$3") ;;
+              *)
+                tar -C "$1" --sort=name --format=gnu --owner=0 --group=0 \
+                  --numeric-owner --mtime="@$epoch" -cf - "$2" | gzip -n -9 > "$3" ;;
+            esac
+          }
           for platform in ubuntu24-x86_64 debian12-x86_64 ubuntu24-arm64 \
                           macos-x86_64 macos-arm64 windows-x64 windows-arm64; do
             case "$platform" in
@@ -151,6 +183,7 @@ jobs:
               echo "# absolute path of the directory that holds this file, then copy the"
               echo "# file into an ADBC driver search directory (for example one listed in"
               echo "# ADBC_DRIVER_PATH) to load the driver by the name \"redshift\"."
+              echo "# README.md, section \"Load by name\", has the command for each OS."
               echo "manifest_version = 1"
               echo
               echo "name = 'ADBC Redshift Driver'"
@@ -169,12 +202,18 @@ jobs:
               echo "$tuple = '$manifest_lib'"
             } > "$root/redshift.toml"
 
+            pack "$RUNNER_TEMP/stage" "$name" "$out/$name.$extension"
+
+            # Self-check: repacking the extracted archive gives the same bytes.
+            recheck="$RUNNER_TEMP/recheck/$platform"
+            mkdir -p "$recheck"
             if [ "$extension" = zip ]; then
-              (cd "$RUNNER_TEMP/stage" && zip -q -r -X "$out/$name.zip" "$name")
+              unzip -q "$out/$name.$extension" -d "$recheck"
             else
-              tar -C "$RUNNER_TEMP/stage" --sort=name --owner=0 --group=0 \
-                --numeric-owner -czf "$out/$name.tar.gz" "$name"
+              tar -C "$recheck" -xzf "$out/$name.$extension"
             fi
+            pack "$recheck" "$name" "$RUNNER_TEMP/recheck/$name.$extension"
+            cmp "$out/$name.$extension" "$RUNNER_TEMP/recheck/$name.$extension"
           done
           (cd "$out" && sha256sum adbc-driver-redshift-*.tar.gz adbc-driver-redshift-*.zip > SHA256SUMS)
           (cd "$out" && sha256sum -c SHA256SUMS)
@@ -187,48 +226,6 @@ jobs:
             echo "== $(basename "$archive")"; unzip -Z1 "$archive"
           done
 
-      - name: Load the Linux x86_64 driver by name through its manifest
-        run: |
-          set -euo pipefail
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes libpq5
-          test_dir="$RUNNER_TEMP/manifest-test"
-          mkdir -p "$test_dir/install" "$test_dir/drivers"
-          tar -C "$test_dir/install" -xzf \
-            "release-assets/adbc-driver-redshift-$VERSION-ubuntu24-x86_64.tar.gz"
-          prefix="$test_dir/install/adbc-driver-redshift-$VERSION-ubuntu24-x86_64"
-          sed "s|@PREFIX@|$prefix|" "$prefix/redshift.toml" > "$test_dir/drivers/redshift.toml"
-          cat "$test_dir/drivers/redshift.toml"
-          cat > "$test_dir/find_load.c" <<'EOF'
-          #include <stdio.h>
-
-          #include <arrow-adbc/adbc.h>
-          #include <arrow-adbc/adbc_driver_manager.h>
-
-          int main(void) {
-            struct AdbcError error = ADBC_ERROR_INIT;
-            struct AdbcDriver driver = {0};
-            AdbcStatusCode status =
-                AdbcFindLoadDriver("redshift", NULL, ADBC_VERSION_1_1_0,
-                                   ADBC_LOAD_FLAG_SEARCH_ENV, NULL, &driver, &error);
-            if (status != ADBC_STATUS_OK) {
-              fprintf(stderr, "could not load redshift by name (status %d): %s\n",
-                      (int)status, error.message ? error.message : "no message");
-              if (error.release) error.release(&error);
-              return 1;
-            }
-            if (driver.release && driver.release(&driver, &error) != ADBC_STATUS_OK) {
-              return 1;
-            }
-            puts("loaded the redshift driver by name through redshift.toml");
-            return 0;
-          }
-          EOF
-          cc -std=c11 -Wall -Wextra -Werror -I "$prefix/include" \
-            "$test_dir/find_load.c" -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" \
-            -ladbc_driver_manager -o "$test_dir/find_load"
-          ADBC_DRIVER_PATH="$test_dir/drivers" "$test_dir/find_load"
-
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: adbc-driver-redshift-release-assets
@@ -236,11 +233,93 @@ jobs:
           if-no-files-found: error
           path: release-assets/
 
+  manifest-load:
+    name: Load ${{ matrix.platform }} driver by name
+    runs-on: ${{ matrix.runner }}
+    needs: [version, assemble]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu24-x86_64
+            runner: ubuntu-24.04
+          - platform: macos-arm64
+            runner: macos-latest
+          - platform: windows-x64
+            runner: windows-latest
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: adbc-driver-redshift-release-assets
+          path: release-assets
+
+      - name: Load the driver by name through redshift.toml (Linux, macOS)
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -o Acquire::Retries=3
+            sudo apt-get install --yes libpq5
+          else
+            brew install --quiet libpq
+          fi
+          test_dir="$RUNNER_TEMP/manifest-test"
+          mkdir -p "$test_dir/install" "$test_dir/drivers"
+          tar -C "$test_dir/install" -xzf \
+            "release-assets/adbc-driver-redshift-$VERSION-$PLATFORM.tar.gz"
+          prefix="$test_dir/install/adbc-driver-redshift-$VERSION-$PLATFORM"
+          # The command documented in the archive README ("Load by name").
+          (cd "$prefix" && sed "s|'@PREFIX@/|'$PWD/|" redshift.toml > "$test_dir/drivers/redshift.toml")
+          cat "$test_dir/drivers/redshift.toml"
+          if grep -q "'@PREFIX@" "$test_dir/drivers/redshift.toml"; then exit 1; fi
+          cc -std=c11 -Wall -Wextra -Werror -I "$prefix/include" \
+            c/driver/pgwire/redshift_manifest_smoke.c -L "$prefix/lib" \
+            -Wl,-rpath,"$prefix/lib" -ladbc_driver_manager -o "$test_dir/manifest_smoke"
+          ADBC_DRIVER_PATH="$test_dir/drivers" "$test_dir/manifest_smoke" redshift
+
+      - name: Load the driver by name through redshift.toml (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $testDir = Join-Path $env:RUNNER_TEMP "manifest-test"
+          $drivers = Join-Path $testDir "drivers"
+          New-Item -ItemType Directory -Force $drivers | Out-Null
+          $zip = "release-assets\adbc-driver-redshift-$($env:VERSION)-$($env:PLATFORM).zip"
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $testDir "install")
+          $prefix = Join-Path $testDir "install\adbc-driver-redshift-$($env:VERSION)-$($env:PLATFORM)"
+          # The command documented in the archive README ("Load by name"):
+          # backslash paths are literal in a TOML '...' string.
+          Push-Location $prefix
+          $manifest = (Get-Content -Raw redshift.toml).Replace("'@PREFIX@\", "'$((Get-Location).Path)\")
+          [System.IO.File]::WriteAllText((Join-Path $drivers "redshift.toml"), $manifest)
+          Pop-Location
+          Get-Content (Join-Path $drivers "redshift.toml")
+          if ((Get-Content -Raw (Join-Path $drivers "redshift.toml")).Contains("'@PREFIX@")) {
+            throw "placeholder not replaced"
+          }
+          $build = Join-Path $testDir "build"
+          cmake -S .\c\driver\pgwire\install_smoke -B $build -A x64 "-DCMAKE_PREFIX_PATH=$prefix"
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure the manifest client" }
+          cmake --build $build --config Release --target adbc_redshift_manifest_smoke
+          if ($LASTEXITCODE -ne 0) { throw "failed to build the manifest client" }
+          $env:PATH = "$(Join-Path $prefix 'bin');$env:PATH"
+          $env:ADBC_DRIVER_PATH = $drivers
+          & (Join-Path $build "Release\adbc_redshift_manifest_smoke.exe") redshift
+          if ($LASTEXITCODE -ne 0) { throw "could not load the driver by name" }
+
   release:
     name: Create draft GitHub Release
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     runs-on: ubuntu-24.04
-    needs: [version, assemble]
+    needs: [version, assemble, manifest-load]
     permissions:
       contents: write
     steps:
@@ -262,9 +341,10 @@ jobs:
           case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           notes="ADBC Redshift driver $VERSION.
 
-          Each archive holds the Redshift driver library, its public header, the
-          ADBC driver manager, LICENSE.txt, NOTICE.txt, a README and redshift.toml
-          (an ADBC driver manifest; set its @PREFIX@ to the extracted directory).
+          Each archive holds the Redshift driver library (built as version
+          $VERSION), its public header, the ADBC driver manager, LICENSE.txt,
+          NOTICE.txt, a README and redshift.toml (an ADBC driver manifest; the
+          README's 'Load by name' section shows how to install it).
           Windows archives add THIRD_PARTY_LICENSES for statically linked libpq.
           Verify downloads with: sha256sum -c SHA256SUMS"
           # Always a draft: publishing is a manual, reviewed step.

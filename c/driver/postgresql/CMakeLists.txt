@@ -101,8 +101,11 @@ add_arrow_lib(adbc_driver_redshift
               ${LIBPQ_STATIC_LIBRARIES})
 
 foreach(LIB_TARGET ${ADBC_REDSHIFT_LIBRARIES})
-  target_compile_definitions(${LIB_TARGET} PRIVATE ADBC_EXPORTING
-                                                   ADBC_PGWIRE_DEFAULT_REDSHIFT)
+  # Only the Redshift library reports its build version; the PostgreSQL library
+  # keeps upstream's "unknown", which downstream GLib tests check.
+  target_compile_definitions(${LIB_TARGET}
+                             PRIVATE ADBC_EXPORTING ADBC_PGWIRE_DEFAULT_REDSHIFT
+                                     ADBC_PGWIRE_DRIVER_VERSION="${ADBC_VERSION}")
   target_include_directories(${LIB_TARGET} SYSTEM
                              PRIVATE ${REPOSITORY_ROOT}/c/
                                      ${REPOSITORY_ROOT}/c/include/

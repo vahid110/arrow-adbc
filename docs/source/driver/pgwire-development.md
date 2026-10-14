@@ -153,6 +153,13 @@ their symbols are hidden in the shared library. Private Redshift helpers are
 compiled into the Redshift test rather than exported from the driver ABI.
 Under MSVC, parenthesize `(std::min)`/`(std::max)` because of Windows macros.
 
+Release builds pass `-DADBC_VERSION_OVERRIDE=<semver>` (CMake only; Meson keeps
+the source version). It replaces `ADBC_VERSION` from
+`c/cmake_modules/AdbcVersion.cmake` in the `.pc` files, the CMake package
+versions, the Windows version resource and `ADBC_INFO_DRIVER_VERSION`. The
+SONAME keeps the upstream scheme `MAJOR * 100 + MINOR`, so `0.1.x` installs
+`libadbc_driver_redshift.so.1` and `1.2.x` installs `.so.102`.
+
 ### Meson
 
 ```sh
@@ -192,6 +199,7 @@ recursive CTE with a 20-second session `statement_timeout` backstop).
 | `PgWire Drivers` (`pgwire-postgresql.yml`) | PR/push touching `c/**` (not `*.md`) | PostgreSQL 18 suite and Redshift artifact tests on Ubuntu x86-64/ARM64, Debian x86-64, macOS Intel/Apple Silicon; install plus driver-manager client that requires the Redshift driver to reject PostgreSQL; Meson parity on Ubuntu x86-64; offline AWS cleanup mocks |
 | `PgWire Drivers`, `workflow_dispatch` | Coordinator only | Adds the live job `C++ / Redshift Serverless`: `RedshiftSmokeTest.*` plus a relocated installed-client connection. Inputs: `cancel_test`, `benchmark`, `package_run_id` (connect a same-commit Ubuntu Release archive), `postgresql_only`, `credential_probe`, `copy_probe`, `copy_csv_semantics_probe`, `copy_fixture_selftest` |
 | `PgWire Development Package` (`pgwire-package.yml`) | Driver, manager and CMake sources (not tests or `*.md`) | Seven-day archives and SHA-256 files for seven targets, an independent client built from each extracted archive and connected to PostgreSQL 18, and a final job that downloads and verifies every archive/checksum pair |
+| `PgWire Redshift Release` (`pgwire-release.yml`) | A `redshift-v*` tag; dry run on dispatch and on PRs touching it, `pgwire-package.yml` or the manifest smoke client | Builds the seven archives with the release version (dry run `0.0.0-dev+<commit>`; tags skip the vcpkg cache), repackages them deterministically with `redshift.toml` and `SHA256SUMS`, loads the driver by name on Linux, macOS and Windows; a tag creates a draft release |
 | `PgWire AWS Safety Mocks` (`pgwire-aws-safety.yml`) | The ingress and COPY fixture scripts in `.github/scripts/` | Offline mocks of ingress and staged-COPY cleanup; no AWS |
 | `PgWire Redshift COPY Fixture` (`pgwire-redshift-copy.yml`) | Manual or called from `PgWire Drivers` | Staged S3 `COPY` fixture (not driver support) |
 | `Native Libraries (Unix)`, `Native Libraries (Windows)` | Push to `c/**`, `ci/**`, `docs/**`, ... | Broad Apache C/C++ builds; Unix includes clang-tidy, downstream GLib/Ruby/Python and the docs build; Windows includes the vcpkg x64/ARM64 driver builds |

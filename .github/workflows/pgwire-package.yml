@@ -21,6 +21,20 @@ on:
   workflow_dispatch:
   # pgwire-release.yml reuses these checked archives as release inputs.
   workflow_call:
+    inputs:
+      version:
+        description: >-
+          Build version (ADBC_VERSION_OVERRIDE) for the libraries, .pc files, CMake
+          package versions and the reported driver version; empty keeps the
+          source version from c/cmake_modules/AdbcVersion.cmake
+        required: false
+        type: string
+        default: ""
+      use_cache:
+        description: Restore the Windows vcpkg binary cache (release tag builds pass false)
+        required: false
+        type: boolean
+        default: true
   pull_request:
     branches:
       - feature/pgwire-core-redshift
@@ -86,6 +100,7 @@ jobs:
     env:
       EXPECTED_ARCH: ${{ matrix.arch }}
       PACKAGE_PLATFORM: ${{ matrix.platform }}
+      PACKAGE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,6 +112,24 @@ jobs:
           apt-get update -o Acquire::Retries=3
           apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
 
+      - name: Resolve package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(tr -d '\r' < c/cmake_modules/AdbcVersion.cmake |
+            sed -n 's/^set(ADBC_VERSION "\(.*\)")$/\1/p')"
+          expected="${PACKAGE_VERSION:-$source_version}"
+          base="${expected%%[-+]*}"
+          IFS=. read -r major minor _ <<< "$base"
+          test -n "$major" && test -n "$minor"
+          so_version=$((major * 100 + minor))
+          {
+            echo "EXPECTED_VERSION=$expected"
+            echo "EXPECTED_BASE_VERSION=$base"
+            echo "EXPECTED_SO_VERSION=$so_version"
+          } >> "$GITHUB_ENV"
+          echo "Package version: $expected (SOVERSION $so_version)"
+
       - name: Build and install drivers and manager
         run: |
           cmake -S c -B build/pgwire-package -G Ninja \
@@ -105,7 +138,8 @@ jobs:
             -DADBC_DRIVER_POSTGRESQL=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
-            -DADBC_DRIVER_FLIGHTSQL=OFF
+            -DADBC_DRIVER_FLIGHTSQL=OFF \
+            -DADBC_VERSION_OVERRIDE="$PACKAGE_VERSION"
           cmake --build build/pgwire-package --parallel 4
           cmake --install build/pgwire-package --prefix "$RUNNER_TEMP/pgwire-prefix"
 
@@ -133,6 +167,13 @@ jobs:
             --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
             --variable=libdir adbc-driver-redshift)" = \
             "$RUNNER_TEMP/pgwire-package-test/lib"
+          # Version metadata: .pc, CMake package version, SONAME.
+          test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
+            pkg-config --modversion adbc-driver-redshift)" = "$EXPECTED_VERSION"
+          grep -Fx "set(PACKAGE_VERSION \"$EXPECTED_BASE_VERSION\")" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/cmake/AdbcDriverRedshift/AdbcDriverRedshiftConfigVersion.cmake"
+          readelf -d "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" |
+            grep -F "[libadbc_driver_redshift.so.$EXPECTED_SO_VERSION]"
           cc -std=c11 -Wall -Wextra -Werror \
             -I "$RUNNER_TEMP/pgwire-package-test/include" \
             c/driver/pgwire/redshift_install_smoke.c \
@@ -145,7 +186,14 @@ jobs:
             --load-only
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.so" \
-            'postgresql://postgres:5432/postgres?user=postgres&password=password'
+            'postgresql://postgres:5432/postgres?user=postgres&password=password' \
+            --expect-driver-version unknown
+          # The Redshift library reports its build version (the PostgreSQL library
+          # keeps upstream's "unknown"); its PostgreSQL entrypoint can connect here.
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
+            'postgresql://postgres:5432/postgres?user=postgres&password=password' \
+            --expect-driver-version "$EXPECTED_VERSION" AdbcDriverPostgresqlInit
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
             'postgresql://postgres:5432/postgres?user=postgres&password=password' \
@@ -172,6 +220,7 @@ jobs:
             runner: macos-latest
     env:
       EXPECTED_ARCH: ${{ matrix.arch }}
+      PACKAGE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -184,6 +233,24 @@ jobs:
           echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
+      - name: Resolve package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(tr -d '\r' < c/cmake_modules/AdbcVersion.cmake |
+            sed -n 's/^set(ADBC_VERSION "\(.*\)")$/\1/p')"
+          expected="${PACKAGE_VERSION:-$source_version}"
+          base="${expected%%[-+]*}"
+          IFS=. read -r major minor _ <<< "$base"
+          test -n "$major" && test -n "$minor"
+          so_version=$((major * 100 + minor))
+          {
+            echo "EXPECTED_VERSION=$expected"
+            echo "EXPECTED_BASE_VERSION=$base"
+            echo "EXPECTED_SO_VERSION=$so_version"
+          } >> "$GITHUB_ENV"
+          echo "Package version: $expected (SOVERSION $so_version)"
+
       - name: Build and install drivers and manager
         run: |
           cmake -S c -B build/pgwire-package -G Ninja \
@@ -192,7 +259,8 @@ jobs:
             -DADBC_DRIVER_POSTGRESQL=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
-            -DADBC_DRIVER_FLIGHTSQL=OFF
+            -DADBC_DRIVER_FLIGHTSQL=OFF \
+            -DADBC_VERSION_OVERRIDE="$PACKAGE_VERSION"
           cmake --build build/pgwire-package --parallel 4
           cmake --install build/pgwire-package --prefix "$RUNNER_TEMP/pgwire-prefix"
 
@@ -226,6 +294,13 @@ jobs:
             --define-variable=prefix="$RUNNER_TEMP/pgwire-package-test" \
             --variable=libdir adbc-driver-redshift)" = \
             "$RUNNER_TEMP/pgwire-package-test/lib"
+          # Version metadata: .pc, CMake package version, install name.
+          test "$(PKG_CONFIG_PATH="$RUNNER_TEMP/pgwire-package-test/lib/pkgconfig" \
+            pkg-config --modversion adbc-driver-redshift)" = "$EXPECTED_VERSION"
+          grep -Fx "set(PACKAGE_VERSION \"$EXPECTED_BASE_VERSION\")" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/cmake/AdbcDriverRedshift/AdbcDriverRedshiftConfigVersion.cmake"
+          otool -D "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.dylib" |
+            grep -Fx "@rpath/libadbc_driver_redshift.$EXPECTED_SO_VERSION.dylib"
           cc -std=c11 -Wall -Wextra -Werror \
             -I "$RUNNER_TEMP/pgwire-package-test/include" \
             c/driver/pgwire/redshift_install_smoke.c \
@@ -238,7 +313,13 @@ jobs:
             --load-only
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_postgresql.dylib" \
-            "$ADBC_POSTGRESQL_TEST_URI"
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-driver-version unknown
+          # The Redshift library reports its build version (the PostgreSQL library
+          # keeps upstream's "unknown"); its PostgreSQL entrypoint can connect here.
+          "$RUNNER_TEMP/redshift-package-smoke" \
+            "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.dylib" \
+            "$ADBC_POSTGRESQL_TEST_URI" --expect-driver-version "$EXPECTED_VERSION" \
+            AdbcDriverPostgresqlInit
           "$RUNNER_TEMP/redshift-package-smoke" \
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.dylib" \
             "$ADBC_POSTGRESQL_TEST_URI" --expect-postgresql-rejection
@@ -290,6 +371,7 @@ jobs:
         shell: pwsh
     env:
       TARGET_ARCH: ${{ matrix.arch }}
+      PACKAGE_VERSION: ${{ inputs.version }}
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
       VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -321,6 +403,7 @@ jobs:
             $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
 
       - name: Restore vcpkg package cache
+        if: ${{ inputs.use_cache != false }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
@@ -337,6 +420,24 @@ jobs:
             --overlay-triplets "$pwd\..\ci\vcpkg\triplets"
           if ($LASTEXITCODE -ne 0) { throw "failed to install libpq" }
 
+      - name: Resolve package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(tr -d '\r' < c/cmake_modules/AdbcVersion.cmake |
+            sed -n 's/^set(ADBC_VERSION "\(.*\)")$/\1/p')"
+          expected="${PACKAGE_VERSION:-$source_version}"
+          base="${expected%%[-+]*}"
+          IFS=. read -r major minor _ <<< "$base"
+          test -n "$major" && test -n "$minor"
+          so_version=$((major * 100 + minor))
+          {
+            echo "EXPECTED_VERSION=$expected"
+            echo "EXPECTED_BASE_VERSION=$base"
+            echo "EXPECTED_SO_VERSION=$so_version"
+          } >> "$GITHUB_ENV"
+          echo "Package version: $expected (SOVERSION $so_version)"
+
       - name: Build and install drivers and manager
         run: |
           cmake .\c\ --preset windows-release `
@@ -344,7 +445,8 @@ jobs:
             -DADBC_DRIVER_FLIGHTSQL=OFF `
             -DADBC_DRIVER_SQLITE=OFF `
             -DVCPKG_OVERLAY_TRIPLETS="$pwd\ci\vcpkg\triplets" `
-            "-DVCPKG_TARGET_TRIPLET=$($env:VCPKG_DEFAULT_TRIPLET)"
+            "-DVCPKG_TARGET_TRIPLET=$($env:VCPKG_DEFAULT_TRIPLET)" `
+            "-DADBC_VERSION_OVERRIDE=$($env:PACKAGE_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "failed to configure CMake" }
           cmake --build .\build\release --target install --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "failed to install drivers" }
@@ -393,6 +495,17 @@ jobs:
           if (-not (Test-Path (Join-Path $extract "THIRD_PARTY_LICENSES\libpq.txt"))) {
             throw "libpq license missing from ZIP"
           }
+          # Version metadata: DLL version resource and CMake package version.
+          $productVersion = (Get-Item -LiteralPath $driverDll).VersionInfo.ProductVersion
+          if ($productVersion -ne $env:EXPECTED_VERSION) {
+            throw "DLL ProductVersion $productVersion is not $($env:EXPECTED_VERSION)"
+          }
+          $configVersion = Join-Path $extract `
+            "lib\cmake\AdbcDriverRedshift\AdbcDriverRedshiftConfigVersion.cmake"
+          $versionLine = "set(PACKAGE_VERSION `"$($env:EXPECTED_BASE_VERSION)`")"
+          if (-not ((Get-Content -LiteralPath $configVersion) -contains $versionLine)) {
+            throw "CMake package version is not $($env:EXPECTED_BASE_VERSION)"
+          }
           $cmakeArch = if ($env:TARGET_ARCH -eq "arm64") { "ARM64" } else { "x64" }
           $smokeBuild = Join-Path $env:RUNNER_TEMP "redshift-smoke-build"
           cmake -S .\c\driver\pgwire\install_smoke -B $smokeBuild `
@@ -431,8 +544,11 @@ jobs:
             $postgresDriver = Join-Path $extract "bin\adbc_driver_postgresql.dll"
             $redshiftDriver = Join-Path $extract "bin\adbc_driver_redshift.dll"
             if (-not (Test-Path $postgresDriver)) { throw "PostgreSQL DLL missing" }
-            & $smokeExe $postgresDriver $uri
+            & $smokeExe $postgresDriver $uri --expect-driver-version unknown
             if ($LASTEXITCODE -ne 0) { throw "extracted PostgreSQL driver could not connect" }
+            & $smokeExe $redshiftDriver $uri --expect-driver-version $env:EXPECTED_VERSION `
+              AdbcDriverPostgresqlInit
+            if ($LASTEXITCODE -ne 0) { throw "extracted Redshift DLL reported the wrong version" }
             & $smokeExe $redshiftDriver $uri --expect-postgresql-rejection
             if ($LASTEXITCODE -ne 0) { throw "extracted Redshift driver did not reject PostgreSQL" }
           } finally {

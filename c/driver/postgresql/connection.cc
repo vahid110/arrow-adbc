@@ -48,6 +48,10 @@
 #include "postgres_util.h"
 #include "result_helper.h"
 
+#ifndef ADBC_PGWIRE_DRIVER_VERSION
+#define ADBC_PGWIRE_DRIVER_VERSION "unknown"
+#endif
+
 using adbc::driver::Result;
 using adbc::driver::Status;
 
@@ -429,8 +433,9 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
         infos.push_back({info_codes[i], std::string(backend_profile().driver_name)});
         break;
       case ADBC_INFO_DRIVER_VERSION:
-        // TODO(lidavidm): fill in driver version
-        infos.push_back({info_codes[i], "unknown"});
+        // CMake defines this as ADBC_VERSION for the Redshift library only (the
+        // release version in release builds); otherwise "unknown".
+        infos.push_back({info_codes[i], ADBC_PGWIRE_DRIVER_VERSION});
         break;
       case ADBC_INFO_DRIVER_ARROW_VERSION:
         infos.push_back({info_codes[i], "v" NANOARROW_VERSION});
