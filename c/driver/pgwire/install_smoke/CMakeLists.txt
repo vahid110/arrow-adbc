@@ -24,3 +24,8 @@ add_executable(adbc_redshift_install_smoke ../redshift_install_smoke.c)
 target_compile_features(adbc_redshift_install_smoke PRIVATE c_std_11)
 target_link_libraries(adbc_redshift_install_smoke
                       PRIVATE AdbcDriverManager::adbc_driver_manager_shared)
+
+add_executable(adbc_redshift_manifest_smoke ../redshift_manifest_smoke.c)
+target_compile_features(adbc_redshift_manifest_smoke PRIVATE c_std_11)
+target_link_libraries(adbc_redshift_manifest_smoke
+                      PRIVATE AdbcDriverManager::adbc_driver_manager_shared)

@@ -46,6 +46,24 @@ option to the absolute path of `lib/libadbc_driver_redshift.dylib` and the `uri`
 option to a libpq-style Redshift connection URI. Do not store passwords in
 scripts, logs, or committed configuration.
 
+## Load by name
+
+Release archives (`adbc-driver-redshift-<version>-<platform>`) also contain
+`redshift.toml`, an ADBC driver manifest. Its `Driver.shared` path starts with
+the placeholder `@PREFIX@`, which must become the absolute path of the
+extracted directory before the driver manager can use it. Run this inside the
+extracted directory to install the manifest for the current user, then set the
+database's `driver` option to `redshift` instead of a library path:
+
+```sh
+mkdir -p ~/Library/Application\ Support/ADBC/Drivers
+sed "s|'@PREFIX@/|'$PWD/|" redshift.toml \
+  > ~/Library/Application\ Support/ADBC/Drivers/redshift.toml
+```
+
+Any directory listed in `ADBC_DRIVER_PATH` also works (CI loads the driver by
+name that way). The extracted path must not contain `'` or `|`.
+
 CI compiles an independent client against the extracted archive, loads the
 Redshift driver, and connects through the extracted PostgreSQL driver to a
 temporary PostgreSQL 18 server on both macOS architectures. It does not

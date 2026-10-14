@@ -46,6 +46,27 @@ extracted CMake package, connects through the PostgreSQL DLL to a temporary
 PostgreSQL 18 server, and checks that the Redshift DLL rejects that server.
 It does not connect the packaged binary to a live Redshift server.
 
+## Load by name
+
+Release archives (`adbc-driver-redshift-<version>-<platform>`) also contain
+`redshift.toml`, an ADBC driver manifest. Its `Driver.shared` path starts with
+the placeholder `@PREFIX@`, which must become the absolute path of the
+extracted directory before the driver manager can use it. Run this inside the
+extracted directory to install the manifest for the current user, then set the
+database's `driver` option to `redshift` instead of a library path:
+
+```powershell
+$drivers = Join-Path $env:LOCALAPPDATA "ADBC\Drivers"
+New-Item -ItemType Directory -Force $drivers | Out-Null
+$manifest = (Get-Content -Raw redshift.toml).Replace(
+  "'@PREFIX@\", "'$((Get-Location).Path)\")
+[System.IO.File]::WriteAllText((Join-Path $drivers "redshift.toml"), $manifest)
+```
+
+Any directory listed in `ADBC_DRIVER_PATH` also works (CI loads the driver by
+name that way). The manifest keeps the backslash path in a TOML literal string
+(`'...'`), so the extracted path must not contain `'`.
+
 The development driver supports the tested query, metadata, transaction, and
 bounded parameterized-ingest MVP. Built-in IAM token generation, S3-staged
 `COPY`/`UNLOAD`, and qualified `SUPER`/spatial mappings remain unavailable. See

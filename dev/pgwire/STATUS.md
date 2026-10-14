@@ -25,7 +25,8 @@ Current state only; history is in git and PR descriptions.
 
 - Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4), CI fast gates (PR #5).
 - Task 005 (Python package, Linux x86-64 wheel): in review (PR #7).
-- Next: 004b (release hardening), 005b (portable wheels), then 006.
+- Task 004b (release hardening): in review.
+- Next: 005b (portable wheels), then 006.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
   `feature/pgwire-core-redshift`.
 
