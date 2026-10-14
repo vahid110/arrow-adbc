@@ -87,6 +87,7 @@ Each gate is required **when its path filter triggers it** (by the PR into
 | `PgWire Development Package` | driver sources and build files |
 | `PgWire AWS Safety Mocks` | its scripts |
 | `PgWire Redshift Release` (dry run) | its own file |
+| `PgWire Python` (`pgwire-python.yml`) | `python/adbc_driver_redshift/**`, `python/adbc_driver_manager/**`, C driver and build sources, its own file |
 | `Dev` (pre-commit, PR title/body) | every PR and push |
 
 `Native Libraries (Unix)` and `(Windows)` (30-60 minutes, mostly macOS/Conda
