@@ -63,6 +63,14 @@ enum class VendorVersionSource {
 struct TransactionSemantics {
   IsolationLevelPolicy isolation_levels;
   bool transactional_ddl;
+  // PostgreSQL-style savepoint recovery, including nested same-name points.
+  bool replace_savepoints;
+};
+
+// Backend-owned identifier checks that must pass before replace ingest DROP.
+enum class ReplaceIdentifierPreflight {
+  kNone,
+  kRedshift,
 };
 
 struct TableTypeMapping {
@@ -101,6 +109,7 @@ struct BackendProfile {
   std::size_t table_type_count;
   const TypeReceiveAlias* type_receive_aliases;
   std::size_t type_receive_alias_count;
+  ReplaceIdentifierPreflight replace_identifier_preflight;
 
   constexpr const TableTypeMapping* FindTableType(std::string_view type_name) const {
     for (std::size_t i = 0; i < table_type_count; i++) {
@@ -134,11 +143,13 @@ struct BackendProfile {
          /*metadata_statistics=*/true,
          /*parameterized_ingest_batch_rows=*/1},
         {/*isolation_levels=*/IsolationLevelPolicy::kSessionConfigurable,
-         /*transactional_ddl=*/true},
+         /*transactional_ddl=*/true,
+         /*replace_savepoints=*/true},
         kPostgreSQLTableTypes,
         sizeof(kPostgreSQLTableTypes) / sizeof(kPostgreSQLTableTypes[0]),
         nullptr,
         0,
+        ReplaceIdentifierPreflight::kNone,
     };
   }
 
@@ -158,11 +169,13 @@ struct BackendProfile {
          /*metadata_statistics=*/false,
          /*parameterized_ingest_batch_rows=*/16},
         {/*isolation_levels=*/IsolationLevelPolicy::kDatabaseConfigured,
-         /*transactional_ddl=*/false},
+         /*transactional_ddl=*/false,
+         /*replace_savepoints=*/false},
         kRedshiftTableTypes,
         sizeof(kRedshiftTableTypes) / sizeof(kRedshiftTableTypes[0]),
         kRedshiftTypeReceiveAliases,
         sizeof(kRedshiftTypeReceiveAliases) / sizeof(kRedshiftTypeReceiveAliases[0]),
+        ReplaceIdentifierPreflight::kRedshift,
     };
   }
 };
