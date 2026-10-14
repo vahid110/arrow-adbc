@@ -175,7 +175,7 @@ Use `-Db_sanitize=address,undefined` for sanitizer builds.
 | Variable | Effect |
 | --- | --- |
 | `ADBC_POSTGRESQL_TEST_URI` | PostgreSQL server for the integration suite, e.g. `postgresql://localhost:5432/postgres?user=postgres&password=password`. CI uses a `postgres:18` service. Without it, database-backed cases skip. |
-| `ADBC_REDSHIFT_TEST_URI` | Enables `RedshiftSmokeTest.*` (libpq URI, TLS, port 5439). Never commit or log it; CI reads it from a repository secret. |
+| `ADBC_REDSHIFT_TEST_URI` | Enables `RedshiftSmokeTest.*` (libpq URI, TLS, port 5439). Never commit or log it; live CI builds it from short-lived `GetCredentials` output. |
 | `ADBC_REDSHIFT_CANCEL_TEST` | With the URI, enables `RedshiftCancelTest.*` |
 | `ADBC_REDSHIFT_BENCHMARK` | With the URI, enables `RedshiftBenchmarkTest.*` (1,000-row insert benchmark) |
 
@@ -301,8 +301,8 @@ The budget, frequency limit and cost formula are in
 - Live tests run only through `workflow_dispatch` of `PgWire Drivers`, started
   by the coordinator, on a merged head with green CI. Never run Redshift for
   PostgreSQL-only changes, and do not retry automatically.
-- Target: Redshift Serverless workgroup `pgwire-ci` in `eu-central-1`, fixed at
-  4 RPU. Idle workgroups bill only storage, so avoid keepalive connections,
+- Target: Redshift Serverless workgroup `odbcpp-redshift-pilot` in
+  `eu-north-1`, fixed at 4 RPU. Idle workgroups bill only storage, so avoid keepalive connections,
   polling and idle open transactions.
 - The job builds before requesting short-lived OIDC credentials for the role
   `adbc-redshift-ci`, opens TCP 5439 for the runner's `/32` only, runs the
@@ -322,23 +322,24 @@ The budget, frequency limit and cost formula are in
   open the console's compute-usage panel casually: the console warns that
   retrieving it may consume workgroup capacity.
 
-CI AWS identity (account `149112076833`, `eu-central-1`):
+CI AWS identity (account `385207570137`, `eu-north-1`, shared with ODBCPP):
 
-- The OIDC role `adbc-redshift-ci` trusts only the immutable subject
-  `vahid110@5770674/arrow-adbc@1363017696` on branch
-  `feature/pgwire-core-redshift`. Check this first when
+- Workgroup `odbcpp-redshift-pilot` (publicly accessible, port 5439),
+  database `odbcpp_pilot`, security group `sg-06227a706295e3f05`.
+- The OIDC role `arn:aws:iam::385207570137:role/adbc-redshift-ci` (hardcoded
+  in the workflow; not a secret) trusts only branch
+  `feature/pgwire-core-redshift` of this repository. Check this first when
   `AssumeRoleWithWebIdentity` is denied.
-- Its resource permissions are only authorizing and revoking ingress on
-  security group `sg-00551344e2efb9c68`.
-- Inline policy `RedshiftCiIngressInspect` grants
-  `ec2:DescribeSecurityGroupRules` with `Resource: "*"` (the action requires
-  it), limited by `aws:RequestedRegion=eu-central-1`.
-- Inline policy `RedshiftCiCopyFixture` grants
-  `redshift-serverless:GetCredentials` on the `pgwire-ci` workgroup ARN and
-  `s3:PutObject`/`s3:DeleteObject` under `staging/ci/*` only. Its database
-  user is `IAMR:adbc-redshift-ci`.
+- It may only call `redshift-serverless:GetCredentials` on that workgroup,
+  authorize/revoke ingress on that security group, and describe security
+  groups and rules in `eu-north-1`.
+- The job builds the test URI from 900-second `GetCredentials` output (database
+  user `IAMR:adbc-redshift-ci`) and masks the password, its URL-encoded form
+  and the URI. No URI secret is used.
 
-Staged-`COPY` fixture (not driver support):
+Staged-`COPY` fixture (not driver support): not provisioned in the current
+AWS account; its manual inputs fail fast. The notes below describe the former
+account `149112076833` setup.
 
 - Bucket `adbc-pgwire-ci-149112076833-euc1` blocks public access, disables
   ACLs and uses SSE-S3. Versioning is off; if it is ever enabled, cleanup must

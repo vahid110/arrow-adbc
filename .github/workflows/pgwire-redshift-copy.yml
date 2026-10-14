@@ -50,7 +50,7 @@ on:
         default: false
     secrets:
       AWS_ROLE_ARN:
-        required: true
+        required: false
 
 concurrency:
   group: pgwire-redshift-copy-${{ github.ref }}
@@ -76,6 +76,14 @@ jobs:
       REDSHIFT_COPY_ROLE_ARN: arn:aws:iam::149112076833:role/adbc-pgwire-ci-copy
 
     steps:
+      # The fixture's account (149112076833: workgroup pgwire-ci, its S3
+      # bucket and roles) is no longer reachable, and it is not ported to the
+      # current CI account. Later steps skip after this failure.
+      - name: Stop because the fixture is not provisioned
+        run: |
+          echo '::error::The staged COPY fixture is not provisioned in the current AWS account.'
+          exit 1
+
       - name: Validate mutually exclusive COPY modes
         if: ${{ inputs.copy && inputs.csv_semantics }}
         run: |
