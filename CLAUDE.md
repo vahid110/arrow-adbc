@@ -86,6 +86,7 @@ Each gate is required **when its path filter triggers it** (by the PR into
 | `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` and its own file |
 | `PgWire Development Package` | driver sources and build files |
 | `PgWire AWS Safety Mocks` | its scripts |
+| `PgWire Redshift Release` (dry run) | its own file |
 | `Dev` (pre-commit, PR title/body) | every PR and push |
 
 `Native Libraries (Unix)` and `(Windows)` (30-60 minutes, mostly macOS/Conda

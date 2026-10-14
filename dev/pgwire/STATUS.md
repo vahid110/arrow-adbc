@@ -23,11 +23,11 @@ Current state only; history is in git and PR descriptions.
 
 ## Active
 
-- Task 001 (land parked work): merged (PR #2).
-- Task 003 (concise PgWire developer guide): PR in review.
-- The next live Redshift batch must run
-  `RedshiftSmokeTest.ReplaceIngestRejectsCollidingIdentifiersBeforeDrop`
-  (Redshift replace identifier preflight, not yet live-qualified).
+- Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4), CI fast gates (PR #5).
+- Task 005 (Python package): in progress.
+- Next: 004b (release hardening), then 006.
+- Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
+  `feature/pgwire-core-redshift`.
 
 ## Known issues
 
