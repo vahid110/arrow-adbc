@@ -19,6 +19,18 @@ name: PgWire Development Package
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-package.yml"
+      - "c/driver/postgresql/**"
+      - "c/driver/pgwire/**"
+      - "c/driver_manager/**"
+      - "c/CMakeLists.txt"
+      - "c/cmake_modules/**"
+      - "!c/**/*.md"
+      - "!c/**/*_test.cc"
   push:
     branches:
       - feature/pgwire-core-redshift

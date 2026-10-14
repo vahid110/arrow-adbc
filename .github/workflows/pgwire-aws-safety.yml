@@ -18,6 +18,15 @@
 name: PgWire AWS Safety Mocks
 
 on:
+  pull_request:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-aws-safety.yml"
+      - ".github/scripts/pgwire-redshift-ingress.sh"
+      - ".github/scripts/test-pgwire-redshift-ingress.sh"
+      - ".github/scripts/pgwire-redshift-copy-fixture.sh"
+      - ".github/scripts/test-pgwire-redshift-copy-fixture.sh"
   push:
     branches:
       - feature/pgwire-core-redshift
