@@ -28,6 +28,11 @@ permissions:
 
 jobs:
   unix:
+    # go-no-cgo and go-conda in native-unix.yml request id-token: write; a
+    # called workflow cannot exceed its caller's permissions.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/native-unix.yml  # zizmor: ignore[self-repository]
   windows:
     uses: ./.github/workflows/native-windows.yml  # zizmor: ignore[self-repository]

@@ -78,22 +78,23 @@ upstream code.
 
 ## CI gates
 
-Each gate is required **when its path filter triggers it** (by the PR or by the
-`task/*` push); a gate that did not trigger is not required.
+Each gate is required **when its path filter triggers it** (by the PR into
+`feature/pgwire-core-redshift`); a gate that did not trigger is not required.
 
 | Workflow (as shown in checks) | Triggers on |
 |---|---|
 | `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` and its own file |
 | `PgWire Development Package` | driver sources and build files |
 | `PgWire AWS Safety Mocks` | its scripts |
-| `PgWire Release` (dry run) | its own file |
 | `Dev` (pre-commit, PR title/body) | every PR and push |
 
 `Native Libraries (Unix)` and `(Windows)` (30-60 minutes, mostly macOS/Conda
 queueing) are **not** PR gates. The coordinator dispatches `PgWire Native Daily`
 on `feature/pgwire-core-redshift` once every 24 hours and opens a fix task for
 any failure; a release candidate additionally requires a green daily run on its
-exact head. A `Dev` failure while installing golangci-lint from
+exact head. The Sphinx docs build also lives only in Native Unix, so docs
+breakage shows up in the daily run; for a docs-heavy PR the coordinator may
+dispatch `PgWire Native Daily` on the PR branch before merging. A `Dev` failure while installing golangci-lint from
 `proxy.golang.org`/`sum.golang.org` is a network flake: re-run the failed job.
 
 Apache workflows unrelated to this fork (Rust, R, Java, C#, JavaScript,
