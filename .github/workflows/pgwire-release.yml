@@ -133,6 +133,58 @@ jobs:
                   --numeric-owner --mtime="@$epoch" -cf - "$2" | gzip -n -9 > "$3" ;;
             esac
           }
+          # Release README: the development README of the same OS with the
+          # development disclaimer removed, a release header added and the
+          # archive and checksum names switched to the release assets.
+          export NOTES_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/redshift-v$VERSION"
+          cat > "$RUNNER_TEMP/release_readme.py" <<'EOF'
+          import os
+          import re
+          import sys
+
+          path = sys.argv[1]
+          version = os.environ["VERSION"]
+          notes = os.environ["NOTES_URL"]
+          with open(path, encoding="utf-8") as f:
+              text = f.read()
+
+
+          def sub(pattern, repl, required=False):
+              global text
+              text, n = re.subn(pattern, repl, text, flags=re.M)
+              if required and n == 0:
+                  sys.exit(f"{path}: README no longer matches {pattern!r}")
+
+
+          sub(r"^# ADBC Redshift development archive \((\w+)\)\n",
+              lambda m: f"# ADBC Redshift driver {version} ({m[1]})\n\n"
+              f"Release {version} of the ADBC Redshift driver. Release notes:\n"
+              f"<{notes}>\n", required=True)
+          sub(r"This is a short-lived CI build for evaluation, \*\*not a production"
+              r" release\*\* or\n[^.]*guarantee\. ", "", required=True)
+          sub(r"adbc-redshift-dev-(macos-<arch>|windows-<arch>|<platform>)-<commit>",
+              lambda m: f"adbc-driver-redshift-{version}-{m[1]}", required=True)
+          sub(r"^((?:LC_ALL=C )?(?:sha256sum|shasum -a 256)) -c (\S+)\.sha256$",
+              r"grep ' \2$' SHA256SUMS | \1 -c")
+          sub(re.escape('$expected = (Get-Content "$archive.sha256").Split(\' \')[0]'),
+              lambda m: '$expected = (Get-Content SHA256SUMS |\n'
+              '  Where-Object { $_.EndsWith(" $archive") }).Split(\' \')[0]')
+          sub(r"The workflow publishes a ZIP and adjacent SHA-256 file\.",
+              "The release lists the SHA-256 of every archive in `SHA256SUMS`.")
+          sub(r"the adjacent checksum file:", "it against the release's `SHA256SUMS`:")
+          sub(r"adbc-redshift-dev\b", "adbc-driver-redshift")
+          sub(r"Release archives \(`adbc-driver-redshift-<version>-<platform>`\)"
+              r" also contain", "This archive also contains", required=True)
+          sub(r"development archive", "archive")
+          sub(r"The development driver", "The driver")
+          for banned in ("not a production release", "development archive",
+                         "short-lived", "adbc-redshift-dev", ".sha256",
+                         "development driver"):
+              if banned in text:
+                  sys.exit(f"{path}: release README still contains {banned!r}")
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+          EOF
           for platform in ubuntu24-x86_64 debian12-x86_64 ubuntu24-arm64 \
                           macos-x86_64 macos-arm64 windows-x64 windows-arm64; do
             case "$platform" in
@@ -172,6 +224,8 @@ jobs:
             case "$platform" in
               windows-*) test -f "$root/THIRD_PARTY_LICENSES/libpq.txt" ;;
             esac
+
+            python3 "$RUNNER_TEMP/release_readme.py" "$root/README.md"
 
             # The driver manager passes Driver.shared to dlopen()/LoadLibrary()
             # unchanged, so the path must be absolute and is filled in at install.
@@ -214,6 +268,13 @@ jobs:
             fi
             pack "$recheck" "$name" "$RUNNER_TEMP/recheck/$name.$extension"
             cmp "$out/$name.$extension" "$RUNNER_TEMP/recheck/$name.$extension"
+            # Release archives never ship the development disclaimer.
+            readme="$recheck/$name/README.md"
+            grep -Fq "# ADBC Redshift driver $VERSION (" "$readme"
+            if grep -Fn -e "not a production release" -e "development archive" "$readme"; then
+              echo "::error::$name README still has the development disclaimer"
+              exit 1
+            fi
           done
           (cd "$out" && sha256sum adbc-driver-redshift-*.tar.gz adbc-driver-redshift-*.zip > SHA256SUMS)
           (cd "$out" && sha256sum -c SHA256SUMS)
@@ -341,11 +402,12 @@ jobs:
           case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           notes="ADBC Redshift driver $VERSION.
 
-          Each archive holds the Redshift driver library (built as version
-          $VERSION), its public header, the ADBC driver manager, LICENSE.txt,
+          Each archive holds the Redshift driver library, its public header, the ADBC driver manager, LICENSE.txt,
           NOTICE.txt, a README and redshift.toml (an ADBC driver manifest; the
           README's 'Load by name' section shows how to install it).
           Windows archives add THIRD_PARTY_LICENSES for statically linked libpq.
+          Every library in an archive, including the bundled driver manager and
+          PostgreSQL driver, is built as version $VERSION.
           Verify downloads with: sha256sum -c SHA256SUMS"
           # Always a draft: publishing is a manual, reviewed step.
           gh release create "$TAG" \

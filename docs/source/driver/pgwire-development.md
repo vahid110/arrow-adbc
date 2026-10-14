@@ -153,10 +153,14 @@ their symbols are hidden in the shared library. Private Redshift helpers are
 compiled into the Redshift test rather than exported from the driver ABI.
 Under MSVC, parenthesize `(std::min)`/`(std::max)` because of Windows macros.
 
-Release builds pass `-DADBC_VERSION_OVERRIDE=<semver>` (CMake only; Meson keeps
-the source version). It replaces `ADBC_VERSION` from
-`c/cmake_modules/AdbcVersion.cmake` in the `.pc` files, the CMake package
-versions, the Windows version resource and `ADBC_INFO_DRIVER_VERSION`. The
+Release builds pass `-DADBC_VERSION_OVERRIDE=<semver>`. It replaces
+`ADBC_VERSION` from `c/cmake_modules/AdbcVersion.cmake` in the `.pc` files, the
+CMake package versions, the Windows version resource and, for the Redshift
+library, `ADBC_INFO_DRIVER_VERSION`. The override is global, so every library
+in a release archive, including the bundled driver manager and PostgreSQL
+driver, carries the release version. It is CMake only: Meson keeps the source
+version, and a Meson-built Redshift library reports driver version `unknown`.
+The
 SONAME keeps the upstream scheme `MAJOR * 100 + MINOR`, so `0.1.x` installs
 `libadbc_driver_redshift.so.1` and `1.2.x` installs `.so.102`.
 

@@ -403,7 +403,9 @@ jobs:
             $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
 
       - name: Restore vcpkg package cache
-        if: ${{ inputs.use_cache != false }}
+        # inputs.use_cache is null outside workflow_call, and null == false in
+        # expressions, so compare the JSON text to keep the cache by default.
+        if: ${{ toJSON(inputs.use_cache) != 'false' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
