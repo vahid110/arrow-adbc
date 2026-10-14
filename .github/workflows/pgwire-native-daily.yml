@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: PgWire AWS Safety Mocks
 name: PgWire Native Daily
 
 # The full Apache native matrices (Unix incl. macOS/Conda, Windows) take 30-60
