@@ -105,7 +105,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/pgwire-redshift-copy.yml
+    uses: ./.github/workflows/pgwire-redshift-copy.yml  # zizmor: ignore[self-repository]
     with:
       copy: ${{ inputs.copy_probe }}
       csv_semantics: ${{ inputs.copy_csv_semantics_probe }}
