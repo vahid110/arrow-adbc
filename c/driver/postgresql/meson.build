@@ -141,7 +141,7 @@ redshift_exc = executable(
         'redshift_staged_copy_coordinator.cc',
     ],
     include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
-    link_with: [adbc_common_lib, adbc_redshift_driver_lib],
+    link_with: [adbc_common_lib, adbc_framework_lib, adbc_redshift_driver_lib],
     dependencies: [libpq_dep, gtest_main_dep, fmt_dep, nanoarrow_dep],
 )
 test('adbc-driver-redshift', redshift_exc)

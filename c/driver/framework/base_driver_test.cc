@@ -95,7 +95,7 @@ TEST(TestDriverBase, StatusFromAdbcPreservesSqlStateAndFrameworkDetails) {
             "positive_id");
   const auto binary = converted.CDetail(1);
   EXPECT_STREQ(binary.key, "binary");
-  ASSERT_EQ(binary.value_length, 3);
+  ASSERT_EQ(binary.value_length, 3U);
   EXPECT_EQ(std::memcmp(binary.value, "a\0b", 3), 0);
 
   AdbcError roundtrip = ADBC_ERROR_INIT;

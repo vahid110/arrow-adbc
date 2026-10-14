@@ -17,6 +17,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -994,6 +995,88 @@ TEST_F(RedshiftSmokeTest, BulkIngestRollsBackWholeBatchOnError) {
   EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 
   ExecuteSql(&connection_, "DROP TABLE adbc_redshift_mvp_ingest_atomic", &error_);
+}
+
+TEST_F(RedshiftSmokeTest, ReplaceIngestRejectsCollidingIdentifiersBeforeDrop) {
+  constexpr const char* kTableName = "adbc_redshift_replace_preflight";
+  constexpr const char* kDropSql = "DROP TABLE IF EXISTS adbc_redshift_replace_preflight";
+  ExecuteSql(&connection_, kDropSql, &error_);
+  ScopedSqlCleanup cleanup{&connection_, kDropSql};
+  ExecuteSql(&connection_, "CREATE TABLE adbc_redshift_replace_preflight (id INTEGER)",
+             &error_);
+  ExecuteSql(&connection_, "INSERT INTO adbc_redshift_replace_preflight VALUES (1), (2)",
+             &error_);
+  // Pin the documented default so a workgroup-level override cannot hide the
+  // case-fold collision; the driver itself never changes this setting.
+  ExecuteSql(&connection_, "SET enable_case_sensitive_identifier TO false", &error_);
+
+  auto expect_rejected_replace = [&](const std::vector<std::string>& names) {
+    SCOPED_TRACE(names.size() == 2 ? names[0] + "," + names[1] : "128-byte column");
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_THAT(
+        ArrowSchemaSetTypeStruct(schema.get(), static_cast<int64_t>(names.size())),
+        adbc_validation::IsOkErrno());
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      ASSERT_THAT(ArrowSchemaSetType(schema->children[i], NANOARROW_TYPE_INT32),
+                  adbc_validation::IsOkErrno());
+      ASSERT_THAT(ArrowSchemaSetName(schema->children[i], names[i].c_str()),
+                  adbc_validation::IsOkErrno());
+    }
+    nanoarrow::UniqueArray batch;
+    if (names.size() == 1) {
+      ASSERT_THAT((adbc_validation::MakeBatch<int32_t>(schema.get(), batch.get(), nullptr,
+                                                       {7})),
+                  adbc_validation::IsOkErrno());
+    } else {
+      ASSERT_THAT((adbc_validation::MakeBatch<int32_t, int32_t>(
+                      schema.get(), batch.get(), nullptr, {7}, {8})),
+                  adbc_validation::IsOkErrno());
+    }
+
+    struct AdbcStatement ingest = {};
+    ASSERT_THAT(AdbcStatementNew(&connection_, &ingest, &error_), IsOkStatus(&error_));
+    ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                       kTableName, &error_),
+                IsOkStatus(&error_));
+    ASSERT_THAT(AdbcStatementSetOption(&ingest, ADBC_INGEST_OPTION_MODE,
+                                       ADBC_INGEST_OPTION_MODE_REPLACE, &error_),
+                IsOkStatus(&error_));
+    ASSERT_THAT(AdbcStatementBind(&ingest, batch.get(), schema.get(), &error_),
+                IsOkStatus(&error_));
+    EXPECT_EQ(AdbcStatementExecuteQuery(&ingest, nullptr, nullptr, &error_),
+              ADBC_STATUS_INVALID_ARGUMENT);
+    if (error_.release != nullptr) {
+      error_.release(&error_);
+      error_ = {};
+    }
+    EXPECT_THAT(AdbcStatementRelease(&ingest, &error_), IsOkStatus(&error_));
+  };
+  ASSERT_NO_FATAL_FAILURE(expect_rejected_replace({std::string(128, 'c')}));
+  ASSERT_NO_FATAL_FAILURE(expect_rejected_replace({"id", "ID"}));
+  ExecuteSql(&connection_, "RESET enable_case_sensitive_identifier", &error_);
+
+  // Rejection happened before DROP: the original schema and rows survive.
+  struct AdbcStatement query = {};
+  ASSERT_THAT(AdbcStatementNew(&connection_, &query, &error_), IsOkStatus(&error_));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &query, "SELECT id FROM adbc_redshift_replace_preflight ORDER BY id",
+                  &error_),
+              IsOkStatus(&error_));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&query, &reader.stream.value,
+                                        &reader.rows_affected, &error_),
+              IsOkStatus(&error_));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(reader.schema->n_children, 1);
+  EXPECT_STREQ(reader.schema->children[0]->name, "id");
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int32_t>(reader.array_view->children[0], {1, 2}));
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  EXPECT_EQ(reader.array->release, nullptr);
+  EXPECT_THAT(AdbcStatementRelease(&query, &error_), IsOkStatus(&error_));
 }
 
 class RedshiftCancelTest : public RedshiftSmokeTest {
