@@ -130,9 +130,12 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [ ] Expand coverage for remaining type and metadata edges only where live
       behavior or a concrete client use case justifies it.
 - [ ] Address remaining replace-ingest failures after destructive DDL, including
-      backend-specific identifier collisions, Redshift SQL `CREATE` errors,
-      and later transfer failures. Zero fields, byte-identical duplicate names,
-      missing names, and unsupported Arrow types have preflight checks.
+      Redshift SQL `CREATE` errors and later transfer failures. Zero fields,
+      byte-identical duplicate names, missing names, and unsupported Arrow
+      types have preflight checks. Redshift replace also rejects identifiers
+      over 127 bytes, and ASCII case-only column collisions unless the session's
+      `enable_case_sensitive_identifier` is on, before `DROP` (unit-tested,
+      not yet live-qualified).
       PostgreSQL autocommit now owns one transaction through `DROP`/`CREATE`
       and binary COPY, rolling back confirmed DDL/transfer failures. Explicit
       PostgreSQL ADBC transactions recover failures through a private

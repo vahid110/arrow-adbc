@@ -67,6 +67,12 @@ struct TransactionSemantics {
   bool replace_savepoints;
 };
 
+// Backend-owned identifier checks that must pass before replace ingest DROP.
+enum class ReplaceIdentifierPreflight {
+  kNone,
+  kRedshift,
+};
+
 struct TableTypeMapping {
   std::string_view name;
   std::string_view relkind;
@@ -103,6 +109,7 @@ struct BackendProfile {
   std::size_t table_type_count;
   const TypeReceiveAlias* type_receive_aliases;
   std::size_t type_receive_alias_count;
+  ReplaceIdentifierPreflight replace_identifier_preflight;
 
   constexpr const TableTypeMapping* FindTableType(std::string_view type_name) const {
     for (std::size_t i = 0; i < table_type_count; i++) {
@@ -142,6 +149,7 @@ struct BackendProfile {
         sizeof(kPostgreSQLTableTypes) / sizeof(kPostgreSQLTableTypes[0]),
         nullptr,
         0,
+        ReplaceIdentifierPreflight::kNone,
     };
   }
 
@@ -167,6 +175,7 @@ struct BackendProfile {
         sizeof(kRedshiftTableTypes) / sizeof(kRedshiftTableTypes[0]),
         kRedshiftTypeReceiveAliases,
         sizeof(kRedshiftTypeReceiveAliases) / sizeof(kRedshiftTypeReceiveAliases[0]),
+        ReplaceIdentifierPreflight::kRedshift,
     };
   }
 };

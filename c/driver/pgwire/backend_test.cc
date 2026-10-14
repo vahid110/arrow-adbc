@@ -45,6 +45,7 @@ TEST(BackendProfileTest, PostgreSQLCapabilitiesPreserveCurrentFastPaths) {
             IsolationLevelPolicy::kSessionConfigurable);
   EXPECT_TRUE(profile.transactions.transactional_ddl);
   EXPECT_TRUE(profile.transactions.replace_savepoints);
+  EXPECT_EQ(profile.replace_identifier_preflight, ReplaceIdentifierPreflight::kNone);
 }
 
 TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
@@ -65,6 +66,8 @@ TEST(BackendProfileTest, RedshiftStartsFromVerifiedConservativeCapabilities) {
             IsolationLevelPolicy::kDatabaseConfigured);
   EXPECT_FALSE(profile.transactions.transactional_ddl);
   EXPECT_FALSE(profile.transactions.replace_savepoints);
+  EXPECT_EQ(profile.replace_identifier_preflight,
+            ReplaceIdentifierPreflight::kRedshift);
 }
 
 TEST(BackendProfileTest, TableTypesBelongToBackendSemantics) {

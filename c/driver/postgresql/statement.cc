@@ -53,6 +53,7 @@
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
+#include "redshift_replace_preflight.h"
 #include "result_helper.h"
 #include "result_reader.h"
 
@@ -647,6 +648,31 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                          ADBC_INGEST_OPTION_TARGET_DB_SCHEMA,
                          ADBC_INGEST_OPTION_TEMPORARY);
     return ADBC_STATUS_INVALID_STATE;
+  }
+
+  if (ingest_.mode == IngestMode::kReplace &&
+      connection_->backend_profile().replace_identifier_preflight ==
+          adbc::driver::pgwire::ReplaceIdentifierPreflight::kRedshift) {
+    std::vector<std::string_view> column_names;
+    column_names.reserve(source_schema.n_children);
+    for (int64_t i = 0; i < source_schema.n_children; ++i) {
+      column_names.emplace_back(source_schema.children[i]->name);
+    }
+    // The backend module owns the rule and the setting query; this only runs it.
+    auto read_setting = [conn](std::string_view query, std::string* value) -> Status {
+      PqResultHelper helper{conn, std::string(query)};
+      UNWRAP_STATUS(helper.Execute());
+      auto it = helper.begin();
+      if (it == helper.end() || (*it)[0].is_null) {
+        return Status(ADBC_STATUS_INVALID_DATA,
+                      "[libpq] No value returned for '" + std::string(query) + "'");
+      }
+      *value = std::string((*it)[0].value());
+      return Status::Ok();
+    };
+    RAISE_STATUS(error, adbc::driver::pgwire::PreflightRedshiftReplace(
+                            ingest_.target, ingest_.db_schema, column_names,
+                            read_setting));
   }
 
   {
