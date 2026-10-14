@@ -83,11 +83,18 @@ Each gate is required **when its path filter triggers it** (by the PR or by the
 
 | Workflow (as shown in checks) | Triggers on |
 |---|---|
-| `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` |
+| `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` and its own file |
 | `PgWire Development Package` | driver sources and build files |
 | `PgWire AWS Safety Mocks` | its scripts |
-| `Native Libraries (Unix)`, `Native Libraries (Windows)` | `c/**`, `ci/**`, ... (push only) |
-| `Dev` (pre-commit, PR title) | every PR and push |
+| `PgWire Release` (dry run) | its own file |
+| `Dev` (pre-commit, PR title/body) | every PR and push |
+
+`Native Libraries (Unix)` and `(Windows)` (30-60 minutes, mostly macOS/Conda
+queueing) are **not** PR gates. The coordinator dispatches `PgWire Native Daily`
+on `feature/pgwire-core-redshift` once every 24 hours and opens a fix task for
+any failure; a release candidate additionally requires a green daily run on its
+exact head. A `Dev` failure while installing golangci-lint from
+`proxy.golang.org`/`sum.golang.org` is a network flake: re-run the failed job.
 
 Apache workflows unrelated to this fork (Rust, R, Java, C#, JavaScript,
 Integration, vcpkg, verification, website, bots) are disabled with

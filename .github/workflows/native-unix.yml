@@ -33,6 +33,10 @@ on:
   push:
     branches-ignore:
       - 'dependabot/**'
+      # Fork: task branches and the integration branch run this daily via
+      # pgwire-native-daily.yml instead of on every push.
+      - 'task/**'
+      - 'feature/pgwire-core-redshift'
     paths:
       - "c/**"
       - "ci/**"
