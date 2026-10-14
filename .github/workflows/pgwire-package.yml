@@ -19,6 +19,8 @@ name: PgWire Development Package
 
 on:
   workflow_dispatch:
+  # pgwire-release.yml reuses these checked archives as release inputs.
+  workflow_call:
   pull_request:
     branches:
       - feature/pgwire-core-redshift
