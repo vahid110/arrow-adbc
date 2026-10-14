@@ -2332,13 +2332,27 @@ TEST_F(PostgresStatementTest, SqlIngestReplaceCopyBackendLossPreservesCommittedT
   const std::string table =
       "adbc_replace_copy_backend_loss_" + std::to_string(PQbackendPID(pg_conn));
   struct ScopedTargetCleanup {
-    PGconn* connection;
+    PGconn* observer;
+    AdbcStatement* statement;
+    AdbcConnection* victim;
     std::string table;
     ~ScopedTargetCleanup() {
+      // Close the victim before DROP even if an assertion exits before the
+      // backend-kill or explicit happy-path releases. Fixture teardown is later.
+      AdbcError cleanup_error = ADBC_ERROR_INIT;
+      if (statement->private_data != nullptr) {
+        (void)AdbcStatementRelease(statement, &cleanup_error);
+      }
+      if (cleanup_error.release != nullptr) cleanup_error.release(&cleanup_error);
+      cleanup_error = ADBC_ERROR_INIT;
+      if (victim->private_data != nullptr) {
+        (void)AdbcConnectionRelease(victim, &cleanup_error);
+      }
+      if (cleanup_error.release != nullptr) cleanup_error.release(&cleanup_error);
       adbc::driver::pgwire::UniqueResult drop(
-          PQexec(connection, ("DROP TABLE IF EXISTS " + table).c_str()));
+          PQexec(observer, ("DROP TABLE IF EXISTS " + table).c_str()));
     }
-  } cleanup{observer.get(), table};
+  } cleanup{observer.get(), &statement, &connection, table};
   // A test assertion failure must not leave cleanup waiting indefinitely for DDL.
   adbc::driver::pgwire::UniqueResult setup(
       PQexec(observer.get(), ("SET lock_timeout TO '2s'; CREATE TABLE " + table +
@@ -2488,6 +2502,335 @@ TEST_F(PostgresStatementTest, SqlIngestReplaceCopyServerErrorPreservesTargetAndS
       adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_EQ(reader.array->release, nullptr);
+}
+
+TEST_F(PostgresStatementTest, SqlIngestReplaceCallerSavepointPreservesOuterTransaction) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  auto execute_command = [&](const char* query) {
+    adbc::driver::pgwire::UniqueResult result(PQexec(pg_conn, query));
+    ASSERT_NE(result, nullptr);
+    ASSERT_EQ(PQresultStatus(result.get()), PGRES_COMMAND_OK) << PQerrorMessage(pg_conn);
+  };
+  ASSERT_NO_FATAL_FAILURE(
+      execute_command("CREATE TEMP TABLE adbc_replace_savepoint_target (id BIGINT); "
+                      "INSERT INTO adbc_replace_savepoint_target VALUES (42); "
+                      "CREATE TEMP TABLE adbc_replace_savepoint_user_work (id INTEGER)"));
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  enum class ReplaceCase { kStreamError, kCreateError, kServerError, kSuccess };
+  const std::array<std::pair<ReplaceCase, const char*>, 4> cases = {{
+      {ReplaceCase::kStreamError, "stream error"},
+      {ReplaceCase::kCreateError, "CREATE error"},
+      {ReplaceCase::kServerError, "server TIME error"},
+      {ReplaceCase::kSuccess, "successful replacement"},
+  }};
+  for (const auto& [replace_case, label] : cases) {
+    SCOPED_TRACE(label);
+    ASSERT_THAT(AdbcStatementSetSqlQuery(
+                    &statement, "INSERT INTO adbc_replace_savepoint_user_work VALUES (7)",
+                    &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                IsOkStatus(&error));
+    ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+    // PostgreSQL stacks identical names. The driver must release only its
+    // newest savepoint, leaving this caller-owned one available afterward.
+    ASSERT_NO_FATAL_FAILURE(execute_command("SAVEPOINT adbc_pgwire_replace"));
+    ASSERT_NO_FATAL_FAILURE(
+        execute_command("INSERT INTO adbc_replace_savepoint_user_work VALUES (9)"));
+
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+    if (replace_case == ReplaceCase::kServerError) {
+      ASSERT_THAT(ArrowSchemaSetTypeDateTime(schema->children[0], NANOARROW_TYPE_TIME64,
+                                             NANOARROW_TIME_UNIT_MICRO, nullptr),
+                  adbc_validation::IsOkErrno());
+    } else {
+      ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32),
+                  adbc_validation::IsOkErrno());
+    }
+    ASSERT_THAT(ArrowSchemaSetName(
+                    schema->children[0],
+                    replace_case == ReplaceCase::kCreateError ? "ctid" : "replacement"),
+                adbc_validation::IsOkErrno());
+
+    std::vector<ArrowArray> batches;
+    if (replace_case == ReplaceCase::kServerError) {
+      nanoarrow::UniqueArray first_batch;
+      nanoarrow::UniqueArray second_batch;
+      ASSERT_THAT(adbc_validation::MakeBatch<int64_t>(schema.get(), first_batch.get(),
+                                                      nullptr, {1}),
+                  adbc_validation::IsOkErrno());
+      ASSERT_THAT(adbc_validation::MakeBatch<int64_t>(schema.get(), second_batch.get(),
+                                                      nullptr, {86400000001}),
+                  adbc_validation::IsOkErrno());
+      batches.resize(2);
+      ArrowArrayMove(first_batch.get(), &batches[0]);
+      ArrowArrayMove(second_batch.get(), &batches[1]);
+    } else if (replace_case != ReplaceCase::kCreateError) {
+      nanoarrow::UniqueArray batch;
+      ASSERT_THAT(adbc_validation::MakeBatch<int32_t>(
+                      schema.get(), batch.get(), nullptr,
+                      replace_case == ReplaceCase::kSuccess
+                          ? std::vector<std::optional<int32_t>>{5, 6}
+                          : std::vector<std::optional<int32_t>>{1, 2, 3}),
+                  adbc_validation::IsOkErrno());
+      batches.resize(1);
+      ArrowArrayMove(batch.get(), &batches[0]);
+    }
+    nanoarrow::UniqueArrayStream source;
+    adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+    CopyFailingStreamState state{source.get()};
+    ArrowArrayStream failing_stream = MakeCopyFailingStream(&state);
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                       "adbc_replace_savepoint_target", &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                       ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                       ADBC_OPTION_VALUE_ENABLED, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementBindStream(
+            &statement,
+            replace_case == ReplaceCase::kStreamError ? &failing_stream : source.get(),
+            &error),
+        IsOkStatus(&error));
+    int64_t rows_affected = -1;
+    const AdbcStatusCode status =
+        AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error);
+    if (replace_case == ReplaceCase::kSuccess) {
+      ASSERT_THAT(status, IsOkStatus(&error));
+      EXPECT_EQ(rows_affected, 2);
+    } else {
+      EXPECT_NE(status, ADBC_STATUS_OK);
+      EXPECT_EQ(rows_affected, 0);
+      ASSERT_NE(error.message, nullptr);
+      if (replace_case == ReplaceCase::kStreamError) {
+        EXPECT_EQ(status, ADBC_STATUS_IO);
+        EXPECT_EQ(state.next_calls, 2);
+        EXPECT_THAT(error.message,
+                    ::testing::HasSubstr("injected COPY stream read failure"));
+      } else if (replace_case == ReplaceCase::kServerError) {
+        EXPECT_EQ(status, ADBC_STATUS_INVALID_DATA);
+        EXPECT_EQ(std::string(error.sqlstate, 5), "22008");
+      } else {
+        EXPECT_EQ(status, ADBC_STATUS_ALREADY_EXISTS);
+        EXPECT_EQ(std::string(error.sqlstate, 5), "42701");
+        EXPECT_THAT(error.message, ::testing::HasSubstr("Failed to create table"));
+      }
+      ASSERT_NE(error.release, nullptr);
+      error.release(&error);
+      error = ADBC_ERROR_INIT;
+    }
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+
+    // Recovery must not discard either piece of the caller's unrelated work.
+    adbc::driver::pgwire::UniqueResult pending(
+        PQexec(pg_conn, "SELECT id FROM adbc_replace_savepoint_user_work ORDER BY id"));
+    ASSERT_NE(pending, nullptr);
+    ASSERT_EQ(PQresultStatus(pending.get()), PGRES_TUPLES_OK) << PQerrorMessage(pg_conn);
+    ASSERT_EQ(PQntuples(pending.get()), 2);
+    EXPECT_STREQ(PQgetvalue(pending.get(), 0, 0), "7");
+    EXPECT_STREQ(PQgetvalue(pending.get(), 1, 0), "9");
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(
+            &statement, "SELECT * FROM pg_temp.adbc_replace_savepoint_target ORDER BY 1",
+            &error),
+        IsOkStatus(&error));
+    {
+      adbc_validation::StreamReader reader;
+      ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                            &reader.rows_affected, &error),
+                  IsOkStatus(&error));
+      ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+      ASSERT_EQ(reader.schema->n_children, 1);
+      const bool replaced = replace_case == ReplaceCase::kSuccess;
+      EXPECT_STREQ(reader.schema->children[0]->name, replaced ? "replacement" : "id");
+      EXPECT_STREQ(reader.schema->children[0]->format, replaced ? "i" : "l");
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      ASSERT_NE(reader.array->release, nullptr);
+      if (replaced) {
+        ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<int32_t>(
+            reader.array_view->children[0], {5, 6}));
+      } else {
+        ASSERT_NO_FATAL_FAILURE(
+            adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+      }
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      ASSERT_EQ(reader.array->release, nullptr);
+    }
+    // This must address the older caller savepoint, not a leaked driver one.
+    // For success it also rolls back the still-pending schema/data replacement.
+    ASSERT_NO_FATAL_FAILURE(execute_command("ROLLBACK TO SAVEPOINT adbc_pgwire_replace"));
+    ASSERT_NO_FATAL_FAILURE(execute_command("RELEASE SAVEPOINT adbc_pgwire_replace"));
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+    adbc::driver::pgwire::UniqueResult caller_work(
+        PQexec(pg_conn, "SELECT id FROM adbc_replace_savepoint_user_work"));
+    ASSERT_EQ(PQresultStatus(caller_work.get()), PGRES_TUPLES_OK)
+        << PQerrorMessage(pg_conn);
+    ASSERT_EQ(PQntuples(caller_work.get()), 1);
+    EXPECT_STREQ(PQgetvalue(caller_work.get(), 0, 0), "7");
+    ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+    EXPECT_EQ(PQtransactionStatus(pg_conn), PQTRANS_IDLE);
+    adbc::driver::pgwire::UniqueResult original(
+        PQexec(pg_conn, "SELECT * FROM adbc_replace_savepoint_target"));
+    ASSERT_EQ(PQresultStatus(original.get()), PGRES_TUPLES_OK) << PQerrorMessage(pg_conn);
+    ASSERT_EQ(PQnfields(original.get()), 1);
+    EXPECT_STREQ(PQfname(original.get(), 0), "id");
+    EXPECT_EQ(PQftype(original.get(), 0), 20);
+    ASSERT_EQ(PQntuples(original.get()), 1);
+    EXPECT_STREQ(PQgetvalue(original.get(), 0, 0), "42");
+    adbc::driver::pgwire::UniqueResult rolled_back(
+        PQexec(pg_conn, "SELECT COUNT(*) FROM adbc_replace_savepoint_user_work"));
+    ASSERT_EQ(PQresultStatus(rolled_back.get()), PGRES_TUPLES_OK)
+        << PQerrorMessage(pg_conn);
+    EXPECT_STREQ(PQgetvalue(rolled_back.get(), 0, 0), "0");
+  }
+}
+
+TEST_F(PostgresStatementTest,
+       SqlIngestReplaceCallerSavepointBackendLossPreservesCommittedWork) {
+  auto& connection_impl = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  PGconn* pg_conn = connection_impl->conn();
+  adbc::driver::pgwire::UniqueConnection observer(
+      PQconnectdb(std::getenv("ADBC_POSTGRESQL_TEST_URI")));
+  ASSERT_NE(observer, nullptr);
+  ASSERT_EQ(PQstatus(observer.get()), CONNECTION_OK) << PQerrorMessage(observer.get());
+  const std::string target =
+      "adbc_replace_savepoint_backend_loss_" + std::to_string(PQbackendPID(pg_conn));
+  const std::string work = target + "_work";
+  struct ScopedTargetCleanup {
+    PGconn* observer;
+    AdbcStatement* statement;
+    AdbcConnection* victim;
+    std::string target;
+    std::string work;
+    ~ScopedTargetCleanup() {
+      // Closing the live ADBC handles releases any DDL locks before observer
+      // cleanup, including an early assertion exit before backend termination.
+      AdbcError cleanup_error = ADBC_ERROR_INIT;
+      if (statement->private_data != nullptr) {
+        (void)AdbcStatementRelease(statement, &cleanup_error);
+      }
+      if (cleanup_error.release != nullptr) cleanup_error.release(&cleanup_error);
+      cleanup_error = ADBC_ERROR_INIT;
+      if (victim->private_data != nullptr) {
+        (void)AdbcConnectionRelease(victim, &cleanup_error);
+      }
+      if (cleanup_error.release != nullptr) cleanup_error.release(&cleanup_error);
+      adbc::driver::pgwire::UniqueResult drop(
+          PQexec(observer, ("DROP TABLE IF EXISTS " + target + ", " + work).c_str()));
+    }
+  } cleanup{observer.get(), &statement, &connection, target, work};
+  // The bounded lock timeout also protects cleanup on an early test failure.
+  adbc::driver::pgwire::UniqueResult setup(
+      PQexec(observer.get(),
+             ("SET lock_timeout TO '2s'; CREATE TABLE " + target +
+              " (id BIGINT); INSERT INTO " + target + " VALUES (42); CREATE TABLE " +
+              work + " (id INTEGER); INSERT INTO " + work + " VALUES (1)")
+                 .c_str()));
+  ASSERT_NE(setup, nullptr);
+  ASSERT_EQ(PQresultStatus(setup.get()), PGRES_COMMAND_OK)
+      << PQerrorMessage(observer.get());
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, ("INSERT INTO " + work + " VALUES (7)").c_str(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  adbc::driver::pgwire::UniqueResult caller_work(PQexec(
+      pg_conn,
+      ("SAVEPOINT adbc_pgwire_replace; INSERT INTO " + work + " VALUES (9)").c_str()));
+  ASSERT_EQ(PQresultStatus(caller_work.get()), PGRES_COMMAND_OK)
+      << PQerrorMessage(pg_conn);
+  ASSERT_EQ(PQtransactionStatus(pg_conn), PQTRANS_INTRANS);
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_THAT(ArrowSchemaSetTypeStruct(schema.get(), 1), adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32),
+              adbc_validation::IsOkErrno());
+  ASSERT_THAT(ArrowSchemaSetName(schema->children[0], "replacement"),
+              adbc_validation::IsOkErrno());
+  nanoarrow::UniqueArray batch;
+  ASSERT_THAT(
+      adbc_validation::MakeBatch<int32_t>(schema.get(), batch.get(), nullptr, {1, 2, 3}),
+      adbc_validation::IsOkErrno());
+  std::vector<ArrowArray> batches(1);
+  ArrowArrayMove(batch.get(), &batches[0]);
+  nanoarrow::UniqueArrayStream source;
+  adbc_validation::MakeStream(source.get(), schema.get(), std::move(batches));
+  CopyFailingStreamState state{source.get(), 0, observer.get(), PQbackendPID(pg_conn)};
+  ArrowArrayStream failing_stream = MakeCopyFailingStream(&state);
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     target.c_str(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, &failing_stream, &error),
+              IsOkStatus(&error));
+  int64_t rows_affected = -1;
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows_affected, &error),
+              IsStatus(ADBC_STATUS_IO, &error));
+  EXPECT_EQ(state.next_calls, 2);
+  ASSERT_TRUE(state.terminated);
+  EXPECT_EQ(rows_affected, 0);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message, ::testing::HasSubstr("injected COPY stream read failure"));
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  EXPECT_EQ(PQstatus(pg_conn), CONNECTION_BAD);
+  EXPECT_TRUE(connection_impl->unusable());
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  ASSERT_THAT(AdbcConnectionCommit(&connection, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  ASSERT_THAT(AdbcConnectionRollback(&connection, &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  error.release(&error);
+  error = ADBC_ERROR_INIT;
+  // Release is allowed, but no rollback SQL may be issued on the lost backend.
+  ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionRelease(&connection, &error), IsOkStatus(&error));
+
+  adbc::driver::pgwire::UniqueResult original(
+      PQexec(observer.get(), ("SELECT * FROM " + target).c_str()));
+  ASSERT_NE(original, nullptr);
+  ASSERT_EQ(PQresultStatus(original.get()), PGRES_TUPLES_OK)
+      << PQerrorMessage(observer.get());
+  ASSERT_EQ(PQnfields(original.get()), 1);
+  EXPECT_STREQ(PQfname(original.get(), 0), "id");
+  EXPECT_EQ(PQftype(original.get(), 0), 20);
+  ASSERT_EQ(PQntuples(original.get()), 1);
+  EXPECT_STREQ(PQgetvalue(original.get(), 0, 0), "42");
+  adbc::driver::pgwire::UniqueResult committed_work(
+      PQexec(observer.get(), ("SELECT id FROM " + work + " ORDER BY id").c_str()));
+  ASSERT_NE(committed_work, nullptr);
+  ASSERT_EQ(PQresultStatus(committed_work.get()), PGRES_TUPLES_OK)
+      << PQerrorMessage(observer.get());
+  ASSERT_EQ(PQntuples(committed_work.get()), 1);
+  EXPECT_STREQ(PQgetvalue(committed_work.get(), 0, 0), "1");
 }
 
 TEST_F(PostgresStatementTest, SqlIngestAppendIntegerIntoNumeric) {

@@ -135,7 +135,8 @@ is evidence, not a substitute for a clean-client test or documented limitations.
       missing names, and unsupported Arrow types have preflight checks.
       PostgreSQL autocommit now owns one transaction through `DROP`/`CREATE`
       and binary COPY, rolling back confirmed DDL/transfer failures. Explicit
-      transactions need a separate savepoint design; Redshift replacement
+      PostgreSQL ADBC transactions recover failures through a private
+      savepoint without touching unrelated caller work; Redshift replacement
       remains non-atomic across DDL and transfer. Lost finalization replies
       retire the connection rather than claiming rollback or retrying.
 - [x] Terminalize PostgreSQL binary ingest COPY after client/server errors,
@@ -168,9 +169,9 @@ is evidence, not a substitute for a clean-client test or documented limitations.
 - [x] Define a documented support matrix with explicit unsupported features and
       test evidence for each claim.
 
-#### Next bounded correctness checkpoint (not implemented)
+#### PostgreSQL explicit-transaction replace savepoint (implemented)
 
-PostgreSQL explicit-transaction replace will compose a private savepoint guard
+PostgreSQL explicit-transaction replace composes a private savepoint guard
 with the existing pre-DDL callback and terminal COPY seam, without new public
 options. Require `PQTRANS_INTRANS`, create and confirm a savepoint after
 preflight/before DROP, release on success without COMMIT, and recover confirmed
