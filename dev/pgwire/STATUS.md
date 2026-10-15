@@ -26,7 +26,7 @@ Current state only; history is in git and PR descriptions.
 - Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
   004b (release hardening, PR #8), 005 (Python package, PR #7),
   005b (portable wheels, PR #10).
-- Task 006 (IAM recipe + optional Python helper): in review (PR #TBD) —
+- Task 006 (IAM recipe + optional Python helper): in review (PR #11) —
   helper `adbc_driver_redshift.iam` with `build_uri` and
   `fetch_{serverless,cluster}_credentials` (injectable clients, offline
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
