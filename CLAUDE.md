@@ -86,8 +86,9 @@ Each gate is required **when its path filter triggers it** (by the PR into
 | `PgWire Drivers` (`pgwire-postgresql.yml`) | `c/**` and its own file |
 | `PgWire Development Package` | driver sources and build files |
 | `PgWire AWS Safety Mocks` | its scripts |
-| `PgWire Redshift Release` (dry run) | its own file, `pgwire-package.yml`, `c/driver/pgwire/install_smoke/**`, `c/driver/pgwire/redshift_manifest_smoke.c` |
-| `PgWire Python` (`pgwire-python.yml`) | `python/adbc_driver_redshift/**`, `python/adbc_driver_manager/**`, C driver and build sources, its own file |
+| `PgWire Redshift Release` (dry run, includes the 5 wheels) | its own file, `pgwire-package.yml`, `c/driver/pgwire/install_smoke/**`, `c/driver/pgwire/redshift_manifest_smoke.c` |
+| `PgWire Python` (`pgwire-python.yml`, fast Linux wheel) | `python/adbc_driver_redshift/**`, `python/adbc_driver_manager/**`, C driver and build sources, its own file |
+| `PgWire Python Wheels` (`pgwire-python-wheels.yml`, 5 portable wheels) | its own file, `ci/scripts/python_util.sh`, `python_wheel_*` and `pgwire_python_wheel_test.sh`, `install_vcpkg.sh`, `ci/vcpkg/**`, the Redshift package's `setup.py`, `pyproject.toml`, `MANIFEST.in` |
 | `Dev` (pre-commit, PR title/body) | every PR and push |
 
 `Native Libraries (Unix)` and `(Windows)` (30-60 minutes, mostly macOS/Conda

@@ -72,10 +72,15 @@ echo "=== Set up platform variables ==="
 setup_build_vars "${arch}"
 
 echo "=== Building C/C++ driver components ==="
-# Sets ADBC_POSTGRESQL_LIBRARY, ADBC_SQLITE_LIBRARY
+# Sets ADBC_POSTGRESQL_LIBRARY, ADBC_REDSHIFT_LIBRARY, ADBC_SQLITE_LIBRARY
 build_drivers "${source_dir}" "${build_dir}"
 
 # Check that we don't expose any unwanted symbols
-check_visibility $ADBC_FLIGHTSQL_LIBRARY
+if [[ "${ADBC_DRIVER_FLIGHTSQL}" != "OFF" ]]; then
+    check_visibility $ADBC_FLIGHTSQL_LIBRARY
+fi
 check_visibility $ADBC_POSTGRESQL_LIBRARY
-check_visibility $ADBC_SQLITE_LIBRARY
+check_visibility $ADBC_REDSHIFT_LIBRARY
+if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then
+    check_visibility $ADBC_SQLITE_LIBRARY
+fi

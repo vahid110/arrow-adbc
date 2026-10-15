@@ -23,7 +23,15 @@ param(
     [string]$BuildDir,
     [Parameter(Mandatory = $true)]
     [ValidateSet("amd64", "arm64")]
-    [string]$Architecture
+    [string]$Architecture,
+    # Fork: build a subset (e.g. adbc_driver_redshift); an empty generator lets
+    # CMake pick the installed Visual Studio.
+    [string[]]$Components = @(
+        "adbc_driver_flightsql",
+        "adbc_driver_postgresql",
+        "adbc_driver_sqlite"
+    ),
+    [string]$Generator = "Visual Studio 18 2026"
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +51,13 @@ if ($Architecture -eq "amd64") {
 }
 
 $BuildType = "RelWithDebInfo"
+$FlightSql = if ($Components -contains "adbc_driver_flightsql") { "ON" } else { "OFF" }
+$Sqlite = if ($Components -contains "adbc_driver_sqlite") { "ON" } else { "OFF" }
+$VcpkgPackages = @("libpq")
+if ($Sqlite -eq "ON") {
+    $VcpkgPackages += "sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]"
+}
+$GeneratorArgs = if ($Generator) { @("-G", $Generator) } else { @() }
 $env:VCPKG_FEATURE_FLAGS = "-manifests"
 $env:VCPKG_TARGET_TRIPLET = $VcpkgTriplet
 $env:VCPKG_DEFAULT_HOST_TRIPLET = $VcpkgTriplet
@@ -51,8 +66,7 @@ Write-Host "=== Building ADBC drivers for $Architecture ==="
 
 & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
     "--triplet=$VcpkgTriplet" `
-    "libpq" `
-    "sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]" `
+    @VcpkgPackages `
     --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets")
 if (-not $?) { throw "Failed to install vcpkg dependencies" }
 
@@ -61,7 +75,7 @@ New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 cmake `
     -S (Join-Path $SourceDir "c") `
     -B $BuildDir `
-    -G "Visual Studio 18 2026" `
+    @GeneratorArgs `
     -A $CMakePlatform `
     -DADBC_BUILD_SHARED=ON `
     "-DCMAKE_BUILD_TYPE=$BuildType" `
@@ -70,10 +84,11 @@ cmake `
     -DCMAKE_UNITY_BUILD=ON `
     "-DVCPKG_OVERLAY_TRIPLETS=$(Join-Path $SourceDir 'ci\vcpkg\triplets')" `
     "-DVCPKG_TARGET_TRIPLET=$VcpkgTriplet" `
-    -DADBC_DRIVER_FLIGHTSQL=ON `
+    "-DADBC_DRIVER_FLIGHTSQL=$FlightSql" `
     -DADBC_DRIVER_MANAGER=ON `
     -DADBC_DRIVER_POSTGRESQL=ON `
-    -DADBC_DRIVER_SQLITE=ON
+    "-DADBC_DRIVER_SQLITE=$Sqlite" `
+    "-DADBC_VERSION_OVERRIDE=$env:ADBC_VERSION_OVERRIDE"
 if (-not $?) { throw "Failed to configure the CMake build" }
 
 cmake --build $BuildDir --config $BuildType --target install --verbose -j
@@ -81,17 +96,13 @@ if (-not $?) { throw "Failed to build and install the CMake project" }
 
 $env:ADBC_FLIGHTSQL_LIBRARY = Join-Path $BuildDir "bin/adbc_driver_flightsql.dll"
 $env:ADBC_POSTGRESQL_LIBRARY = Join-Path $BuildDir "bin/adbc_driver_postgresql.dll"
+$env:ADBC_REDSHIFT_LIBRARY = Join-Path $BuildDir "bin/adbc_driver_redshift.dll"
 $env:ADBC_SQLITE_LIBRARY = Join-Path $BuildDir "bin/adbc_driver_sqlite.dll"
 
 python -m pip install --upgrade pip delvewheel wheel
 if (-not $?) { throw "Failed to install Python build dependencies" }
 
 $env:ADBC_BUILD_TYPE = "debug"
-$Components = @(
-    "adbc_driver_flightsql",
-    "adbc_driver_postgresql",
-    "adbc_driver_sqlite"
-)
 
 foreach ($Component in $Components) {
     $ComponentDir = Join-Path $SourceDir "python/$Component"

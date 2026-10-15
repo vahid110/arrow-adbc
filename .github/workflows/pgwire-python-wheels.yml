@@ -1,0 +1,469 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire Python Wheels
+
+# Portable adbc_driver_redshift wheels, built with upstream's
+# ci/scripts/python_wheel_* scripts narrowed to the Redshift driver: manylinux
+# (x86_64, aarch64; static libpq from vcpkg, auditwheel), macOS (x86_64, arm64;
+# delocate) and Windows x64 (delvewheel). Each wheel is installed into a clean
+# virtualenv with adbc-driver-manager from PyPI and must load its bundled
+# driver and reject a PostgreSQL server. pgwire-release.yml calls this
+# workflow; pull requests run it only when the wheel build inputs change.
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: C library version (ADBC_VERSION_OVERRIDE), e.g. 1.2.3-rc.1
+        required: true
+        type: string
+      python_version:
+        description: PEP 440 wheel version (SETUPTOOLS_SCM_PRETEND_VERSION), e.g. 1.2.3rc1
+        required: true
+        type: string
+  pull_request:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-python-wheels.yml"
+      - "ci/scripts/install_vcpkg.sh"
+      - "ci/scripts/pgwire_python_wheel_test.sh"
+      - "ci/scripts/test_pgwire_python_wheel_verify.py"
+      - "ci/scripts/python_util.sh"
+      - "ci/scripts/python_wheel_fix_tag.py"
+      - "ci/scripts/python_wheel_unix_build.sh"
+      - "ci/scripts/python_wheel_unix_relocate.sh"
+      - "ci/scripts/python_wheel_windows_build_drivers.ps1"
+      - "ci/vcpkg/**"
+      - "python/adbc_driver_redshift/MANIFEST.in"
+      - "python/adbc_driver_redshift/pyproject.toml"
+      - "python/adbc_driver_redshift/setup.py"
+
+permissions:
+  contents: read
+
+env:
+  # Narrow upstream's wheel scripts to the libpq drivers and the Redshift package.
+  ADBC_PYTHON_COMPONENTS: adbc_driver_redshift
+  ADBC_DRIVER_FLIGHTSQL: "OFF"
+  ADBC_DRIVER_SQLITE: "OFF"
+
+jobs:
+  version:
+    name: Resolve wheel version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      python_version: ${{ steps.version.outputs.python_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test wheel verification offline
+        run: python3 ci/scripts/test_pgwire_python_wheel_verify.py
+
+      - name: Use the caller's versions or a development version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ] && [ -n "$INPUT_PYTHON_VERSION" ]; then
+            version="$INPUT_VERSION"
+            python_version="$INPUT_PYTHON_VERSION"
+          elif [ -n "$INPUT_VERSION$INPUT_PYTHON_VERSION" ]; then
+            echo "::error::pass both version and python_version"
+            exit 1
+          else
+            version="0.0.0-dev+${GITHUB_SHA:0:12}"
+            python_version="0.0.0.dev0+g${GITHUB_SHA:0:12}"
+          fi
+          echo "C version: $version; wheel version: $python_version"
+          {
+            echo "version=$version"
+            echo "python_version=$python_version"
+          } >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Build manylinux ${{ matrix.arch }} wheel
+    runs-on: ${{ matrix.runner }}
+    needs: [version]
+    container: ${{ matrix.image }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            upstream_arch: amd64
+            runner: ubuntu-latest
+            image: quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
+          - arch: aarch64
+            upstream_arch: arm64v8
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64:2026.10.03-1@sha256:f5f03dedf61b47d69d0742d36047db78adeee3bdb7a9910ff52304750ecf2514
+    env:
+      ADBC_VERSION_OVERRIDE: ${{ needs.version.outputs.version }}
+      CMAKE_BUILD_TYPE: Release
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.version.outputs.python_version }}
+      UPSTREAM_ARCH: ${{ matrix.upstream_arch }}
+      VCPKG_ROOT: /opt/vcpkg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          # The packages of ci/docker/python-wheel-manylinux.dockerfile (without Go
+          # and Docker); CMake and Ninja come from PyPI.
+          dnf install -y autoconf autoconf-archive curl git flex perl-IPC-Cmd \
+            perl-Time-Piece unzip wget zip
+          /opt/python/cp313-cp313/bin/python -m venv "$RUNNER_TEMP/build-env"
+          "$RUNNER_TEMP/build-env/bin/python" -m pip install cmake ninja
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install vcpkg
+        run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"
+
+      - name: Build and repair the wheel
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/build-env/bin/activate"
+          ci/scripts/python_wheel_unix_build.sh "$UPSTREAM_ARCH" "$PWD" "$PWD/build"
+          ci/scripts/python_wheel_unix_relocate.sh "$UPSTREAM_ARCH" "$PWD" "$PWD/build"
+          auditwheel show python/adbc_driver_redshift/repaired_wheels/*.whl
+          ls -l python/adbc_driver_redshift/repaired_wheels
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-wheel-manylinux-${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: error
+          path: python/adbc_driver_redshift/repaired_wheels/*.whl
+
+  linux-test:
+    name: Test manylinux ${{ matrix.arch }} wheel
+    runs-on: ${{ matrix.runner }}
+    needs: [version, linux]
+    # A plain Debian Python image: no libpq, no build tools.
+    container: python:3.13-slim
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADBC_POSTGRESQL_TEST_URI: postgresql://postgres:5432/postgres?user=postgres&password=password
+      PYTHON_VERSION_EXPECTED: ${{ needs.version.outputs.python_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: adbc-redshift-wheel-manylinux-${{ matrix.arch }}
+          path: wheels
+
+      - name: Install, load and reject PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel=(wheels/adbc_driver_redshift-*.whl)
+          ci/scripts/pgwire_python_wheel_test.sh python3 "${wheel[0]}" \
+            "$PYTHON_VERSION_EXPECTED" "$PWD"
+
+  macos:
+    name: Build and test macOS ${{ matrix.arch }} wheel
+    runs-on: ${{ matrix.runner }}
+    needs: [version]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            upstream_arch: amd64
+            runner: macos-15-intel
+            deployment_target: "10.15"
+          - arch: arm64
+            upstream_arch: arm64v8
+            runner: macos-latest
+            deployment_target: "11.0"
+    env:
+      ADBC_VERSION_OVERRIDE: ${{ needs.version.outputs.version }}
+      CMAKE_BUILD_TYPE: Release
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+      PYTHON_VERSION_EXPECTED: ${{ needs.version.outputs.python_version }}
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.version.outputs.python_version }}
+      UPSTREAM_ARCH: ${{ matrix.upstream_arch }}
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: "3.13"
+
+      - name: Install build tools
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          brew install --quiet autoconf bash ninja pkg-config
+
+      - name: Install vcpkg
+        run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"
+
+      - name: Build and repair the wheel
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m venv "$RUNNER_TEMP/build-env"
+          source "$RUNNER_TEMP/build-env/bin/activate"
+          ci/scripts/python_wheel_unix_build.sh "$UPSTREAM_ARCH" "$PWD" "$PWD/build"
+          ci/scripts/python_wheel_unix_relocate.sh "$UPSTREAM_ARCH" "$PWD" "$PWD/build"
+          ls -l python/adbc_driver_redshift/repaired_wheels
+
+      - name: Start temporary PostgreSQL 18 server
+        run: |
+          # Installed after the build so that only vcpkg's static libpq is visible.
+          brew install --quiet postgresql@18
+          PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
+          initdb -D "$RUNNER_TEMP/pgdata" --auth=trust --locale=C --no-instructions
+          pg_ctl -D "$RUNNER_TEMP/pgdata" -o "-h 127.0.0.1 -p 55433" \
+            -l "$RUNNER_TEMP/postgres.log" -w start
+          echo "ADBC_POSTGRESQL_TEST_URI=postgresql://127.0.0.1:55433/postgres?user=$(whoami)" >> "$GITHUB_ENV"
+
+      - name: Install, load and reject PostgreSQL
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          wheel=(python/adbc_driver_redshift/repaired_wheels/adbc_driver_redshift-*.whl)
+          ci/scripts/pgwire_python_wheel_test.sh "$PYTHON" "${wheel[0]}" \
+            "$PYTHON_VERSION_EXPECTED" "$PWD"
+
+      - name: Stop temporary PostgreSQL 18 server
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/pgdata/postmaster.pid"; then
+            pg_ctl -D "$RUNNER_TEMP/pgdata" stop -m immediate
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-wheel-macos-${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: error
+          path: python/adbc_driver_redshift/repaired_wheels/*.whl
+
+  windows:
+    name: Build and test Windows x64 wheel
+    runs-on: windows-latest
+    needs: [version]
+    timeout-minutes: 60
+    env:
+      ADBC_VERSION_OVERRIDE: ${{ needs.version.outputs.version }}
+      PYTHON_VERSION_EXPECTED: ${{ needs.version.outputs.python_version }}
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.version.outputs.python_version }}
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-release
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          architecture: x64
+          python-version: "3.13"
+
+      - name: Install vcpkg
+        shell: bash
+        run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"
+
+      - name: Build and repair the wheel
+        shell: pwsh
+        run: |
+          # An empty generator lets CMake pick the runner's Visual Studio.
+          .\ci\scripts\python_wheel_windows_build_drivers.ps1 `
+            -SourceDir $PWD.Path `
+            -BuildDir (Join-Path $PWD.Path "build") `
+            -Architecture amd64 `
+            -Components adbc_driver_redshift `
+            -Generator ""
+          if (-not $?) { throw "Failed to build the Redshift wheel" }
+          Get-ChildItem python\adbc_driver_redshift\repaired_wheels
+
+      - name: Start temporary PostgreSQL server
+        shell: pwsh
+        run: |
+          # The runner image ships PostgreSQL (PGBIN); its bin directory stays off
+          # PATH so the wheel cannot pick up a system libpq.dll.
+          $pgBin = $env:PGBIN
+          if (-not $pgBin -or -not (Test-Path (Join-Path $pgBin "pg_ctl.exe"))) {
+            throw "PostgreSQL server executables not found (PGBIN=$pgBin)"
+          }
+          $data = Join-Path $env:RUNNER_TEMP "pgdata"
+          $log = Join-Path $env:RUNNER_TEMP "postgres.log"
+          & (Join-Path $pgBin "initdb.exe") -D $data -A trust -U postgres --no-instructions
+          if ($LASTEXITCODE -ne 0) { throw "failed to initialize PostgreSQL" }
+          & (Join-Path $pgBin "pg_ctl.exe") -D $data -o "-h 127.0.0.1 -p 55433" -l $log -w start
+          if ($LASTEXITCODE -ne 0) { throw "failed to start PostgreSQL" }
+          "ADBC_POSTGRESQL_TEST_URI=postgresql://127.0.0.1:55433/postgres?user=postgres" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install, load and reject PostgreSQL
+        shell: bash
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          wheel=(python/adbc_driver_redshift/repaired_wheels/adbc_driver_redshift-*.whl)
+          ci/scripts/pgwire_python_wheel_test.sh "$PYTHON" "${wheel[0]}" \
+            "$PYTHON_VERSION_EXPECTED" "$PWD"
+
+      - name: Stop temporary PostgreSQL server
+        if: always()
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP "pgdata"
+          if (Test-Path (Join-Path $data "postmaster.pid")) {
+            & (Join-Path $env:PGBIN "pg_ctl.exe") -D $data -m immediate -w stop
+          }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: adbc-redshift-wheel-windows-x64
+          retention-days: 7
+          if-no-files-found: error
+          path: python/adbc_driver_redshift/repaired_wheels/*.whl
+
+  verify:
+    name: Verify the five wheels
+    runs-on: ubuntu-24.04
+    needs: [version, linux-test, macos, windows]
+    env:
+      PYTHON_VERSION_EXPECTED: ${{ needs.version.outputs.python_version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: adbc-redshift-wheel-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Check names, tags, versions and contents
+        run: |
+          set -euo pipefail
+          cd wheels
+          ls -l
+          python3 - <<'PY'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import zipfile
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(f"::error::{message}")
+
+          version = os.environ["PYTHON_VERSION_EXPECTED"]
+          prefix = f"adbc_driver_redshift-{version}-py3-none-"
+          targets = {"manylinux-x86_64", "manylinux-aarch64",
+                     "macos-x86_64", "macos-arm64", "windows-amd64"}
+          wheels = sorted(pathlib.Path(".").iterdir())
+          require(len(wheels) == 5, "expected exactly five wheels")
+          seen = set()
+          for wheel in wheels:
+              require(wheel.is_file() and wheel.name.startswith(prefix)
+                      and wheel.name.endswith(".whl"), f"unexpected wheel: {wheel}")
+              platforms = wheel.name[len(prefix):-4].split(".")
+              require(len(platforms) == len(set(platforms)), f"duplicate platform: {wheel}")
+              linux = [re.fullmatch(r"manylinux_2_([0-9]+)_(x86_64|aarch64)", p)
+                       for p in platforms]
+              if all(linux):
+                  arch = linux[0][2]
+                  require(all(m[2] == arch and int(m[1]) <= 28 for m in linux)
+                          and f"manylinux_2_28_{arch}" in platforms,
+                          f"invalid manylinux platforms: {wheel}")
+                  target = f"manylinux-{arch}"
+              else:
+                  require(len(platforms) == 1, f"unexpected platform combination: {wheel}")
+                  macos = re.fullmatch(r"macosx_[0-9]+_[0-9]+_(x86_64|arm64)", platforms[0])
+                  if macos:
+                      target = f"macos-{macos[1]}"
+                  else:
+                      require(platforms == ["win_amd64"], f"unexpected platform: {wheel}")
+                      target = "windows-amd64"
+              require(target not in seen, f"duplicate wheel target: {target}")
+              seen.add(target)
+              with zipfile.ZipFile(wheel) as archive:
+                  names = archive.namelist()
+                  dist_info = f"adbc_driver_redshift-{version}.dist-info"
+                  def metadata(filename):
+                      path = f"{dist_info}/{filename}"
+                      require([n for n in names if n.endswith(f".dist-info/{filename}")]
+                              == [path], f"expected one {path}: {wheel}")
+                      return email.parser.Parser().parsestr(archive.read(path).decode())
+                  require(metadata("METADATA").get_all("Version") == [version],
+                          f"METADATA version mismatch: {wheel}")
+                  info = metadata("WHEEL")
+                  require(info.get_all("Root-Is-Purelib") == ["false"],
+                          f"expected a non-pure wheel: {wheel}")
+                  # Compressed filename platforms expand to separate WHEEL Tag headers.
+                  tags = info.get_all("Tag", [])
+                  require(len(tags) == len(platforms)
+                          and set(tags) == {f"py3-none-{p}" for p in platforms},
+                          f"filename/WHEEL tag mismatch: {wheel}")
+                  static_version = archive.read("adbc_driver_redshift/_static_version.py")
+                  require(f"version = '{version}'" in static_version.decode().splitlines(),
+                          f"static version mismatch: {wheel}")
+                  require("adbc_driver_redshift/libadbc_driver_redshift.so" in names,
+                          f"missing bundled library: {wheel}")
+              print(f"OK {wheel}")
+          require(seen == targets, f"missing wheel targets: {targets - seen}")
+          PY

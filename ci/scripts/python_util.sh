@@ -17,7 +17,8 @@
 
 set -ex
 
-COMPONENTS="adbc_driver_manager adbc_driver_flightsql adbc_driver_postgresql adbc_driver_sqlite"
+# Fork: ADBC_PYTHON_COMPONENTS narrows the packages (e.g. adbc_driver_redshift).
+COMPONENTS="${ADBC_PYTHON_COMPONENTS:-adbc_driver_manager adbc_driver_flightsql adbc_driver_postgresql adbc_driver_sqlite}"
 
 function find_drivers {
     local -r build_dir="${1}/${VCPKG_ARCH}"
@@ -25,10 +26,12 @@ function find_drivers {
     if [[ $(uname) == "Linux" ]]; then
         export ADBC_FLIGHTSQL_LIBRARY=${build_dir}/lib/libadbc_driver_flightsql.so
         export ADBC_POSTGRESQL_LIBRARY=${build_dir}/lib/libadbc_driver_postgresql.so
+        export ADBC_REDSHIFT_LIBRARY=${build_dir}/lib/libadbc_driver_redshift.so
         export ADBC_SQLITE_LIBRARY=${build_dir}/lib/libadbc_driver_sqlite.so
     else # macOS
         export ADBC_FLIGHTSQL_LIBRARY=${build_dir}/lib/libadbc_driver_flightsql.dylib
         export ADBC_POSTGRESQL_LIBRARY=${build_dir}/lib/libadbc_driver_postgresql.dylib
+        export ADBC_REDSHIFT_LIBRARY=${build_dir}/lib/libadbc_driver_redshift.dylib
         export ADBC_SQLITE_LIBRARY=${build_dir}/lib/libadbc_driver_sqlite.dylib
     fi
 }
@@ -43,6 +46,9 @@ function build_drivers {
     : ${VCPKG_ROOT:=/opt/vcpkg}
     # Enable manifest mode
     : ${VCPKG_FEATURE_FLAGS:=manifests}
+    # Fork: the Redshift wheels build only the libpq drivers (no Go, no SQLite)
+    : ${ADBC_DRIVER_FLIGHTSQL:=ON}
+    : ${ADBC_DRIVER_SQLITE:=ON}
     # Add our custom triplets
     export VCPKG_OVERLAY_TRIPLETS="${source_dir}/ci/vcpkg/triplets/"
 
@@ -66,7 +72,11 @@ function build_drivers {
     echo "=== Setup VCPKG ==="
 
     # Need to install sqlite3 to make CMake be able to find it below
-    "${VCPKG_ROOT}/vcpkg" install libpq 'sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]' \
+    local vcpkg_packages=(libpq)
+    if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then
+        vcpkg_packages+=('sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]')
+    fi
+    "${VCPKG_ROOT}/vcpkg" install "${vcpkg_packages[@]}" \
           --overlay-triplets "${VCPKG_OVERLAY_TRIPLETS}" \
           --triplet "${VCPKG_DEFAULT_TRIPLET}"
 
@@ -84,10 +94,11 @@ function build_drivers {
         -DVCPKG_TARGET_TRIPLET="${VCPKG_DEFAULT_TRIPLET}" \
         -DADBC_BUILD_SHARED=ON \
         -DADBC_BUILD_STATIC=ON \
-        -DADBC_DRIVER_FLIGHTSQL=ON \
+        -DADBC_DRIVER_FLIGHTSQL=${ADBC_DRIVER_FLIGHTSQL} \
         -DADBC_DRIVER_MANAGER=ON \
         -DADBC_DRIVER_POSTGRESQL=ON \
-        -DADBC_DRIVER_SQLITE=ON \
+        -DADBC_DRIVER_SQLITE=${ADBC_DRIVER_SQLITE} \
+        -DADBC_VERSION_OVERRIDE="${ADBC_VERSION_OVERRIDE:-}" \
         ${source_dir}/c
     cmake --build . --target install --verbose -j
     popd
