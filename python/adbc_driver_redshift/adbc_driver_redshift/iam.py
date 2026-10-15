@@ -137,7 +137,7 @@ def build_uri(
                 raise ValueError("extra_params must not contain newlines")
             params[key] = value
 
-    query = urllib.parse.urlencode(params)
+    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     return (
         f"postgresql://{encoded_user}:{encoded_password}"
         f"@{encoded_host}:{port}/{encoded_db}?{query}"

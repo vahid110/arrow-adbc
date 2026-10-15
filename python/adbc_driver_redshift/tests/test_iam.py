@@ -100,6 +100,26 @@ def test_build_uri_extra_params():
     assert "sslmode=require" in uri
 
 
+@pytest.mark.parametrize(
+    "key,value,encoded_value",
+    [
+        ("sslrootcert", "/tmp/Redshift CA.pem", "%2Ftmp%2FRedshift%20CA.pem"),
+        ("sslrootcert", "/tmp/Redshift+CA.pem", "%2Ftmp%2FRedshift%2BCA.pem"),
+        ("application_name", "Redshift client+IAM", "Redshift%20client%2BIAM"),
+    ],
+)
+def test_build_uri_query_percent_encoding(key, value, encoded_value):
+    uri = build_uri("h", "d", "u", "p", extra_params={key: value})
+    query = urllib.parse.urlsplit(uri).query
+    assert f"{key}={encoded_value}" in query
+    # libpq percent-decodes query values without treating '+' as a space.
+    params = dict(
+        (urllib.parse.unquote(k), urllib.parse.unquote(v))
+        for k, v in (param.split("=", 1) for param in query.split("&"))
+    )
+    assert params[key] == value
+
+
 def test_build_uri_extra_params_empty_dict():
     uri = build_uri("h", "d", "u", "p", extra_params={})
     assert uri.count("sslmode") == 1

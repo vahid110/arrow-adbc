@@ -60,7 +60,11 @@ client so tests can inject a fake.
 
 ```python
 import boto3
-from adbc_driver_redshift.iam import build_uri, fetch_serverless_credentials
+from adbc_driver_redshift.iam import (
+    build_uri,
+    fetch_cluster_credentials,
+    fetch_serverless_credentials,
+)
 
 # Serverless (redshift-serverless:GetCredentials)
 client = boto3.client("redshift-serverless", region_name="eu-north-1")
