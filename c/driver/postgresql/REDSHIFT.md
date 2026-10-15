@@ -72,6 +72,8 @@ manager's `driver` database option. Set `uri` to a libpq-style Redshift endpoint
 typically `postgresql://HOST:5439/DATABASE?...`. Use TLS and your organization's
 certificate-validation policy. Do not commit the URI if it contains a password;
 use a secret store or an environment variable in private testing.
+For temporary IAM credentials see [IAM recipe](#iam-temporary-credentials-recipe)
+below.
 
 The [standalone install smoke client](../pgwire/redshift_install_smoke.c) is a
 minimal C example. It compiles only against the installed public ADBC header and
@@ -131,3 +133,104 @@ PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
 the development branch. The developer guide records what each gate proves and
 what it does not. Report unsupported behavior as an issue rather than assuming
 a PostgreSQL-compatible operation is safe on Redshift.
+
+## IAM temporary-credentials recipe
+
+The C driver does not call AWS APIs itself.  Obtain a short-lived Redshift
+password from IAM, then connect with a normal libpq URI.  The Python package
+ships an optional helper (`pip install adbc-driver-redshift[iam]`) that wraps
+this recipe; the steps below work from any language with any AWS SDK.
+
+### Serverless (`redshift-serverless:GetCredentials`)
+
+```python
+import boto3
+from adbc_driver_redshift.iam import build_uri, fetch_serverless_credentials
+
+client = boto3.client("redshift-serverless", region_name="eu-north-1")
+creds = fetch_serverless_credentials(
+    client, workgroup_name="my-workgroup", db_name="dev", duration_seconds=900
+)
+uri = build_uri(
+    host="my-workgroup.123456789012.eu-north-1.redshift-serverless.amazonaws.com",
+    database="dev",
+    db_user=creds["dbUser"],
+    db_password=creds["dbPassword"],
+    sslmode="require",
+)
+```
+
+AWS API: [`GetCredentials`](https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html)
+(boto3 `redshift-serverless` client `get_credentials`).
+Required IAM action `redshift-serverless:GetCredentials` on the workgroup;
+when `dbName` is set the policy must also allow `dbname` for that database.
+Parameters `workgroupName` (or `customDomainName`), `dbName`, `durationSeconds`
+(900-3600, default 900) and `customDomainName`.  Response fields `dbUser`,
+`dbPassword`, `expiration`, `nextRefreshTime`.
+
+Equivalent AWS CLI:
+
+```
+aws redshift-serverless get-credentials \
+  --workgroup-name my-workgroup --db-name dev --duration-seconds 900
+```
+
+### Provisioned (`redshift:GetClusterCredentials` / `GetClusterCredentialsWithIAM`)
+
+```python
+import boto3
+from adbc_driver_redshift.iam import (
+    build_uri, fetch_cluster_credentials, fetch_cluster_credentials_with_iam,
+)
+
+client = boto3.client("redshift", region_name="eu-north-1")
+
+# Named database user (optionally auto-created)
+creds = fetch_cluster_credentials(
+    client, db_user="my_user", cluster_identifier="my-cluster",
+    db_name="dev", duration_seconds=900, auto_create=False,
+)
+uri = build_uri(
+    host="my-cluster.xxx.eu-north-1.redshift.amazonaws.com",
+    database="dev", db_user=creds["DbUser"], db_password=creds["DbPassword"],
+    sslmode="require",
+)
+
+# IAM identity mapped 1:1 to the database user
+creds2 = fetch_cluster_credentials_with_iam(
+    client, cluster_identifier="my-cluster", db_name="dev",
+)
+uri2 = build_uri(host="my-cluster.xxx.eu-north-1.redshift.amazonaws.com",
+                 database="dev",
+                 db_user=creds2["DbUser"], db_password=creds2["DbPassword"],
+                 sslmode="require")
+```
+
+AWS APIs: [`GetClusterCredentials`](https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentials.html)
+and [`GetClusterCredentialsWithIAM`](https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentialsWithIAM.html)
+(boto3 `redshift` client `get_cluster_credentials` /
+`get_cluster_credentials_with_iam`).  Required IAM actions
+`redshift:GetClusterCredentials` (plus `redshift:CreateClusterUser` when
+`AutoCreate` is true and `redshift:JoinGroup` when `DbGroups` is set) or
+`redshift:GetClusterCredentialsWithIAM` for the IAM-mapped variant.  Common
+parameters `DbUser`/`DbName`/`ClusterIdentifier`/`DurationSeconds` (900-3600)/
+`CustomDomainName`/`DbGroups`/`AutoCreate`.  Response fields `DbUser`,
+`DbPassword`, `Expiration` (and `NextRefreshTime` for the `WithIAM` variant).
+
+### Credential lifetime and reconnect
+
+Temporary passwords expire at `expiration` / `Expiration` (typically 900-3600 s).
+Fetch fresh credentials before each new ADBC database connection; existing
+connections remain valid until closed.  Do not cache a password past its
+expiry and do not log the URI or password.  The helper never logs credentials.
+
+### TLS
+
+Always use `sslmode=require` (or stricter, e.g. `verify-full` with a trusted
+CA bundle).  The driver delegates TLS to libpq.
+
+### References
+
+- [Using IAM authentication to generate database user credentials](https://docs.aws.amazon.com/redshift/latest/mgmt/generating-user-credentials.html)
+- [GetCredentials API](https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html)
+- [GetClusterCredentials API](https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentials.html)

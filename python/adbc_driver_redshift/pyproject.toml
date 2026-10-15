@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dbapi = ["pandas", "pyarrow>=14.0.1"]
+iam = ["boto3>=1.28"]
 test = ["pandas", "pyarrow>=14.0.1", "pytest"]
 
 [project.urls]

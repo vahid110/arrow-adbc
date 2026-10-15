@@ -23,12 +23,16 @@ Current state only; history is in git and PR descriptions.
 
 ## Active
 
-- Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4), CI fast gates (PR #5).
-- Task 005 (Python package, Linux x86-64 wheel): in review (PR #7).
-- Task 004b (release hardening): in review.
-- Task 005b (portable wheels: manylinux x86_64/aarch64, macOS x86_64/arm64,
-  Windows x64, attached to the draft release): in review.
-- Next: 006.
+- Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
+  004b (release hardening, PR #8), 005 (Python package, PR #7),
+  005b (portable wheels, PR #10).
+- Task 006 (IAM recipe + optional Python helper): in review (PR #TBD) —
+  helper `adbc_driver_redshift.iam` with `build_uri` and
+  `fetch_{serverless,cluster}_credentials` (injectable clients, offline
+  tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
+  and `python/adbc_driver_redshift/README.md`; offline tests only, live
+  IAM check deferred to next authorized batch.
+- Next: 007.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
   `feature/pgwire-core-redshift`.
 

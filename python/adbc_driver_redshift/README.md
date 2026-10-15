@@ -43,6 +43,72 @@ with adbc_driver_redshift.dbapi.connect(uri) as conn:
         print(cur.fetch_arrow_table())
 ```
 
+## IAM temporary credentials
+
+The driver does not generate AWS credentials itself.  Use temporary
+credentials from IAM and build the libpq URI with the optional helper.
+
+Install the extra:
+
+```
+pip install adbc-driver-redshift[iam]
+# or: pip install boto3
+```
+
+The helper has no hard ``boto3`` dependency; it accepts an already-created
+client so tests can inject a fake.
+
+```python
+import boto3
+from adbc_driver_redshift.iam import build_uri, fetch_serverless_credentials
+
+# Serverless (redshift-serverless:GetCredentials)
+client = boto3.client("redshift-serverless", region_name="eu-north-1")
+creds = fetch_serverless_credentials(
+    client, workgroup_name="my-workgroup", db_name="dev", duration_seconds=900
+)
+uri = build_uri(
+    host="my-workgroup.123456789012.eu-north-1.redshift-serverless.amazonaws.com",
+    database="dev",
+    db_user=creds["dbUser"],
+    db_password=creds["dbPassword"],
+    sslmode="require",
+)
+
+# Provisioned (redshift:GetClusterCredentials)
+client2 = boto3.client("redshift", region_name="eu-north-1")
+creds2 = fetch_cluster_credentials(
+    client2, db_user="my_user", cluster_identifier="my-cluster", db_name="dev"
+)
+uri2 = build_uri(host="my-cluster.xxx.eu-north-1.redshift.amazonaws.com",
+                 database="dev",
+                 db_user=creds2["DbUser"],
+                 db_password=creds2["DbPassword"],
+                 sslmode="require")
+
+# With IAM identity mapping (redshift:GetClusterCredentialsWithIAM)
+from adbc_driver_redshift.iam import fetch_cluster_credentials_with_iam
+creds3 = fetch_cluster_credentials_with_iam(client2, cluster_identifier="my-cluster")
+
+import adbc_driver_redshift.dbapi
+with adbc_driver_redshift.dbapi.connect(uri) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1")
+```
+
+Credentials expire (900-3600 s, typically 900 s).  Fetch fresh credentials
+before each new connection; existing connections stay valid until closed but
+new ones need a new password.  Do not log the URI or password.
+
+See [Use IAM authentication to generate database user credentials][iam-creds]
+and [GetCredentials][get-creds] / [GetClusterCredentials][get-ccreds] for IAM
+policies.  A minimal recipe is in `c/driver/postgresql/REDSHIFT.md` and
+`docs/source/driver/pgwire-development.md`.
+
+[iam-creds]: https://docs.aws.amazon.com/redshift/latest/mgmt/generating-user-credentials.html
+[get-creds]: https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html
+[get-ccreds]: https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentials.html
+
 ## Building
 
 Dependencies: a build of the Redshift driver (`-DADBC_DRIVER_POSTGRESQL=ON`
