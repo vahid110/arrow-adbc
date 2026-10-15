@@ -19,9 +19,27 @@
 
 # Redshift driver v1 plan
 
-**v1 = the first public release that a Python or C/C++ user can install and use
-against Amazon Redshift, with honest documented limits.** It is not a claim that
+**v1 = this fork's first public release that a Python or C/C++ user can install
+and use against Amazon Redshift, with honest documented limits.** It is not a claim that
 every failure edge is qualified.
+
+## Product direction
+
+This fork is the independent Redshift ADBC delivery route: fully open source,
+inspectable, buildable, modifiable and redistributable under the existing
+applicable licenses and notices. Do not claim first-to-market status or
+unbenchmarked speed superiority. ODBCPP remains the ODBC product/connectivity
+SDK; a duplicate ODBCPP ADBC adapter, Arrow integration and packaging are
+not scheduled without a concrete unmet need and a new product decision.
+
+V1 keeps task006's boto3 IAM helper thin, caller-owned and replaceable: no native
+C++ auth framework, extra auth methods, federation/Identity Center, shared
+credential cache or background refresh. Finish task007 docs, then qualify the
+installed C archive and Python wheel including IAM only under separately
+human-authorized finite live admission. CI, offline tests and credential-API
+success do not establish installed-driver/live qualification. The OIDC blocker
+and human publication gate remain; this roadmap grants no live, AWS/IAM,
+credential, spend, tag or publication authority.
 
 ## Already true (do not redo)
 
@@ -43,15 +61,23 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 004b | Release hardening before the first real tag (PR #4 review): build binaries with the release version instead of `1.13.0-SNAPSHOT`; no vcpkg cache restore on tag runs; load-test the manifest on one macOS and one Windows runner; "Load by name" section in the package READMEs; run the release dry run when `pgwire-package.yml` changes; stricter semver regex; reproducible archives (fixed mtimes, `gzip -n`) or drop the claim. Human: tag ruleset limiting who may create `redshift-v*` tags (repo setting). | Merged, dry run green |
 | 005 | Python package `adbc_driver_redshift`, mirroring `python/adbc_driver_postgresql` (DBAPI `connect()`, bundled library, entrypoint `AdbcDriverRedshiftInit`): one Linux x86-64 wheel (`py3-none-linux_x86_64`) built and tested in CI (`PgWire Python`), linked against the system libpq. | Wheel built, installed and tested against PostgreSQL rejection + packaged import |
 | 005b | Portable wheels mirroring upstream's `ci/scripts/python_wheel_*` scripts: Linux x64/arm64 (manylinux, static libpq via vcpkg plus auditwheel), macOS x64/arm64 (delocate), Windows x64; wheels attached to the draft release; wheel version mapped from the `redshift-v*` tag (`SETUPTOOLS_SCM_PRETEND_VERSION`). | Wheels built for all targets and import/rejection-tested on each |
-| 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Unit tests offline; one live check in the next batch |
-| 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations (non-atomic Redshift replace, unsupported features). | Reviewed docs page |
+| 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Offline implementation done (PR #11); live check deferred to a separately human-authorized qualification batch |
+| 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Draft PR #12; offline docs checks passed, CI/independent review pending |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | One green bounded batch |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 
 ## Explicitly after v1
 
-Native C++ IAM/Identity Center, staged S3 `COPY`/`UNLOAD`, `SUPER`/spatial
-mapping beyond text, atomic Redshift replace ingest, remaining timezone
-bound-query cleanup edges (output-schema failure injection, cleanup-SQL failure,
+After v1 qualification, the shared-auth direction is the **same existing ODBCPP
+AuthCore/optional provider implementation** consumed by ODBC and independently
+built ADBC as a second-consumer proof, without an ODBCPP connectivity dependency.
+Use private interfaces until that proof establishes the contract; public stable
+ABI/bindings, independent packaging/stability promises, an auth service and full
+federation are deferred. This does not resume parked ODBCPP AUTH or prove external
+commercial demand. See the [shared-auth boundaries and proof requirements](../../docs/source/driver/pgwire-development.md#shared-auth-after-v1-qualification).
+No implementation or automatic successor is authorized by this direction.
+
+Staged S3 `COPY`/`UNLOAD`, `SUPER`/spatial mapping beyond text, atomic Redshift
+replace ingest, remaining timezone bound-query cleanup edges (output-schema failure injection, cleanup-SQL failure,
 concurrent use), deterministic lost-reply injection. Each needs a concrete user
 need before it is scheduled.
