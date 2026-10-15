@@ -32,8 +32,8 @@ Current state only; history is in git and PR descriptions.
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Task 007 (user documentation): in progress on `task/007-user-documentation`;
-  draft PR pending.
+- Task 007 (user documentation): draft PR #12 on `task/007-user-documentation`;
+  user guide and offline examples checked, CI and independent review pending.
 - Tasks 008 (live qualification) and 009 (publication) are not authorized;
   both await separate human authorization.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
