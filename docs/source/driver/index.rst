@@ -251,6 +251,17 @@ Distributed as Maven packages, for use from Java applications:
      - :package-badge:`Maven|org.apache.arrow.adbc:adbc-driver-jdbc|https://central.sonatype.com/artifact/org.apache.arrow.adbc/adbc-driver-jdbc`
      - ASF
 
+Fork Development Driver
+=======================
+
+This fork also develops a dedicated Redshift driver with CI evaluation
+artifacts. It is separate from the Foundry driver listed above.
+
+.. toctree::
+   :maxdepth: 1
+
+   redshift
+
 .. _driver-table-maintainers:
 
 Who Maintains These Drivers?

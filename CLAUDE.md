@@ -73,8 +73,9 @@ upstream code.
 - Title: Conventional Commits, `type(component): subject`, where `component` is
   an existing path, e.g. `feat(c/driver/postgresql): ...`, `chore(dev): ...`,
   `docs(docs): ...`. The `Dev` workflow rejects other titles.
-- Body: what / why / testing; no `@` mentions (`Dev` rejects them). End with the
-  Claude Code attribution line.
+- Body: what / why / testing; no `@` mentions (`Dev` rejects them). End with an accurate
+  tool-attribution line (Codex for Codex-authored work). Preserve historical
+  attribution.
 
 ## CI gates
 

@@ -27,6 +27,13 @@ This package contains bindings for the libpq-based Amazon Redshift driver
 [dbapi]: https://peps.python.org/pep-0249/
 [driver-manager]: https://arrow.apache.org/adbc/current/python/driver_manager.html
 
+For evaluated artifact installation, connection examples, type mapping and
+platform limits, see the [Redshift user guide][user-guide]. This package is
+available as CI/draft evaluation artifacts; no public release or PyPI
+publication is claimed here.
+
+[user-guide]: https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/docs/source/driver/redshift.rst
+
 ## Example
 
 The URI is a libpq connection URI. Redshift listens on port 5439 by
@@ -51,8 +58,7 @@ credentials from IAM and build the libpq URI with the optional helper.
 Install the extra:
 
 ```
-pip install adbc-driver-redshift[iam]
-# or: pip install boto3
+python -m pip install '/path/to/adbc_driver_redshift-<version>-<tags>.whl[dbapi,iam]'
 ```
 
 The helper has no hard ``boto3`` dependency; it accepts an already-created

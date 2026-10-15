@@ -23,6 +23,8 @@ This fork builds a distinct `libadbc_driver_redshift` from the shared
 PostgreSQL-wire C++ core and Redshift-specific semantics. It is an MVP, **not a
 production-ready or published binary package**. The existing Apache PostgreSQL
 driver remains a separate artifact and compatibility baseline. See the
+[user guide](../../../docs/source/driver/redshift.rst) for artifact installation,
+connection examples, types and limits, and the
 [developer guide](../../../docs/source/driver/pgwire-development.md) for test
 evidence, gaps, and platform qualification.
 
@@ -116,7 +118,7 @@ unqualified.
 | Types | Tested scalar integers, floats, booleans, strings, decimal-as-string, date/time/timestamp, and `VARBYTE`; `SUPER` and spatial types are not qualified |
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
-| Ingest | Atomic parameterized inserts in bounded 16-row SQL batches; no Redshift S3 `COPY` or `UNLOAD` path |
+| Ingest | Create/append/replace via parameterized inserts in bounded 16-row batches; **replace is non-atomic across DROP, CREATE and data transfer** and failure can lose the old table; no Redshift S3 `COPY` or `UNLOAD` path |
 | Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and checked Release development archive client connections to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 checked development ZIPs pass extracted-client PostgreSQL 18 connection and Redshift-driver rejection checks; checked short-retention development archives are available for all seven CI targets, but production release artifacts and other platforms' live Redshift installed-client qualification remain pending |
 
 `SUPER` is not mapped natively to Arrow. A live test verified that a small
@@ -138,8 +140,8 @@ a PostgreSQL-compatible operation is safe on Redshift.
 
 The C driver does not call AWS APIs itself.  Obtain a short-lived Redshift
 password from IAM, then connect with a normal libpq URI.  The Python package
-ships an optional helper (`pip install adbc-driver-redshift[iam]`) that wraps
-this recipe; the steps below work from any language with any AWS SDK.
+ships an optional helper (install the downloaded wheel with its `iam` extra)
+that wraps this recipe; the steps below work from any language with any AWS SDK.
 
 ### Serverless (`redshift-serverless:GetCredentials`)
 

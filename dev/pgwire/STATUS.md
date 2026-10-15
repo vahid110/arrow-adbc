@@ -25,14 +25,17 @@ Current state only; history is in git and PR descriptions.
 
 - Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
   004b (release hardening, PR #8), 005 (Python package, PR #7),
-  005b (portable wheels, PR #10).
-- Task 006 (IAM recipe + optional Python helper): in review (PR #11) —
+  005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11).
+- Task 006 merged:
   helper `adbc_driver_redshift.iam` with `build_uri` and
   `fetch_{serverless,cluster}_credentials` (injectable clients, offline
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Next: 007.
+- Task 007 (user documentation): in progress on `task/007-user-documentation`;
+  draft PR pending.
+- Tasks 008 (live qualification) and 009 (publication) are not authorized;
+  both await separate human authorization.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
   `feature/pgwire-core-redshift`.
 
