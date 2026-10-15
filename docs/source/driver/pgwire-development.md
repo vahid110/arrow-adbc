@@ -348,6 +348,13 @@ CI AWS identity (account `385207570137`, `eu-north-1`, shared with ODBCPP):
 - The job builds the test URI from 3600-second `GetCredentials` output (database
   user `IAMR:adbc-redshift-ci`) and masks the password, its URL-encoded form
   and the URI. No URI secret is used.
+- The Python helper `adbc_driver_redshift.iam` (optional `iam` extra,
+  `boto3>=1.28`) wraps this pattern for users: `fetch_serverless_credentials`,
+  `fetch_cluster_credentials`, `fetch_cluster_credentials_with_iam` and
+  `build_uri` (percent-encodes user/password, validates newlines, supports
+  injectable clients for offline tests).  Temporary passwords expire at
+  `expiration`/`Expiration` (900-3600 s); fetch fresh credentials for each new
+  connection and never log the URI.
 
 Staged-`COPY` fixture (not driver support): not provisioned in the current
 AWS account; its manual inputs fail fast. The notes below describe the former
