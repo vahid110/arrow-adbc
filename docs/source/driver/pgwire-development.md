@@ -21,8 +21,10 @@
 
 This fork builds a reusable C++ ADBC core for databases that speak the
 PostgreSQL wire protocol. PostgreSQL is the compatibility baseline; Amazon
-Redshift is the first additional backend. User-facing build and connection
-instructions are in [`c/driver/postgresql/REDSHIFT.md`](../../../c/driver/postgresql/REDSHIFT.md).
+Redshift is the first additional backend. The [user guide](redshift.rst) covers
+artifact installation and connections;
+[source build and IAM recipes](../../../c/driver/postgresql/REDSHIFT.md) cover
+the detailed setup.
 The roadmap is [`dev/pgwire/V1_PLAN.md`](../../../dev/pgwire/V1_PLAN.md) and the
 current state is [`dev/pgwire/STATUS.md`](../../../dev/pgwire/STATUS.md). History
 is in git and in PR descriptions.
@@ -49,6 +51,45 @@ authentication preparation and supported transfer paths.
   drop the local commit. The fork was created from Apache `150528f0f` and later
   rebased onto `4d50e2e30`. Earlier Apache history: PR #2219 added experimental
   Redshift support and PR #4365 removed it.
+
+## Shared auth after v1 qualification
+
+This fully OSS fork is the independent Redshift ADBC delivery route, under its
+existing licenses and third-party notices; no first-to-market or unbenchmarked
+performance claim is made. Do not build a duplicate ADBC adapter/packaging in
+ODBCPP. V1 retains the thin, caller-owned, replaceable boto3 IAM helper, without
+native C++ auth expansion, extra methods, federation/Identity Center, a shared
+credential cache or background refresh. Finish docs, then qualify an installed
+C archive and Python wheel, including IAM, only in a separately human-authorized
+finite live batch. Offline,
+CI and credential-API success do not prove that qualification. The OIDC blocker
+and human publication gate remain.
+
+The approved later direction is to reuse the **same existing ODBCPP provider-neutral
+AuthCore and optional provider implementation** in ODBC and independently built
+ADBC as the second-consumer proof. ADBC must not depend on ODBCPP's database
+protocol/connectivity SDK. Prove one bounded path for temporary Redshift
+credentials in both consumers. The initial shape is an embedded database-auth SDK
+with optional providers. No ODBC handles or Arrow types belong in the auth core.
+
+- Shared auth owns credential acquisition/provider adapters, explicit
+  identity/target binding, expiry, deadlines/cancellation and sanitized errors.
+- Consumers/backends own database framing, verified database-channel TLS,
+  authenticated session ownership and pool/reconnect policy. Provider HTTPS
+  verification remains an explicit provider/transport responsibility.
+- Reuse vendor SDK credential protocols and cryptography; do not reimplement
+  them for sharing. Keep interfaces private until both consumers demonstrate
+  expiry/new-connection/reconnect behavior, target isolation, cancellation,
+  safe diagnostics and optional dependencies. Credential expiry does not force
+  expiry of an authenticated database session.
+
+Public stable ABI/bindings, independent packaging/stability promises, an auth
+service and full federation are deferred; they are not prerequisites for this
+release. Broader federation/method-parity obligations remain future scope.
+Internal reuse is not external commercial demand. This direction does
+not resume parked ODBCPP AUTH or authorize implementation, live/AWS/IAM work,
+credential changes, spending or publication. Future work requires separate
+scope/authorization; see [the roadmap](../../../dev/pgwire/V1_PLAN.md).
 
 ## Code layout
 

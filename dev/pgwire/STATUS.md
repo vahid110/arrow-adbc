@@ -33,7 +33,8 @@ Current state only; history is in git and PR descriptions.
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
 - Task 007 (user documentation): draft PR #12 on `task/007-user-documentation`;
-  user guide and offline examples checked, CI and independent review pending.
+  user guide and approved OSS/shared-auth roadmap documented; revised-head
+  CI and independent review pending.
 - Tasks 008 (live qualification) and 009 (publication) are not authorized;
   both await separate human authorization.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on

@@ -23,7 +23,10 @@ Amazon Redshift Driver
 
 This fork's dedicated ``adbc_driver_redshift`` library uses libpq to query
 Amazon Redshift and return Arrow data. It rejects non-Redshift servers.
-This is a development driver, separate from the Foundry Redshift driver.
+The implementation is fully open source: inspect, build, modify and redistribute
+it under the existing applicable licenses and third-party notices. This fork
+is the independent ADBC delivery route, separate from the Foundry Redshift driver.
+It is a development driver.
 **No public release or PyPI publication is claimed here.** Installed-artifact
 live qualification for v1 is still pending.
 
@@ -159,6 +162,8 @@ IAM temporary credentials
 -------------------------
 
 The driver does not obtain AWS credentials or refresh database passwords.
+V1's optional boto3 helper is a thin, caller-owned, replaceable adapter;
+it adds no native auth framework, shared credential cache or background refresh.
 With an existing authorized boto3 session, replace the password example's
 ``uri`` construction with this Serverless example, then use the same
 ``dbapi.connect(uri)`` block:
