@@ -1,0 +1,126 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PgWire Isolated Redshift Qualification
+
+on:
+  pull_request:
+    branches:
+      - feature/pgwire-core-redshift
+    paths:
+      - ".github/workflows/pgwire-qualification-live.yml"
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed merged integration SHA with all applicable CI green
+        required: true
+        type: string
+      c_artifact_id:
+        description: Successful same-SHA Ubuntu x86-64 C archive artifact ID
+        required: true
+        type: string
+      python_artifact_id:
+        description: Successful same-SHA Ubuntu x86-64 Python wheel artifact ID
+        required: true
+        type: string
+
+concurrency:
+  group: pgwire-isolated-redshift-20261016
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-offline:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate qualification sources without credentials or network
+        run: |
+          python3 -m py_compile ci/scripts/pgwire_qualification_live.py \
+            ci/scripts/pgwire_qualification_prepare.py ci/scripts/pgwire_qualification_host.py
+  qualify:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/pgwire-core-redshift'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_SHA: ${{ inputs.source_sha }}
+      C_ARTIFACT_ID: ${{ inputs.c_artifact_id }}
+      PYTHON_ARTIFACT_ID: ${{ inputs.python_artifact_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require the exact first-attempt merged-head dispatch
+        shell: bash
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$C_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$PYTHON_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+      - name: Install consumer dependencies without AWS credentials
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes build-essential ca-certificates libpq5 python3-venv
+          python3 -m venv "$RUNNER_TEMP/qualification-venv"
+          "$RUNNER_TEMP/qualification-venv/bin/python" -m pip install 'boto3==1.42.97' 'pyarrow>=14.0.1' adbc-driver-manager
+      - name: Authenticate, install and load exact merged-head artifacts before OIDC
+        run: |
+          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_prepare.py             "$RUNNER_TEMP/qualification" --c-artifact "$C_ARTIFACT_ID"             --python-artifact "$PYTHON_ARTIFACT_ID"
+      - name: Publish nonsecret preflight for host admission issuance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/qualification/preflight.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Assume only the dedicated CI role after installed preflight
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: arn:aws:iam::385207570137:role/adbc-isolated-qualification-ci
+          role-session-name: adbc-qualification-${{ github.run_id }}
+          aws-region: eu-north-1
+          role-duration-seconds: 1800
+          allowed-account-ids: '385207570137'
+          unset-current-credentials: true
+          disable-retry: true
+          mask-aws-account-id: true
+      - name: Await immutable host admission and run one bounded private-input batch
+        run: |
+          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_live.py             "$RUNNER_TEMP/qualification/paths.json" --output "$RUNNER_TEMP/qualification/result.json"
+      - name: Publish only the fixed nonsecret qualification receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/qualification/result.json
+          if-no-files-found: ignore
+          retention-days: 7

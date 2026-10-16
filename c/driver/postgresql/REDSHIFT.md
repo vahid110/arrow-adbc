@@ -237,136 +237,34 @@ CA bundle).  The driver delegates TLS to libpq.
 - [GetCredentials API](https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html)
 - [GetClusterCredentials API](https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentials.html)
 
-## Isolated qualification preparation (Task008a/008b)
+## Isolated installed-artifact qualification
 
-Task007 (PR #12) and Task008a (PR #13) are complete. Task008b extends offline
-installed-client execution; it does not authorize live testing. External
-host provisioner access is verified through 2027-12-31T23:00:00Z. Actual Task008
-still requires dedicated resources, verified manifest/usage/cleanup admission and
-a reviewed exact-head live runner; none is established by IAM availability.
-Task009 publication is paused. This worker/coordinator remain offline and must
-not use the provisioner profile. No dedicated resources or live tests exist yet.
+Task008a/b (PRs #13/#14) supply the original offline contract, installed C/Python
+private-input clients and no-AWS PostgreSQL plumbing checks. Their unsigned and
+synthetic admission entry points still reject; the original three-signature
+proposal has no enrolled trust roots and cannot grant live authority.
 
-Earlier scoped denials for dedicated Serverless/SG creation and the isolated CI
-role are historical evidence, superseded as the current access blocker by the
-external provisioner validation. The old `adbc-redshift-ci` role/boundary exception
-never authorized fallback. The protected `odbcpp-redshift-provisioned-pilot`
-cluster and its subnet/parameter groups also remain forbidden fallbacks.
-Task008a performs no AWS recheck, provisioning or live qualification.
+Task008c adds the supported, reviewed finite SSM path described in the
+[executable host handoff](../../../dev/pgwire/qualification-live.md): authenticated
+GitHub original-head/merged-tree/review/check/artifact observations, fresh dedicated
+AWS ownership/association/usage checks, atomic nonce/run consumption, temporary
+Serverless IAM credentials through private pipes, installed query/parameter/
+metadata/create+append payloads, exact owned `/32` rule cleanup and mandatory
+independent host fixture/session observation and dedicated resource teardown.
+The coordinator alone operates the approved `adbc-provisioner` host path;
+workers/reviewers remain offline. Task009 publication stays paused.
 
-The legacy `cpp-redshift` and credential/COPY handoff in `PgWire Drivers` are
-removed. Default dispatch runs PostgreSQL/artifact regression; retired live flags
-fail without OIDC credentials or cloud actions. PR/push runs keep the original
-PostgreSQL, installed-artifact and cleanup-mock gates. Do not dispatch live work.
-
-### Manifest and external evidence
-
-`ci/scripts/pgwire_qualification_manifest.py` defines a closed, versioned schema;
-unknown/missing fields, duplicate JSON keys and non-finite values fail. No real
-manifest is supplied: provisioned UUIDs, SG, endpoint observations and usage-limit
-IDs do not exist yet. Synthetic test claims are explicitly `offline-synthetic`.
-They never grant admission. Intended names/account/region are fixed to the human
-plan: `adbc-qualification-20261016`, `adbc_qualification`,
-`adbc-isolated-qualification-ci`, `385207570137`, `eu-north-1`.
-
-Claims include exact workgroup/namespace ARN/UUID association, dedicated SG,
-endpoint/port/database, OIDC role/provider/audience/merged-ref trust, policy/trust
-hashes and the exact authorization resource list. Wildcards, shared-role fallback
-and protected ODBCPP identifiers anywhere in the manifest fail. A structurally
-correct ARN or attester identity is still only a claim.
-
-`manifest_digest` is SHA256 of canonical sorted compact JSON excluding only the
-`evidence` object. Four mandatory evidence references (provisioning, usage,
-cleanup, source/artifacts) bind that digest, observation bytes SHA256, independent
-review receipt SHA256, identified external attester, observation time and expiry.
-Observations must be at most 15 minutes old and remain valid through teardown.
-A future trusted external verifier must independently retrieve the authoritative
-observations and review receipts, authenticate the attester through a separately
-reviewed trust decision, and compare every identity/control to that exact digest.
-This is deliberately **not implemented** by accepting a boolean, JSON receipt,
-environment variable, arbitrary verifier callback or general signing service.
-Both `admit_live` and `run_live` always reject while that boundary is unavailable.
-
-The external observation bundle must establish: actual workgroup/namespace/SG
-association and TLS hostname; effective dedicated IAM policy/trust and absence of
-shared authorization; usage-limit identity/scope/action; capacity controls;
-authorized provisioner and cleanup ownership; exact merged source, independent
-review/current-head CI receipts and successful artifact workflow run provenance.
-Structural validation and local checksums alone cannot prove those facts.
-
-### Installed artifacts and coverage
-
-`pgwire_qualification.py` compares installed C archive and wheel bytes/links to
-checksum-bound artifacts and reviewed installed inventories before any credential
-or ingress step. Both artifacts must have the same merged source SHA, identified
-build runs/workflows and qualification-run binding. Wheel package/module/library
-origins must match its installation prefix, with no source/fallback library or
-extra package files. Install with `pip --no-compile` into a cache-free prefix;
-preflight rejects `__pycache__`, legacy `.pyc`/`.pyo`, and wheel-contained bytecode.
-The `python -I -B` probe independently rechecks installed bytes and caches before
-importing and forbids an external bytecode-cache prefix. `-B` prevents writes but
-still reads caches. Keep the verified installation unchanged between preflight and
-probe. Both artifact paths load `AdbcDriverRedshiftInit` from the verified library.
-
-| Surface | Executable preparation | Still required for live |
-|---|---|---|
-| Installed C archive | Dedicated POSIX client: query/value, prepared/bound parameter, table-schema metadata, create/append ingestion and exact row/value checks | Ubuntu x86-64 installed-archive CI; later admitted Redshift run |
-| Installed Python wheel | Isolated installed DBAPI client: query/parameter/GetInfo/table metadata and create/append row/value assertions | Installed-wheel CI; later admitted Redshift run |
-| Credentials | Unchanged task006 Serverless helper with caller-owned fake client, 900-second expiry bound and verify-full CA/hostname checks | Admission before any credential API; no SDK client/profile fallback or refresh |
-| Process/cleanup | Length-prefixed URI through private stdin pipe, no URI in argv/env/logs; fixed diagnostics; 60-second process/alarm and 10-second query/connect bounds; terminate/kill/reap on failure/cancellation | Independent observation of any unknown cleanup and external teardown |
-
-`pgwire_qualification_ci.py` runs the actual installed clients in the existing
-Ubuntu package and Python workflows against **local PostgreSQL plumbing only**.
-It first verifies the Redshift entrypoint, then explicitly uses the PostgreSQL
-entrypoint for protocol tests. This is never Redshift/IAM live proof. CI emits
-untrusted sidecars bound to the checkout SHA/tree, workflow reference/run attempt,
-artifact bytes, installed inventory and origins. An external verifier must retrieve
-and match GitHub's authenticated original runs/artifact IDs/digests; a sidecar is
-not independent provenance.
-
-The [versioned JSON contract](../../../dev/pgwire/qualification-contract-v1.json)
-and `ci/scripts/pgwire_qualification_evidence.py` define exact host inputs:
-original triggered CI results, reviewed-head/merged-tree relationship, independent
-verdict plus attributed host COMMENT receipt, artifact workflow/run/bytes/origins,
-dedicated resource associations/effective roles/usage/TLS, and cleanup-owner plus
-independent-observer acceptance. A host COMMENT is not another-account approval.
-
-`compare_observations` is an offline comparison, never authorization. The verifier
-has **no enrolled trust roots**; caller-supplied keys, matching hashes, booleans or
-environment flags cannot unlock it. Future enrollment requires an independently
-reviewed source change pinning separately verified host issuer identities for
-provisioning, independent observation and finite paid-test authorization. Durable
-atomic manifest/run/nonce consumption is also absent and must be separately
-implemented and reviewed. Even valid future signatures would currently reject.
-`admit_live`, `run_live` and the supported credential entry point remain closed
-before SDK access, artifact loading or database/ingress operations. There is no
-live dispatch or provisioning infrastructure in this task.
-
-### Finite execution and cleanup handoff
-
-Admission requires base/max 4 RPUs, optimization/growth disabled, a dedicated daily
-4 RPU-hour usage limit with `deactivate` already present, USD5 incremental ceiling,
-one 15-minute query window, at most 60 minutes through compute/teardown, and no
-automatic paid retry. These controls are necessary, not an absolute total-bill cap
-(storage, secrets/network and enforcement delay can add cost).
-
-Before admission an identified authorized external provisioner and cleanup owner
-must accept the teardown deadline. On any failure/cancellation, close owned
-sessions, remove only run-owned fixture objects, and revoke only exact owned IPv4
-/32 rule IDs (including lost-reply recovery using the existing ingress helper).
-Independently confirm those receipts bound to the manifest digest and run ID.
-Then hand teardown of only the new workgroup/namespace/ancillaries to the authorized
-external provisioner. No resource teardown is implemented here. Unknown cleanup
-is a blocking failed result; the rehearsal reports external teardown pending and
-never reports live success or permits another target. Retain sanitized stage,
-exit/cancellation and ownership evidence; never log credentials/URIs or put them
-in argv/process diagnostics.
-
-Offline checks (stdlib and a C compiler; structural tests forbid sockets/processes,
-while runtime regressions launch bounded synthetic children and a tiny C harness):
+Only `PgWire Isolated Redshift Qualification` may run this bounded dedicated
+batch, explicitly dispatched at the reviewed merged integration SHA after green
+applicable CI. Its PR validation job is offline and has no OIDC permission.
+The legacy shared-target/credential/COPY flags in `PgWire Drivers` remain retired;
+protected resources and old `adbc-redshift-ci` must never be fallback targets.
+Historical shared-target denial and original failures remain in STATUS/git.
+Offline tests, IAM availability and a successful `GetCredentials` request do not
+establish actual live qualification or independent cleanup.
 
 ```sh
-python3 -m unittest discover -s ci/scripts -p test_pgwire_qualification.py -v
+python3 -m unittest discover -s ci/scripts -p 'test_pgwire_qualification*.py' -v
 bash .github/scripts/test-pgwire-redshift-ingress.sh
 bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
 ```

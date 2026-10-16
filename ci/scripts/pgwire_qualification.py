@@ -205,7 +205,40 @@ def preflight(manifest, paths):
     return libraries
 
 
-def python_coverage(connection, arrow_table, schema, *, plumbing=False):
+def python_replace_coverage(cursor, tables, schema):
+    """Installed-wheel equivalent of the original Redshift replace preflight case.
+
+    Both invalid schemas must reject with ADBC INVALID_ARGUMENT (ABI value 5)
+    before DROP, preserving the already-owned fixture's original rows.
+    """
+    require(len(tables) == 2, "replace preflight schemas missing")
+    cursor.execute("SET enable_case_sensitive_identifier TO false")
+    try:
+        for table in tables:
+            rejected = False
+            try:
+                cursor.adbc_ingest(
+                    "fixture", table, mode="replace", db_schema_name=schema
+                )
+            except BaseException as error:
+                require(
+                    getattr(error, "status_code", None) == 5,
+                    "replace returned unexpected status",
+                )
+                rejected = True
+            require(rejected, "invalid replace was accepted")
+            cursor.execute(f'SELECT value FROM "{schema}"."fixture" ORDER BY value')
+            require(
+                cursor.fetchall() == [(1,), (1,), (2,), (2,)],
+                "rejected replace changed existing rows",
+            )
+    finally:
+        cursor.execute("RESET enable_case_sensitive_identifier")
+
+
+def python_coverage(
+    connection, arrow_table, schema, *, plumbing=False, replace_tables=()
+):
     """Actual DBAPI payload; caller owns process deadline and connection close.
 
     An unsuccessful CREATE has unknown ownership: never drop a prior fixture.
@@ -245,6 +278,9 @@ def python_coverage(connection, arrow_table, schema, *, plumbing=False):
             cursor.adbc_ingest(
                 "fixture", arrow_table, mode="append", db_schema_name=schema
             )
+            if replace_tables:
+                require(not plumbing, "replace preflight requires Redshift semantics")
+                python_replace_coverage(cursor, replace_tables, schema)
             actual_schema = connection.adbc_get_table_schema(
                 "fixture", db_schema_filter=schema
             )

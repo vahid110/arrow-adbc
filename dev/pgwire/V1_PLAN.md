@@ -35,14 +35,13 @@ not scheduled without a concrete unmet need and a new product decision.
 V1 keeps task006's boto3 IAM helper thin, caller-owned and replaceable: no native
 C++ auth framework, extra auth methods, federation/Identity Center, shared
 credential cache or background refresh. Task007 documentation is complete
-(PR #12). Task008a is merged (PR #13). Task008b implements the offline installed-artifact
-clients and external evidence handoff, then qualify the installed C archive and
-Python wheel including IAM only under separately
-human-authorized finite live admission. CI, offline tests and credential-API
-success do not establish installed-driver/live qualification. External provisioner
-access is verified; dedicated resources, verified admission and a reviewed live
-runner remain required. The human publication gate remains. This roadmap grants
-no live, AWS/IAM, credential, spend, tag or publication authority.
+(PR #12), as are Task008a/b (PRs #13/#14). Task008c adds the reviewed finite
+SSM admission and explicit-dispatch runner for installed C/Python IAM payloads,
+with authenticated source/artifact/resource checks and mandatory independent host
+cleanup. See [the executable host handoff](qualification-live.md). Offline success
+is not live qualification: one exact merged-head batch and verified dedicated
+resource/secret/IAM teardown remain required. The human publication gate remains;
+this roadmap grants no additional spend, tag or publication authority.
 
 ## Already true (do not redo)
 
@@ -67,8 +66,9 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Offline implementation done (PR #11); live check deferred to a separately human-authorized qualification batch |
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
 | 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
-| 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Offline implementation; live remains closed without pinned external issuers, durable one-shot paid admission and dedicated observations |
-| 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Blocked: dedicated provisioned resources, verified manifest/usage/cleanup admission and reviewed exact-head live runner; then one green bounded batch |
+| 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Done (PR #14), offline only; original unsigned gate stays closed |
+| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Offline-tested supported path; exact-head review/CI and actual host-operated batch/teardown still required |
+| 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Pending: reviewed/green Task008c, dedicated host-issued admission, one green bounded batch and independently verified full teardown |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 
 ## Explicitly after v1

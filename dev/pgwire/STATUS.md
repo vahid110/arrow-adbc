@@ -33,18 +33,20 @@ Current state only; history is in git and PR descriptions.
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Task008b adds installed C archive/Python wheel clients, private-pipe credential
-  transport, bounded process cleanup, no-AWS PostgreSQL plumbing CI and a
-  [machine-readable external evidence contract](qualification-contract-v1.json).
-  Original 16 offline qualification cases remain; new regressions exercise actual
-  private-input C code and child processes. This is preparation, not Redshift live
-  qualification. Native Codex coordination pilots this task; AO remains paused.
+- Task008b (PR #14) is merged: installed C/Python private-input clients,
+  bounded process cleanup and no-AWS plumbing checks; the original synthetic/
+  unsigned admission gates remain closed.
+- Task008c implements the explicit-dispatch SSM admission/one-shot claim path,
+  authenticated merged-head artifact provenance, actual installed IAM payloads,
+  exact owned ingress cleanup, and a finite host bootstrap/observer/teardown
+  helper. See [the host handoff](qualification-live.md). This is offline-tested
+  implementation, **not a completed Redshift live qualification**. Dedicated
+  resources, exact-head review/green CI, host issuance, one successful batch and
+  independent cleanup/secret/IAM teardown observations remain required.
+  AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
-  earlier scoped denials are historical. This worker/coordinator stay offline.
-  Actual Task008 remains blocked by dedicated provisioned resources, independently
-  verified manifest/usage/cleanup admission and a reviewed exact-head live runner.
-  No dedicated resources or live qualification exist yet. Task009 publication
-  remains paused.
+  earlier scoped denials remain historical evidence. Workers/reviewers stay
+  offline; only the coordinator operates the authorized dedicated host path.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
   `feature/pgwire-core-redshift`.
 
@@ -53,9 +55,10 @@ Current state only; history is in git and PR descriptions.
 - Historical shared-target live attempt could not assume `adbc-redshift-ci`
   (run 38563931739). This failure is retained as evidence, not a current role
   repair instruction.
-  This does not authorize shared-resource reuse. A future isolated batch must run
-  `RedshiftSmokeTest.ReplaceIngestRejectsCollidingIdentifiersBeforeDrop`; the
-  Redshift replace preflight is not yet live-qualified.
+  This does not authorize shared-resource reuse. The isolated installed-wheel batch now exercises the equivalent
+  128-byte/case-collision replace rejection and unchanged schema/row assertions
+  inside its owned fixture; the original named/global gtest is not dispatched.
+  This behavior remains unqualified until the admitted live batch passes.
 - `Integration` and other unrelated Apache workflows are disabled
   in this fork.
 

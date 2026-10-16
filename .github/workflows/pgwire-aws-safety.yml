@@ -26,6 +26,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/test_pgwire_qualification.py"
+      - "ci/scripts/test_pgwire_qualification_live.py"
+      - ".github/workflows/pgwire-qualification-live.yml"
       - "c/driver/pgwire/redshift_qualification.c"
       - "dev/pgwire/qualification-contract-v1.json"
       - ".github/scripts/pgwire-redshift-ingress.sh"
@@ -40,6 +42,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/test_pgwire_qualification.py"
+      - "ci/scripts/test_pgwire_qualification_live.py"
+      - ".github/workflows/pgwire-qualification-live.yml"
       - "c/driver/pgwire/redshift_qualification.c"
       - "dev/pgwire/qualification-contract-v1.json"
       - ".github/scripts/pgwire-redshift-ingress.sh"
@@ -65,7 +69,9 @@ jobs:
       - name: Install offline test dependencies
         run: |
           sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes build-essential jq libpq5 python3
+          sudo apt-get install --yes build-essential jq libpq5 python3 python3-venv
+          python3 -m venv "$RUNNER_TEMP/safety-venv"
+          "$RUNNER_TEMP/safety-venv/bin/python" -m pip install 'boto3==1.42.97'
       - name: Check script syntax
         shell: bash
         run: |
@@ -82,4 +88,4 @@ jobs:
         run: |
           bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
       - name: Test isolated qualification contract and runner without AWS
-        run: python3 -m unittest discover -s ci/scripts -p test_pgwire_qualification.py -v
+        run: '"${{ runner.temp }}/safety-venv/bin/python" -m unittest discover -s ci/scripts -p "test_pgwire_qualification*.py" -v'
