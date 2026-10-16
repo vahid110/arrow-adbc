@@ -148,4 +148,8 @@ $ export ADBC_POSTGRESQL_TEST_URI="postgresql://localhost:5432/postgres?user=pos
 $ pytest -vvx
 ```
 
-Live Redshift tests run only when `ADBC_REDSHIFT_TEST_URI` is set.
+Local user-run Redshift tests run only when `ADBC_REDSHIFT_TEST_URI` is set.
+The fork's installed-wheel release qualification uses the separately admitted
+[dedicated host workflow](../../dev/pgwire/qualification-live.md), temporary IAM
+credentials in private pipes, finite one-shot admission and independent teardown.
+Offline packaging tests do not establish live Redshift qualification.

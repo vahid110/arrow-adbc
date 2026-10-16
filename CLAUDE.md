@@ -61,10 +61,12 @@ upstream code.
   changed files: `SKIP=dotnet-format ~/.venvs/adbc-lint/bin/pre-commit run --files <files>`
   (clang-format 18.1.7, cpplint, cmake-format, whitespace). Batch fixes into one
   push; each push costs a CI round.
-- AWS: never run the `aws` CLI or create/modify cloud resources. Live Redshift
-  tests run only through the `PgWire Drivers` workflow's `workflow_dispatch`
-  (file `pgwire-postgresql.yml`), started by the coordinator under the budget
-  below.
+- AWS: workers/reviewers never run real AWS CLI/SDK calls or access host
+  credentials; fake-only SDK tests are allowed. The coordinator alone operates
+  the separately human-authorized Task008c dedicated host lifecycle and explicit
+  `pgwire-qualification-live.yml` dispatch. The legacy shared-target live path
+  remains closed; see `dev/pgwire/qualification-live.md` for the current finite
+  admission, ownership and teardown boundary.
 - Keep docs short. A task's PR description is its record; do not append long
   narrative to the docs. `STATUS.md` holds current state, not history.
 
@@ -106,7 +108,15 @@ Integration, vcpkg, verification, website, bots) are disabled with
 `gh workflow disable`; GitHub once paused Actions on this fork for excessive
 use. Inspect failures with `gh run view <id> --log-failed`.
 
-## Live Redshift budget (shared with the ODBCPP project, same AWS account)
+## Live Redshift budget
+
+Current Task008c authorization is one dedicated 4-RPU batch, USD 5 incremental
+target, query at most 15 minutes, host compute at most 60 minutes, daily 4-RPU-hour
+deactivation limit, zero paid retries and verified full teardown. Protected/shared
+resources cannot be used. This finite human-approved brief supersedes the old
+shared-target operating procedure below; historical amounts remain evidence.
+
+Historical shared budget (no current shared-target access):
 
 - Redshift Serverless, one workgroup, 4 RPU. USD 150 cumulative allowance shared
   with ODBCPP; AWS budget alerts at USD 100/125/150 and a 267 RPU-hour monthly

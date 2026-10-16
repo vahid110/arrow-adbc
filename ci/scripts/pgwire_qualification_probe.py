@@ -196,11 +196,20 @@ def main():
                     raise
             else:
                 connection = dbapi.connect(uri, autocommit=True)
+            table = pyarrow.table(
+                {"value": pyarrow.array([1, 2], type=pyarrow.int64())}
+            )
             result = python_coverage(
                 connection,
-                pyarrow.table({"value": pyarrow.array([1, 2], type=pyarrow.int64())}),
+                table,
                 fixture,
                 plumbing=plumbing,
+                replace_tables=()
+                if plumbing
+                else (
+                    table.rename_columns(["c" * 128]),
+                    table.append_column("VALUE", table.column(0)),
+                ),
             )
         finally:
             uri = None
