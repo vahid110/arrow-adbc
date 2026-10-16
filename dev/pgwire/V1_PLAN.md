@@ -41,9 +41,16 @@ with authenticated source/artifact/resource checks and mandatory independent hos
 cleanup. See [the executable host handoff](qualification-live.md). PR #16 repaired
 pre-OIDC preparation; PR #17 repaired immutable OIDC trust validation. The next
 dispatch passed preflight/STS but failed workgroup creation on conflicting API
-fields. The successor omits only the request pricing target, keeping strict
-disabled readbacks. Partial resources were independently removed; original
-receipts/counters/budgets remain, with no retry authority from this repair.
+fields (repaired in PR #18). The next created-compute attempt stopped before
+admission; original resource-gate status is unrecorded and cleanup SQL failed on
+unsupported STV access. Physical teardown was separately verified. The successor
+adds bounded readiness observation, static diagnostics, terminal-aware SQL
+cancellation and a supported SYS observer with strict visibility proof before
+admission and at cleanup. Original receipts/counters/budgets remain; further host
+authority requires coordinator/human resolution, with no retry from this repair.
+PR #19's initial review requested strict deadlines around slow reads and fresh
+same-run status/provenance before admission; the batched repair requires
+independent exact-head re-review and CI, preserving the failed review/CI evidence.
 Offline success is not live qualification: one exact merged-head batch and verified dedicated
 resource/secret/IAM teardown remain required. The human publication gate remains;
 this roadmap grants no additional spend, tag or publication authority.
@@ -72,7 +79,7 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
 | 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
 | 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Done (PR #14), offline only; original unsigned gate stays closed |
-| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15/#16/#17); workgroup API request repair pending review. Further host authority requires coordinator/human resolution; actual batch/teardown still required |
+| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#18); readiness/observer repair pending review. Failed created-compute attempt physically torn down; further host authority requires coordinator/human resolution; actual client batch still required |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Pending: reviewed/green Task008c, dedicated host-issued admission, one green bounded batch and independently verified full teardown |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 

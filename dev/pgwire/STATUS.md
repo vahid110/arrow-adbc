@@ -49,9 +49,17 @@ Current state only; history is in git and PR descriptions.
   validator pinned a legacy subject while this repository issues immutable IDs.
   PR #17 pinned the exact immutable subject; the next run passed preflight/STS
   but `CreateWorkgroup` rejected conflicting scaling/pricing request fields.
-  The successor omits only the request pricing target, retaining strict disabled
-  response checks and all finite controls. Original receipts remain spent;
-  further host authority requires coordinator/human resolution after review.
+  PR #18 repaired that request. Run `38920727258` then created dedicated compute
+  but stopped at the post-usage resource gate (exact earlier status unrecorded);
+  cleanup SQL failed on unsupported STV access, then cancellation masked that
+  failure. The successor adds bounded readiness observation, static failure
+  receipts, terminal-aware cancellation and a supported cross-user SYS observer
+  before admission and at cleanup. Original receipts remain spent; further host
+  authority requires coordinator/human resolution after review.
+  PR #19's first head `f10b26670` required independent deadline/fresh-run repairs;
+  its [cancelled Dev run](https://github.com/vahid110/arrow-adbc/actions/runs/38923832691)
+  remains evidence. The batched successor requires fresh exact-head review/CI;
+  no external resources or CI role remain and no live authority is renewed.
   AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
@@ -90,9 +98,19 @@ credentials or SQL occurred. No workgroup compute started; ancillary AWS charges
 are not reconciled here. All original runs and host receipts are retained.
 Three failed revisions were already escalated to the human/coordinator; this
 additional failure preserves the counters/budgets and grants no retry authority.
+Run `38920727258` created workgroup/namespace/SG/usage but issued no admission,
+claim or installed-client batch. Its original receipt preserves UNKNOWN SQL/
+namespace cleanup; the actual cleanup statement FAILED with permission denied
+for `stv_sessions`, not zero counts. Separate fresh host readbacks verified all
+dedicated resources, usage limit, managed secret, admission and nonce claims
+absent at 15:12:38Z, then exact CI-role/initial-policy removal at 15:13:57Z. CI is
+completed/cancelled; runtime policy was never installed. Physical teardown is
+resolved independently; the original SQL failure and primary-stage uncertainty
+remain. Actual compute costs await reconciliation; no further attempt is authorized.
 
 | Date | Run | Head | Result | Est. incremental cost (USD) |
 |---|---|---|---|---|
 | 2026-10-16 | [38908550615](https://github.com/vahid110/arrow-adbc/actions/runs/38908550615) | `596aec4a23fd3c6fd134f5e569b902cd3134d28f` | failed before OIDC: load-only projection required an absent execution window; offline reproduction and successor repair | 0.00 |
 | 2026-10-16 | [38912745155](https://github.com/vahid110/arrow-adbc/actions/runs/38912745155) | `9f3bbaa770386b165f8e0cc9e1de4a4cdae9109c` | installed preflight passed (artifact `12051211152`); OIDC denied because dedicated trust used a legacy subject instead of authenticated immutable owner/repository IDs | 0.00 |
 | 2026-10-16 | [38916730017](https://github.com/vahid110/arrow-adbc/actions/runs/38916730017) | `5e3afc8653e39eaf099c5cb91ea9be21b386adb6` | preflight/STS passed; `CreateWorkgroup` rejected simultaneous pricing target and scaling autonomics fields; owned partial resources independently removed, no admission/claim/SQL | 0.00 compute |
+| 2026-10-16 | [38920727258](https://github.com/vahid110/arrow-adbc/actions/runs/38920727258) | `36b786d1c569c0f0c727c70dcc06995d0b31a173` | created dedicated resources; post-usage gate failed with original response status unrecorded; cleanup SQL FAILED on STV access and cancellation masked error; independent physical teardown later verified, no admission/claim/client batch | pending |
