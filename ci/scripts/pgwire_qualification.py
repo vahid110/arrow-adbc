@@ -223,9 +223,11 @@ def python_coverage(connection, arrow_table, schema, *, plumbing=False):
         with connection.cursor() as cursor:
             cursor.execute("SET statement_timeout = 10000")
             cursor.execute("SELECT CAST(42 AS BIGINT)")
-            require(cursor.fetchone() == (42,), "query result mismatch")
+            require(cursor.fetchall() == [(42,)], "query result mismatch")
             cursor.execute("SELECT CAST($1 AS BIGINT) + CAST(1 AS BIGINT)", (41,))
-            require(cursor.fetchone() == (42,), "parameter result mismatch")
+            # Reading the final row alone retains the bound result lease. Drain
+            # through EOF before metadata can issue another connection query.
+            require(cursor.fetchall() == [(42,)], "parameter result mismatch")
             info = connection.adbc_get_info()
             require(
                 info.get("vendor_name") == ("PostgreSQL" if plumbing else "Redshift")

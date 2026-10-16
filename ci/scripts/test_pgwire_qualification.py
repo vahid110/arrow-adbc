@@ -614,8 +614,7 @@ class QualificationTest(unittest.TestCase):
         connection = Mock()
         connection.cursor.return_value = MagicMock()
         cursor = connection.cursor.return_value.__enter__.return_value
-        cursor.fetchone.side_effect = [(42,), (42,)]
-        cursor.fetchall.return_value = [(1,), (1,), (2,), (2,)]
+        cursor.fetchall.side_effect = [[(42,)], [(42,)], [(1,), (1,), (2,), (2,)]]
         connection.adbc_get_info.return_value = {
             "vendor_name": "Redshift",
             "driver_name": "ADBC Redshift Driver",
@@ -631,7 +630,7 @@ class QualificationTest(unittest.TestCase):
             cursor.execute.call_args_list[-1].args[0], 'DROP SCHEMA "adbc_q_123"'
         )
         cursor.adbc_ingest.side_effect = RuntimeError("secret ingest failed")
-        cursor.fetchone.side_effect = [(42,), (42,)]
+        cursor.fetchall.side_effect = [[(42,)], [(42,)]]
         with self.assertRaisesRegex(contract.Rejected, "cleanup requires observation"):
             runner.python_coverage(connection, table, "adbc_q_123")
         self.assertIn(
@@ -939,8 +938,7 @@ class RuntimeQualificationTest(unittest.TestCase):
             conn = Mock()
             conn.cursor.return_value = MagicMock()
             cursor = conn.cursor.return_value.__enter__.return_value
-            cursor.fetchone.side_effect = [(42,), (42,)]
-            cursor.fetchall.return_value = [(1,), (1,), (2,), (2,)]
+            cursor.fetchall.side_effect = [[(42,)], [(42,)], [(1,), (1,), (2,), (2,)]]
             table = Mock()
             conn.adbc_get_table_schema.return_value = table.schema
             conn.adbc_get_info.return_value = {
@@ -1388,6 +1386,102 @@ class UriParserRegressionTest(unittest.TestCase):
                 pq.PQconninfoFree(options)
                 if error:
                     pq.PQfreemem(error)
+
+
+class BoundResultLifecycleTest(unittest.TestCase):
+    """A fetched last row is not EOF: metadata requires the bound lease released."""
+
+    @staticmethod
+    def connection():
+        connection = Mock()
+        connection.cursor.return_value = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        state = {"active_bound": False, "rows": []}
+        table = Mock()
+        connection.adbc_get_table_schema.return_value = table.schema
+
+        def execute(sql, parameters=None):
+            # DBAPI execute releases its own previous result. A bound stream
+            # owns the connection until a subsequent fetch observes EOF/close.
+            state["active_bound"] = parameters is not None
+            state["rows"] = (
+                [(1,), (1,), (2,), (2,)]
+                if sql.startswith("SELECT value")
+                else [(42,)]
+                if sql.startswith("SELECT")
+                else []
+            )
+
+        def fetchone():
+            if state["rows"]:
+                return state["rows"].pop(0)
+            state["active_bound"] = False
+            return None
+
+        def fetchall():
+            rows = []
+            while (row := fetchone()) is not None:
+                rows.append(row)
+            return rows
+
+        def metadata():
+            if state["active_bound"]:
+                raise RuntimeError("release bound result before metadata")
+            return {
+                "vendor_name": "Redshift",
+                "driver_name": "ADBC Redshift Driver",
+                "driver_version": "test",
+            }
+
+        cursor.execute.side_effect = execute
+        cursor.fetchone.side_effect = fetchone
+        cursor.fetchall.side_effect = fetchall
+        connection.adbc_get_info.side_effect = metadata
+        return connection, cursor, table
+
+    def test_metadata_follows_bound_result_eof(self):
+        connection, cursor, _ = self.connection()
+        # Reproduce the former call ordering: one fetched result row still
+        # holds its bound stream lease, even though no data rows remain.
+        cursor.execute("SELECT CAST($1 AS BIGINT) + CAST(1 AS BIGINT)", (41,))
+        self.assertEqual(cursor.fetchone(), (42,))
+        with self.assertRaisesRegex(RuntimeError, "release bound result"):
+            connection.adbc_get_info()
+        self.assertIsNone(cursor.fetchone())
+        self.assertEqual(connection.adbc_get_info()["vendor_name"], "Redshift")
+
+        connection, cursor, table = self.connection()
+        result = runner.python_coverage(connection, table, "adbc_q_42")
+        self.assertEqual(
+            result, {"coverage": True, "cleanup": "removed", "mode": "redshift"}
+        )
+        connection.adbc_get_info.assert_called_once()
+        self.assertEqual(cursor.adbc_ingest.call_count, 2)
+        self.assertEqual(
+            cursor.execute.call_args_list[-1].args[0], 'DROP SCHEMA "adbc_q_42"'
+        )
+
+    def test_full_scalar_and_bound_results_reject_extra_or_wrong_rows(self):
+        for scalar, bound in (
+            ([(42,), (42,)], [(42,)]),
+            ([(42,)], [(42,), (42,)]),
+            ([(0,)], [(42,)]),
+            ([(42,)], [(0,)]),
+        ):
+            connection, cursor, table = self.connection()
+            cursor.fetchall.side_effect = [scalar, bound]
+            with (
+                self.subTest(scalar=scalar, bound=bound),
+                self.assertRaises(contract.Rejected),
+            ):
+                runner.python_coverage(connection, table, "adbc_q_42")
+            connection.adbc_get_info.assert_not_called()
+            self.assertFalse(
+                any(
+                    call.args[0].startswith("CREATE")
+                    for call in cursor.execute.call_args_list
+                )
+            )
 
 
 def json_load(value):
