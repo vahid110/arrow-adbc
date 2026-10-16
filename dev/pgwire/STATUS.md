@@ -26,18 +26,19 @@ Current state only; history is in git and PR descriptions.
 - Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
   004b (release hardening, PR #8), 005 (Python package, PR #7),
   005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11),
-  007 (user documentation, PR #12).
+  007 (user documentation, PR #12), 008a (offline isolation contract, PR #13).
 - Task 006 merged:
   helper `adbc_driver_redshift.iam` with `build_uri` and
   `fetch_{serverless,cluster}_credentials` (injectable clients, offline
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Task008a offline isolated-resource preparation is in progress
-  ([PR #13](https://github.com/vahid110/arrow-adbc/pull/13)). The legacy
-  shared-target dispatch is retired; structural admission and installed-artifact
-  preflight/rehearsal are offline only. See the
-  [qualification contract](../../c/driver/postgresql/REDSHIFT.md#isolated-qualification-preparation-task008a).
+- Task008b adds installed C archive/Python wheel clients, private-pipe credential
+  transport, bounded process cleanup, no-AWS PostgreSQL plumbing CI and a
+  [machine-readable external evidence contract](qualification-contract-v1.json).
+  Original 16 offline qualification cases remain; new regressions exercise actual
+  private-input C code and child processes. This is preparation, not Redshift live
+  qualification. Native Codex coordination pilots this task; AO remains paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials are historical. This worker/coordinator stay offline.
   Actual Task008 remains blocked by dedicated provisioned resources, independently

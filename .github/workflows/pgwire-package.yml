@@ -40,6 +40,7 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-package.yml"
+      - "ci/scripts/pgwire_qualification*.py"
       - "c/driver/postgresql/**"
       - "c/driver/pgwire/**"
       - "c/driver_manager/**"
@@ -52,6 +53,7 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-package.yml"
+      - "ci/scripts/pgwire_qualification*.py"
       - "c/driver/postgresql/**"
       - "c/driver/pgwire/**"
       - "c/driver_manager/**"
@@ -102,15 +104,18 @@ jobs:
       PACKAGE_PLATFORM: ${{ matrix.platform }}
       PACKAGE_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Install build dependencies
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
           apt-get update -o Acquire::Retries=3
-          apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config
+          apt-get install --yes build-essential ca-certificates cmake git libpq-dev ninja-build pkg-config python3
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trust the exact runner checkout in this container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Resolve package version
         shell: bash
@@ -198,6 +203,21 @@ jobs:
             "$RUNNER_TEMP/pgwire-package-test/lib/libadbc_driver_redshift.so" \
             'postgresql://postgres:5432/postgres?user=postgres&password=password' \
             --expect-postgresql-rejection
+
+      - name: Installed C qualification (local PostgreSQL plumbing, NOT Redshift)
+        if: matrix.platform == 'ubuntu24-x86_64'
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror \
+            -I "$RUNNER_TEMP/pgwire-package-test/include" \
+            c/driver/pgwire/redshift_qualification.c \
+            -L "$RUNNER_TEMP/pgwire-package-test/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/pgwire-package-test/lib" \
+            -ladbc_driver_manager -o "$RUNNER_TEMP/redshift-qualification"
+          python3 ci/scripts/pgwire_qualification_ci.py c_archive \
+            "pgwire-artifacts/adbc-redshift-dev-${PACKAGE_PLATFORM}-${GITHUB_SHA}.tar.gz" \
+            "$RUNNER_TEMP/pgwire-package-test" \
+            --c-client "$RUNNER_TEMP/redshift-qualification" \
+            --output pgwire-artifacts/qualification-c.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

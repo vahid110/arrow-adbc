@@ -26,6 +26,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/test_pgwire_qualification.py"
+      - "c/driver/pgwire/redshift_qualification.c"
+      - "dev/pgwire/qualification-contract-v1.json"
       - ".github/scripts/pgwire-redshift-ingress.sh"
       - ".github/scripts/test-pgwire-redshift-ingress.sh"
       - ".github/scripts/pgwire-redshift-copy-fixture.sh"
@@ -38,6 +40,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/test_pgwire_qualification.py"
+      - "c/driver/pgwire/redshift_qualification.c"
+      - "dev/pgwire/qualification-contract-v1.json"
       - ".github/scripts/pgwire-redshift-ingress.sh"
       - ".github/scripts/test-pgwire-redshift-ingress.sh"
       - ".github/scripts/pgwire-redshift-copy-fixture.sh"
@@ -61,7 +65,7 @@ jobs:
       - name: Install offline test dependencies
         run: |
           sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes jq python3
+          sudo apt-get install --yes build-essential jq libpq5 python3
       - name: Check script syntax
         shell: bash
         run: |

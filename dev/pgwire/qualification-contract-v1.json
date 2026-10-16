@@ -1,0 +1,783 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vahid110/arrow-adbc/dev/pgwire/qualification-contract-v1.json",
+  "title": "Offline installed qualification and external host contract v1",
+  "description": "Claims and signatures are untrusted. No keys or live admission are enrolled. Matching this schema does not authorize credentials, ingress, connections or paid tests.",
+  "oneOf": [{"$ref": "#/$defs/Manifest"}, {"$ref": "#/$defs/Envelope"}],
+  "$defs": {
+    "Manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "purpose",
+        "account",
+        "region",
+        "namespace",
+        "workgroup",
+        "role",
+        "controls",
+        "binding",
+        "window",
+        "cleanup",
+        "tls",
+        "evidence"
+      ],
+      "properties": {
+        "version": {"const": 1},
+        "purpose": {"enum": ["offline-synthetic", "dedicated-qualification"]},
+        "account": {"const": "385207570137"},
+        "region": {"const": "eu-north-1"},
+        "namespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "id", "arn", "database"],
+          "properties": {
+            "name": {"const": "adbc-qualification-20261016"},
+            "id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+            "arn": {
+              "type": "string",
+              "pattern": "^arn:aws:redshift-serverless:eu-north-1:385207570137:(?:namespace|workgroup)/[0-9a-f-]+$"
+            },
+            "database": {"const": "adbc_qualification"}
+          }
+        },
+        "workgroup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "id",
+            "arn",
+            "namespace_id",
+            "endpoint",
+            "port",
+            "security_group_name",
+            "security_group_id"
+          ],
+          "properties": {
+            "name": {"const": "adbc-qualification-20261016"},
+            "id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+            "arn": {
+              "type": "string",
+              "pattern": "^arn:aws:redshift-serverless:eu-north-1:385207570137:(?:namespace|workgroup)/[0-9a-f-]+$"
+            },
+            "namespace_id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+            "endpoint": {"const": "adbc-qualification-20261016.385207570137.eu-north-1.redshift-serverless.amazonaws.com"},
+            "port": {"const": 5439},
+            "security_group_name": {"const": "adbc-qualification-20261016"},
+            "security_group_id": {"type": "string", "pattern": "^sg-[0-9a-f]{17}$"}
+          }
+        },
+        "role": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arn",
+            "oidc_provider",
+            "audience",
+            "subject",
+            "policy_sha256",
+            "trust_sha256",
+            "authorization_resources"
+          ],
+          "properties": {
+            "arn": {"const": "arn:aws:iam::385207570137:role/adbc-isolated-qualification-ci"},
+            "oidc_provider": {"const": "arn:aws:iam::385207570137:oidc-provider/token.actions.githubusercontent.com"},
+            "audience": {"const": "sts.amazonaws.com"},
+            "subject": {"const": "repo:vahid110/arrow-adbc:ref:refs/heads/feature/pgwire-core-redshift"},
+            "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "trust_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "authorization_resources": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base_rpu",
+            "max_rpu",
+            "automatic_optimization",
+            "capacity_growth",
+            "usage_limit_id",
+            "usage_workgroup_arn",
+            "usage_period",
+            "usage_rpu_hours",
+            "usage_action",
+            "incremental_usd",
+            "query_seconds",
+            "compute_seconds",
+            "paid_retries"
+          ],
+          "properties": {
+            "base_rpu": {"const": 4},
+            "max_rpu": {"const": 4},
+            "automatic_optimization": {"const": false},
+            "capacity_growth": {"const": false},
+            "usage_limit_id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+            "usage_workgroup_arn": {"type": "string", "pattern": "^arn:aws:redshift-serverless:.+$"},
+            "usage_period": {"const": "daily"},
+            "usage_rpu_hours": {"const": 4},
+            "usage_action": {"const": "deactivate"},
+            "incremental_usd": {"const": "5.00"},
+            "query_seconds": {"const": 900},
+            "compute_seconds": {"const": 3600},
+            "paid_retries": {"const": 0}
+          }
+        },
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "ref",
+            "source_sha",
+            "merged_sha",
+            "ci_receipt_sha256",
+            "independent_review_receipt_sha256",
+            "run_id",
+            "platform",
+            "c_archive",
+            "python_wheel"
+          ],
+          "properties": {
+            "repository": {"const": "vahid110/arrow-adbc"},
+            "ref": {"const": "refs/heads/feature/pgwire-core-redshift"},
+            "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "merged_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "ci_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "independent_review_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "run_id": {"type": "integer", "minimum": 1},
+            "platform": {"const": "ubuntu-x86_64"},
+            "c_archive": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sha256", "run_id", "source_sha", "installed_tree_sha256", "entrypoint", "workflow"],
+              "properties": {
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "run_id": {"type": "integer", "minimum": 1},
+                "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "installed_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "entrypoint": {"const": "AdbcDriverRedshiftInit"},
+                "workflow": {"const": ".github/workflows/pgwire-package.yml"}
+              }
+            },
+            "python_wheel": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sha256", "run_id", "source_sha", "installed_tree_sha256", "entrypoint", "workflow"],
+              "properties": {
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "run_id": {"type": "integer", "minimum": 1},
+                "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "installed_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "entrypoint": {"const": "AdbcDriverRedshiftInit"},
+                "workflow": {"type": "string", "pattern": "^\\.github/workflows/pgwire-python(?:-wheels)?\\.yml$"}
+              }
+            }
+          }
+        },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["not_before", "admit_before", "query_deadline", "compute_deadline", "teardown_deadline"],
+          "properties": {
+            "not_before": {"type": "integer", "minimum": 1},
+            "admit_before": {"type": "integer", "minimum": 1},
+            "query_deadline": {"type": "integer", "minimum": 1},
+            "compute_deadline": {"type": "integer", "minimum": 1},
+            "teardown_deadline": {"type": "integer", "minimum": 1}
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "external_provisioner",
+            "fixture_schema",
+            "ingress",
+            "sessions",
+            "objects",
+            "verification",
+            "teardown"
+          ],
+          "properties": {
+            "owner": {"type": "string", "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"},
+            "external_provisioner": {"type": "string", "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"},
+            "fixture_schema": {"type": "string", "pattern": "^adbc_q_[0-9]+$"},
+            "ingress": {"const": "exact-owned-rule-id-and-ipv4-/32"},
+            "sessions": {"const": "close-owned"},
+            "objects": {"const": "owned-fixture-only"},
+            "verification": {"const": "independent-observation-required"},
+            "teardown": {"const": "external-new-resources-only"}
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "hostname", "trusted_ca_sha256"],
+          "properties": {
+            "mode": {"const": "verify-full"},
+            "hostname": {"const": "adbc-qualification-20261016.385207570137.eu-north-1.redshift-serverless.amazonaws.com"},
+            "trusted_ca_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provisioning", "usage", "cleanup", "source_artifacts"],
+          "properties": {
+            "kind": {"const": "external-observations-requiring-independent-verification"},
+            "provisioning": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attester",
+                "observed_at",
+                "expires_at",
+                "manifest_sha256",
+                "observations_sha256",
+                "review_receipt_sha256"
+              ],
+              "properties": {
+                "attester": {
+                  "type": "string",
+                  "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"
+                },
+                "observed_at": {"type": "integer", "minimum": 1},
+                "expires_at": {"type": "integer", "minimum": 1},
+                "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "observations_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "review_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            },
+            "usage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attester",
+                "observed_at",
+                "expires_at",
+                "manifest_sha256",
+                "observations_sha256",
+                "review_receipt_sha256"
+              ],
+              "properties": {
+                "attester": {
+                  "type": "string",
+                  "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"
+                },
+                "observed_at": {"type": "integer", "minimum": 1},
+                "expires_at": {"type": "integer", "minimum": 1},
+                "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "observations_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "review_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            },
+            "cleanup": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attester",
+                "observed_at",
+                "expires_at",
+                "manifest_sha256",
+                "observations_sha256",
+                "review_receipt_sha256"
+              ],
+              "properties": {
+                "attester": {
+                  "type": "string",
+                  "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"
+                },
+                "observed_at": {"type": "integer", "minimum": 1},
+                "expires_at": {"type": "integer", "minimum": 1},
+                "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "observations_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "review_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            },
+            "source_artifacts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attester",
+                "observed_at",
+                "expires_at",
+                "manifest_sha256",
+                "observations_sha256",
+                "review_receipt_sha256"
+              ],
+              "properties": {
+                "attester": {
+                  "type": "string",
+                  "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"
+                },
+                "observed_at": {"type": "integer", "minimum": 1},
+                "expires_at": {"type": "integer", "minimum": 1},
+                "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "observations_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "review_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "Observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "consumer",
+        "manifest_sha256",
+        "run_id",
+        "observed_at",
+        "expires_at",
+        "nonce",
+        "source",
+        "artifacts",
+        "resources",
+        "cleanup",
+        "cleanup_acceptance",
+        "paid"
+      ],
+      "properties": {
+        "version": {"const": 1},
+        "consumer": {"const": "adbc-installed-qualification-v1"},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "observed_at": {"type": "integer", "minimum": 1},
+        "expires_at": {"type": "integer", "minimum": 1},
+        "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "ref",
+            "merged_sha",
+            "merged_tree",
+            "reviewed_head",
+            "reviewed_tree",
+            "pr",
+            "original_checks",
+            "native_review",
+            "host_comment"
+          ],
+          "properties": {
+            "repository": {"const": "vahid110/arrow-adbc"},
+            "ref": {"const": "refs/heads/feature/pgwire-core-redshift"},
+            "merged_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "merged_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "reviewed_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "reviewed_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "pr": {"type": "integer", "minimum": 1},
+            "original_checks": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "id", "head_sha", "conclusion", "response_sha256"],
+                "properties": {
+                  "name": {"type": "string", "minLength": 1},
+                  "id": {"type": "integer", "minimum": 1},
+                  "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "conclusion": {"const": "success"},
+                  "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+              }
+            },
+            "native_review": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["run", "head_sha", "verdict", "receipt_sha256"],
+              "properties": {
+                "run": {"type": "string", "minLength": 1},
+                "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "verdict": {"const": "approved"},
+                "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            },
+            "host_comment": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "event", "head_sha", "native_receipt_sha256", "body_sha256", "response_sha256"],
+              "properties": {
+                "id": {"type": "integer", "minimum": 1},
+                "event": {"const": "COMMENT"},
+                "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "native_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["c_archive", "python_wheel"],
+          "properties": {
+            "c_archive": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "artifact_id",
+                "archive_sha256",
+                "payload_sha256",
+                "installed_tree_sha256",
+                "source_sha",
+                "source_tree",
+                "workflow",
+                "workflow_ref",
+                "run_id",
+                "run_attempt",
+                "run_conclusion",
+                "artifact_name",
+                "library",
+                "module",
+                "distribution_root"
+              ],
+              "properties": {
+                "artifact_id": {"type": "integer", "minimum": 1},
+                "archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "installed_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "workflow": {"type": "string", "minLength": 1},
+                "workflow_ref": {"type": "string", "minLength": 1},
+                "run_id": {"type": "integer", "minimum": 1},
+                "run_attempt": {"type": "integer", "minimum": 1},
+                "run_conclusion": {"const": "success"},
+                "artifact_name": {"type": "string", "minLength": 1},
+                "library": {"type": "string", "minLength": 1},
+                "module": {"type": ["string", "null"]},
+                "distribution_root": {"type": ["string", "null"]}
+              }
+            },
+            "python_wheel": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "artifact_id",
+                "archive_sha256",
+                "payload_sha256",
+                "installed_tree_sha256",
+                "source_sha",
+                "source_tree",
+                "workflow",
+                "workflow_ref",
+                "run_id",
+                "run_attempt",
+                "run_conclusion",
+                "artifact_name",
+                "library",
+                "module",
+                "distribution_root"
+              ],
+              "properties": {
+                "artifact_id": {"type": "integer", "minimum": 1},
+                "archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "installed_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                "workflow": {"type": "string", "minLength": 1},
+                "workflow_ref": {"type": "string", "minLength": 1},
+                "run_id": {"type": "integer", "minimum": 1},
+                "run_attempt": {"type": "integer", "minimum": 1},
+                "run_conclusion": {"const": "success"},
+                "artifact_name": {"type": "string", "minLength": 1},
+                "library": {"type": "string", "minLength": 1},
+                "module": {"type": ["string", "null"]},
+                "distribution_root": {"type": ["string", "null"]}
+              }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["account", "region", "namespace", "workgroup", "role", "controls", "tls"],
+          "properties": {
+            "account": {"const": "385207570137"},
+            "region": {"const": "eu-north-1"},
+            "namespace": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "id", "arn", "database"],
+              "properties": {
+                "name": {"const": "adbc-qualification-20261016"},
+                "id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                "arn": {
+                  "type": "string",
+                  "pattern": "^arn:aws:redshift-serverless:eu-north-1:385207570137:(?:namespace|workgroup)/[0-9a-f-]+$"
+                },
+                "database": {"const": "adbc_qualification"}
+              }
+            },
+            "workgroup": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "id",
+                "arn",
+                "namespace_id",
+                "endpoint",
+                "port",
+                "security_group_name",
+                "security_group_id"
+              ],
+              "properties": {
+                "name": {"const": "adbc-qualification-20261016"},
+                "id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                "arn": {
+                  "type": "string",
+                  "pattern": "^arn:aws:redshift-serverless:eu-north-1:385207570137:(?:namespace|workgroup)/[0-9a-f-]+$"
+                },
+                "namespace_id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                "endpoint": {
+                  "const": "adbc-qualification-20261016.385207570137.eu-north-1.redshift-serverless.amazonaws.com"
+                },
+                "port": {"const": 5439},
+                "security_group_name": {"const": "adbc-qualification-20261016"},
+                "security_group_id": {"type": "string", "pattern": "^sg-[0-9a-f]{17}$"}
+              }
+            },
+            "role": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "arn",
+                "oidc_provider",
+                "audience",
+                "subject",
+                "policy_sha256",
+                "trust_sha256",
+                "authorization_resources"
+              ],
+              "properties": {
+                "arn": {"const": "arn:aws:iam::385207570137:role/adbc-isolated-qualification-ci"},
+                "oidc_provider": {"const": "arn:aws:iam::385207570137:oidc-provider/token.actions.githubusercontent.com"},
+                "audience": {"const": "sts.amazonaws.com"},
+                "subject": {"const": "repo:vahid110/arrow-adbc:ref:refs/heads/feature/pgwire-core-redshift"},
+                "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "trust_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "authorization_resources": {"type": "array", "items": {"type": "string"}}
+              }
+            },
+            "controls": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "base_rpu",
+                "max_rpu",
+                "automatic_optimization",
+                "capacity_growth",
+                "usage_limit_id",
+                "usage_workgroup_arn",
+                "usage_period",
+                "usage_rpu_hours",
+                "usage_action",
+                "incremental_usd",
+                "query_seconds",
+                "compute_seconds",
+                "paid_retries"
+              ],
+              "properties": {
+                "base_rpu": {"const": 4},
+                "max_rpu": {"const": 4},
+                "automatic_optimization": {"const": false},
+                "capacity_growth": {"const": false},
+                "usage_limit_id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                "usage_workgroup_arn": {"type": "string", "pattern": "^arn:aws:redshift-serverless:.+$"},
+                "usage_period": {"const": "daily"},
+                "usage_rpu_hours": {"const": 4},
+                "usage_action": {"const": "deactivate"},
+                "incremental_usd": {"const": "5.00"},
+                "query_seconds": {"const": 900},
+                "compute_seconds": {"const": 3600},
+                "paid_retries": {"const": 0}
+              }
+            },
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "hostname", "trusted_ca_sha256"],
+              "properties": {
+                "mode": {"const": "verify-full"},
+                "hostname": {
+                  "const": "adbc-qualification-20261016.385207570137.eu-north-1.redshift-serverless.amazonaws.com"
+                },
+                "trusted_ca_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            }
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "external_provisioner",
+            "fixture_schema",
+            "ingress",
+            "sessions",
+            "objects",
+            "verification",
+            "teardown"
+          ],
+          "properties": {
+            "owner": {"type": "string", "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"},
+            "external_provisioner": {"type": "string", "pattern": "^arn:aws:iam::385207570137:(?:role|user)/[A-Za-z0-9+=,.@_/-]+$"},
+            "fixture_schema": {"type": "string", "pattern": "^adbc_q_[0-9]+$"},
+            "ingress": {"const": "exact-owned-rule-id-and-ipv4-/32"},
+            "sessions": {"const": "close-owned"},
+            "objects": {"const": "owned-fixture-only"},
+            "verification": {"const": "independent-observation-required"},
+            "teardown": {"const": "external-new-resources-only"}
+          }
+        },
+        "cleanup_acceptance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "external_provisioner", "observer", "deadline", "manifest_sha256", "run_id", "state"],
+          "properties": {
+            "owner": {"type": "string", "minLength": 1},
+            "external_provisioner": {"type": "string", "minLength": 1},
+            "observer": {"type": "string", "minLength": 1},
+            "deadline": {"type": "integer", "minimum": 1},
+            "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "run_id": {"type": "integer", "minimum": 1},
+            "state": {"const": "accepted-exact-owned-fixtures-rules-and-new-resources-only"}
+          }
+        },
+        "paid": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["manifest_sha256", "run_id", "nonce", "window", "controls", "automatic_retries"],
+          "properties": {
+            "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "run_id": {"type": "integer", "minimum": 1},
+            "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "window": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["not_before", "admit_before", "query_deadline", "compute_deadline", "teardown_deadline"],
+              "properties": {
+                "not_before": {"type": "integer", "minimum": 1},
+                "admit_before": {"type": "integer", "minimum": 1},
+                "query_deadline": {"type": "integer", "minimum": 1},
+                "compute_deadline": {"type": "integer", "minimum": 1},
+                "teardown_deadline": {"type": "integer", "minimum": 1}
+              }
+            },
+            "controls": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "base_rpu",
+                "max_rpu",
+                "automatic_optimization",
+                "capacity_growth",
+                "usage_limit_id",
+                "usage_workgroup_arn",
+                "usage_period",
+                "usage_rpu_hours",
+                "usage_action",
+                "incremental_usd",
+                "query_seconds",
+                "compute_seconds",
+                "paid_retries"
+              ],
+              "properties": {
+                "base_rpu": {"const": 4},
+                "max_rpu": {"const": 4},
+                "automatic_optimization": {"const": false},
+                "capacity_growth": {"const": false},
+                "usage_limit_id": {"type": "string", "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                "usage_workgroup_arn": {"type": "string", "pattern": "^arn:aws:redshift-serverless:.+$"},
+                "usage_period": {"const": "daily"},
+                "usage_rpu_hours": {"const": 4},
+                "usage_action": {"const": "deactivate"},
+                "incremental_usd": {"const": "5.00"},
+                "query_seconds": {"const": 900},
+                "compute_seconds": {"const": 3600},
+                "paid_retries": {"const": 0}
+              }
+            },
+            "automatic_retries": {"const": 0}
+          }
+        }
+      }
+    },
+    "Envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload", "signatures"],
+      "properties": {
+        "payload": {"$ref": "#/$defs/Observation"},
+        "signatures": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provisioner", "independent-observer", "paid-test-authority"],
+          "properties": {
+            "provisioner": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["issuer", "signature"],
+              "properties": {
+                "issuer": {"type": "string", "minLength": 1},
+                "signature": {"type": "string", "contentEncoding": "base64"}
+              }
+            },
+            "independent-observer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["issuer", "signature"],
+              "properties": {
+                "issuer": {"type": "string", "minLength": 1},
+                "signature": {"type": "string", "contentEncoding": "base64"}
+              }
+            },
+            "paid-test-authority": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["issuer", "signature"],
+              "properties": {
+                "issuer": {"type": "string", "minLength": 1},
+                "signature": {"type": "string", "contentEncoding": "base64"}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-trust": {
+    "status": "unavailable",
+    "consumer": "adbc-installed-qualification-v1",
+    "issuers": [
+      "independently-enrolled-host-provisioner",
+      "independently-enrolled-cleanup-observer",
+      "separately-authorized-finite-paid-test-authority"
+    ],
+    "enrollment": "Out-of-band human identity confirmation then independently reviewed pinned key change; no runtime key/callback/env/manifest enrollment. TRUST_ROOTS is empty.",
+    "signature": "Ed25519 over UTF-8 consumer + newline + canonical sorted compact JSON payload (allow_nan=false); three distinct pinned issuers.",
+    "anti_replay": "External durable atomic nonce consumption bound to manifest SHA256/run/window before credentials. No in-repo consume endpoint exists. A hash or signed reusable receipt is insufficient.",
+    "live": "Always closed, even after signature verification, until trusted host one-shot consumption and separately explicit finite paid admission are integrated."
+  },
+  "x-producer-inputs": {
+    "github": "Authenticated TLS api.github.com/repos/vahid110/arrow-adbc: pulls/{pr}, commits/{merged_sha}, git/trees/{tree}, commits/{reviewed_head}/check-runs (all pages and original attempts), actions/runs/{run_id} (attempts and jobs), actions/artifacts/{artifact_id} and archive download. Compare checkout/source tree, squash merge tree equality, exact original triggered gates and reviewed head, run workflow/ref/attempt/head/conclusion and server artifact digest against downloaded ZIP bytes; extract exact archive/wheel payload and rehash. No sidecar is authoritative.",
+    "native": "Independently authored native review receipt on reviewed_head with verdict approved, reviewer identity and immutable full findings/body hash, plus actual nonzero published attributed GitHub COMMENT review id/head/body hash linked to that original native receipt hash. The native Codex pilot uses Codex review evidence; historical AO verdicts and publication failures remain preserved history, never fabricated current receipts. HTTP401/unposted is missing current publication evidence. COMMENT is not independent-account approval or permission to bypass protection.",
+    "aws": "External host only: authenticated STS identity; GetWorkgroup/GetNamespace endpoint/namespace/SG/database associations; DescribeSecurityGroups dedicated VPC/SG ingress and protected-id absence; GetRole/GetRolePolicy/ListAttachedRolePolicies/GetPolicyVersion/GetOpenIDConnectProvider complete effective policy/trust/boundary and authorization scope; GetUsageLimit/ListUsageLimits target/action/period plus base/max capacity and disabled growth/optimization; observed TLS hostname/CA bytes. Never include GetCredentials responses or secret values.",
+    "cleanup": "Owner and external provisioner accept exact plan/deadline; distinct enrolled observer verifies pre-run ownership and post-run closed sessions, exact fixture absence, exact owned /32 rule-id removal and external teardown of dedicated new resources. Unknown/lost replies block success; no broad cleanup.",
+    "paid": "Separately explicit human paid authorization for exactly one manifest/run/nonce, USD5 incremental ceiling, 900s query, 3600s compute/teardown, 4 RPU, daily4 RPU-hour deactivate control, zero paid retries. Access/profile availability is not admission.",
+    "artifacts": "Sealed immutable clean install prefixes, cache-free Redshift package, absolute installed manager/client/interpreter/driver origins, load-only AdbcDriverRedshiftInit report and verified exact artifact payload/tree hashes. No source/PATH/library fallback; observe file immutability through execution."
+  }
+}
