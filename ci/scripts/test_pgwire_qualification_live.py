@@ -19,13 +19,19 @@
 
 import copy
 import importlib.util
+import io
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
+import tarfile
 import tempfile
 import types
 import unittest
+import venv
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -758,6 +764,188 @@ class ReplaceCoverageTest(unittest.TestCase):
             python_replace_coverage(
                 cursor, ("128-byte column", "value/VALUE"), "adbc_q_1231"
             )
+
+
+@unittest.skipUnless(
+    sys.version_info >= (3, 12), "preparer uses Python 3.12 data-filter extraction"
+)
+class PrepareFlowTest(unittest.TestCase):
+    """Actual prepare/inventory/isolated-load flow, with no AWS or network.
+
+    Only authenticated GitHub/IP inputs, pip installation and C-client compilation
+    are fake boundaries. A tiny local exported-symbol library makes both real
+    isolated load-only probes executable without building the driver.
+    """
+
+    def setUp(self):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("C compiler required for tiny load-only fixture")
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.ca = self.root / "ca.pem"
+        self.ca.write_bytes(b"nonsecret synthetic CA for load-only checks")
+        source = self.root / "load-only.c"
+        source.write_text("int AdbcDriverRedshiftInit(void) { return 0; }\n")
+        library = self.root / "load-only.so"
+        subprocess.run(
+            [
+                compiler,
+                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                "-fPIC",
+                str(source),
+                "-o",
+                str(library),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+        self.library = library.read_bytes()
+        self.environment = self.root / "venv"
+        venv.EnvBuilder(with_pip=False, symlinks=True).create(self.environment)
+        self.interpreter = str(self.environment / "bin/python")
+        self.package_root = Path(
+            subprocess.check_output(
+                [
+                    self.interpreter,
+                    "-I",
+                    "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
+                text=True,
+            ).strip()
+        )
+        self.directory = self.root / "prepared"
+        self.github = Mock()
+        self.github.context.return_value = (SOURCE, RUN)
+        self.github.review.return_value = admission()["review"]
+        self.github.download.side_effect = self.download
+        self.network = patch.object(
+            socket, "socket", side_effect=AssertionError("NETWORK FORBIDDEN")
+        )
+        self.network.start()
+        self.addCleanup(self.network.stop)
+        # The fixed production CA path stays unchanged; use its actual-file input
+        # boundary on macOS as well as Linux, never an admission/TLS bypass.
+        self.original_run = subprocess.run
+        self.calls = []
+
+    def download(self, kind, artifact_id, source, target):
+        self.assertEqual(source, SOURCE)
+        self.assertEqual(artifact_id, 20 if kind == "c_archive" else 21)
+        if kind == "c_archive":
+            with tarfile.open(target / "installed.tar.gz", "w:gz") as archive:
+                for name, data in {
+                    "lib/libadbc_driver_redshift.so": self.library,
+                    "include/arrow-adbc/adbc.h": b"synthetic header",
+                }.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+        else:
+            with zipfile.ZipFile(
+                target / "adbc_driver_redshift-0-py3-none-linux_x86_64.whl", "w"
+            ) as archive:
+                files = {
+                    "adbc_driver_redshift/__init__.py": (
+                        b"from pathlib import Path\ndef _driver_path():\n"
+                        b"    return str(Path(__file__).with_name("
+                        b"'libadbc_driver_redshift.so'))\n"
+                    ),
+                    "adbc_driver_redshift/dbapi.py": b"# load-only fixture\n",
+                    "adbc_driver_redshift/iam.py": b"# load-only fixture\n",
+                    "adbc_driver_redshift/libadbc_driver_redshift.so": self.library,
+                    "adbc_driver_redshift-0.dist-info/METADATA": (
+                        b"Name: adbc-driver-redshift\nVersion: 0\n"
+                    ),
+                }
+                for name, data in files.items():
+                    archive.writestr(name, data)
+        return {"workflow_run": {"id": 40 if kind == "c_archive" else 41}}
+
+    def installed_process(self, argv, **kwargs):
+        if argv[:4] == [self.interpreter, "-m", "pip", "install"]:
+            self.calls.append("install-wheel")
+            self.assertIn("--no-deps", argv)
+            self.assertIn("--no-compile", argv)
+            with zipfile.ZipFile(argv[-1]) as archive:
+                archive.extractall(self.package_root)
+            return subprocess.CompletedProcess(argv, 0)
+        if argv[0] == "cc":
+            self.calls.append("compile-client")
+            self.assertIn("c/driver/pgwire/redshift_qualification.c", argv)
+            Path(argv[argv.index("-o") + 1]).write_bytes(
+                b"synthetic client, never executed"
+            )
+            return subprocess.CompletedProcess(argv, 0)
+        return self.original_run(argv, **kwargs)
+
+    def prepare(self):
+        response = Mock()
+        response.__enter__ = Mock(return_value=io.BytesIO(b"8.8.8.8\n"))
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
+        with (
+            patch.object(prepare.urllib.request, "build_opener", return_value=opener),
+            patch.object(prepare.subprocess, "run", side_effect=self.installed_process),
+            patch.object(prepare, "CA_BUNDLE", str(self.ca), create=True),
+            patch.object(
+                live, "clients", side_effect=AssertionError("SDK FORBIDDEN")
+            ) as sdk,
+            patch.object(live, "private_process", wraps=live.private_process) as probes,
+        ):
+            result = prepare.prepare(
+                self.github, self.directory, self.interpreter, 20, 21
+            )
+            self.assertEqual(probes.call_count, 2)
+            self.assertTrue(
+                all(c.args[0][-2:] == ["load-only", "-"] for c in probes.call_args_list)
+            )
+            sdk.assert_not_called()
+        self.assertEqual(self.calls, ["install-wheel", "compile-client"])
+        return result
+
+    def test_prepare_emits_verified_preflight_without_authorization_window(self):
+        record = self.prepare()
+        self.assertNotIn("window", record)
+        self.assertNotIn("resources", record)
+        self.assertEqual(
+            record, json.loads((self.directory / "preflight.json").read_text())
+        )
+        self.assertTrue((self.directory / "paths.json").is_file())
+        with self.assertRaises(Rejected):
+            live.validate(record, source=SOURCE, run=RUN, now=NOW)
+
+    def test_consumer_rechecks_emitted_record_before_sdk_and_rejects_tampering(self):
+        record = self.prepare()
+        paths = self.directory / "paths.json"
+        output = self.directory / "result.json"
+        with (
+            patch.object(sys, "executable", self.interpreter),
+            patch.dict(os.environ, {"GH_TOKEN": "synthetic-token"}),
+            patch.object(
+                sys, "argv", ["qualification", str(paths), "--output", str(output)]
+            ),
+            patch.object(prepare, "GitHub", return_value=self.github),
+            patch.object(
+                live, "clients", side_effect=RuntimeError("SECRET SDK BOUNDARY")
+            ) as sdk,
+            patch.object(live, "private_process", wraps=live.private_process) as probes,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            self.assertEqual(live.main(), 1)
+            self.assertEqual(probes.call_count, 2)
+            sdk.assert_called_once_with()
+            self.github.verify.assert_called_once_with(record)
+            self.assertNotIn("SECRET", stderr.getvalue())
+            sdk.reset_mock()
+            library = self.directory / "c-prefix/lib/libadbc_driver_redshift.so"
+            library.write_bytes(b"changed after prepare")
+            self.assertEqual(live.main(), 1)
+            sdk.assert_not_called()
 
 
 class ProvenanceTest(unittest.TestCase):

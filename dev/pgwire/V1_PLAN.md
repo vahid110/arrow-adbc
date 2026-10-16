@@ -35,11 +35,12 @@ not scheduled without a concrete unmet need and a new product decision.
 V1 keeps task006's boto3 IAM helper thin, caller-owned and replaceable: no native
 C++ auth framework, extra auth methods, federation/Identity Center, shared
 credential cache or background refresh. Task007 documentation is complete
-(PR #12), as are Task008a/b (PRs #13/#14). Task008c adds the reviewed finite
+(PR #12), as are Task008a/b/c (PRs #13/#14/#15). Task008c adds the reviewed finite
 SSM admission and explicit-dispatch runner for installed C/Python IAM payloads,
 with authenticated source/artifact/resource checks and mandatory independent host
-cleanup. See [the executable host handoff](qualification-live.md). Offline success
-is not live qualification: one exact merged-head batch and verified dedicated
+cleanup. See [the executable host handoff](qualification-live.md). The first dispatch failed during pre-OIDC preparation; its successor repair
+separates installed-artifact evidence from the later mandatory admission window.
+Offline success is not live qualification: one exact merged-head batch and verified dedicated
 resource/secret/IAM teardown remain required. The human publication gate remains;
 this roadmap grants no additional spend, tag or publication authority.
 
@@ -67,7 +68,7 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
 | 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
 | 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Done (PR #14), offline only; original unsigned gate stays closed |
-| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Offline-tested supported path; exact-head review/CI and actual host-operated batch/teardown still required |
+| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PR #15); successor repairs pre-OIDC installed projection. Actual host-operated batch/teardown still required |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Pending: reviewed/green Task008c, dedicated host-issued admission, one green bounded batch and independently verified full teardown |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 

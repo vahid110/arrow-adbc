@@ -98,7 +98,10 @@ profile; do not modify global profiles, the OIDC provider, VPC or subnet setting
    No source driver rebuild is needed. The runner authenticates downloads,
    installs bytes, compiles its tiny C client and probes both Redshift entrypoints
    before OIDC. The uploaded `qualification-preflight-<run>` contains nonsecret
-   hashes and its current `/32`; capture that artifact ID. CI waits at most twenty
+   hashes and its current `/32`; capture that artifact ID. It intentionally has no
+   execution window or resource admission: installed load-only verification uses
+   only the artifact/TLS projection; the host supplies the real finite window
+   later. The consumer rechecks the same installed evidence before SDK access. CI waits at most twenty
    minutes for host admission. Do not provision while offline CI is unfinished.
 4. Run the finite host helper in one process (CLI arguments are nonsecret):
 

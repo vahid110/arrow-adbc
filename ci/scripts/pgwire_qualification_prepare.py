@@ -36,6 +36,8 @@ from pgwire_qualification_ci import claims
 from pgwire_qualification_live import KINDS, REF, REPOSITORY, WORKFLOW, verify_local
 from pgwire_qualification_manifest import COMMIT, digest, require
 
+CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
 ARTIFACTS = {
     "c_archive": (
         "adbc-redshift-dev-ubuntu24-x86_64",
@@ -285,7 +287,7 @@ def prepare(github, directory, interpreter, c_id, wheel_id):
     source, run = github.context()
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=False)
-    paths = {"ca": "/etc/ssl/certs/ca-certificates.crt"}
+    paths = {"ca": CA_BUNDLE}
     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
         "https://checkip.amazonaws.com", timeout=10
     ) as response:
@@ -301,6 +303,7 @@ def prepare(github, directory, interpreter, c_id, wheel_id):
         "artifacts": {},
         "ca_sha256": file_sha(paths["ca"]),
     }
+    print("Preparation stage: source/review and runner inputs verified.", flush=True)
     for kind, artifact_id in zip(KINDS, (c_id, wheel_id)):
         download = directory / (kind + "-download")
         download.mkdir()
@@ -349,6 +352,9 @@ def prepare(github, directory, interpreter, c_id, wheel_id):
             "run_id": item["workflow_run"]["id"],
             **claims(artifact, root, wheel=kind == "python_wheel"),
         }
+        print(
+            "Preparation stage: " + kind + " installed inventory verified.", flush=True
+        )
     c_client = directory / "redshift-qualification"
     prefix = paths["c_archive"]["root"]
     subprocess.run(
@@ -372,7 +378,12 @@ def prepare(github, directory, interpreter, c_id, wheel_id):
     )
     paths["c_client"], paths["c_client_sha256"] = str(c_client), file_sha(c_client)
     admission["c_client_sha256"] = paths["c_client_sha256"]
+    print(
+        "Preparation stage: C client built; load-only verification starting.",
+        flush=True,
+    )
     verify_local(admission, paths, interpreter)
+    print("Preparation stage: installed entrypoints verified.", flush=True)
     (directory / "paths.json").write_text(json.dumps(paths, sort_keys=True) + "\n")
     # This is NONSECRET host input. It never grants admission or substitutes for
     # the consumer's fresh authenticated GitHub calls and installed-byte checks.
