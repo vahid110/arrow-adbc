@@ -47,8 +47,11 @@ Current state only; history is in git and PR descriptions.
   admitted execution window, with real prepare-to-consumer regressions. The next
   dispatch passed installed preflight but failed OIDC: the retained role and host
   validator pinned a legacy subject while this repository issues immutable IDs.
-  The successor pins the exact immutable subject; independently reviewed host-only
-  trust update/readback and a new exact-head dispatch remain required.
+  PR #17 pinned the exact immutable subject; the next run passed preflight/STS
+  but `CreateWorkgroup` rejected conflicting scaling/pricing request fields.
+  The successor omits only the request pricing target, retaining strict disabled
+  response checks and all finite controls. Original receipts remain spent;
+  further host authority requires coordinator/human resolution after review.
   AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
@@ -79,12 +82,17 @@ shared with ODBCPP at the time; protected from current ADBC access.
 
 ## Isolated preflight log
 
-Neither failure started dedicated Redshift resources, admission, claim or a paid
-batch; the paid batch remains unspent. Both original failed runs are retained.
-Three failed revisions were escalated to the human/coordinator; failure counters
-and finite budgets are preserved.
+The first two failures created no dedicated resources. Run `38916730017` created
+only the owned namespace/SG before workgroup validation failed. Fresh independent
+host cleanup verified workgroup, namespace, SG, managed secret, admission and
+claim absent; CI is terminal cancelled. No usage-limit attempt, runtime policy,
+credentials or SQL occurred. No workgroup compute started; ancillary AWS charges
+are not reconciled here. All original runs and host receipts are retained.
+Three failed revisions were already escalated to the human/coordinator; this
+additional failure preserves the counters/budgets and grants no retry authority.
 
 | Date | Run | Head | Result | Est. incremental cost (USD) |
 |---|---|---|---|---|
 | 2026-10-16 | [38908550615](https://github.com/vahid110/arrow-adbc/actions/runs/38908550615) | `596aec4a23fd3c6fd134f5e569b902cd3134d28f` | failed before OIDC: load-only projection required an absent execution window; offline reproduction and successor repair | 0.00 |
 | 2026-10-16 | [38912745155](https://github.com/vahid110/arrow-adbc/actions/runs/38912745155) | `9f3bbaa770386b165f8e0cc9e1de4a4cdae9109c` | installed preflight passed (artifact `12051211152`); OIDC denied because dedicated trust used a legacy subject instead of authenticated immutable owner/repository IDs | 0.00 |
+| 2026-10-16 | [38916730017](https://github.com/vahid110/arrow-adbc/actions/runs/38916730017) | `5e3afc8653e39eaf099c5cb91ea9be21b386adb6` | preflight/STS passed; `CreateWorkgroup` rejected simultaneous pricing target and scaling autonomics fields; owned partial resources independently removed, no admission/claim/SQL | 0.00 compute |
