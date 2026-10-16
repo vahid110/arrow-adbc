@@ -259,6 +259,10 @@ class QualificationTest(unittest.TestCase):
     def test_protected_identities_anywhere(self):
         protected = [
             "odbcpp-redshift-pilot",
+            "odbcpp-redshift-provisioned-pilot",
+            "arn:aws:redshift:eu-north-1:385207570137:cluster:odbcpp-redshift-provisioned-pilot",
+            "odbcpp-redshift-provisioned-pilot-subnet-group",
+            "odbcpp-redshift-provisioned-pilot-parameter-group",
             "odbcpp_pilot",
             "sg-06227a706295e3f05",
             "arn:aws:redshift-serverless:eu-north-1:385207570137:workgroup/d41cff82-7eb8-410d-be60-1d467c335756",

@@ -243,6 +243,14 @@ Task007 is complete (PR #12). Task008a prepares offline controls only. Actual
 Task008 remains blocked by an authorized provisioning identity/access and verified
 dedicated admission. Task009 publication is paused. Nothing here establishes AWS
 verification, provisioned resources, live qualification or an absolute bill cap.
+The human-provided access recheck reports successful authentication but scoped
+denial for dedicated namespace/workgroup/usage-limit/SG creation and
+CreateRole/PutRolePolicy for `adbc-isolated-qualification-ci`. The existing
+`adbc-redshift-ci` CreateRole/boundary exception grants no isolated-resource
+permission or authority to repurpose it. The protected provisioned cluster
+`odbcpp-redshift-provisioned-pilot` and its subnet/parameter groups are also
+forbidden fallbacks. The human resolves an administrator-scoped grant or an
+authorized external provisioner; Task008a performs no AWS recheck.
 
 The legacy `cpp-redshift` and credential/COPY handoff in `PgWire Drivers` are
 removed. Default dispatch runs PostgreSQL/artifact regression; retired live flags

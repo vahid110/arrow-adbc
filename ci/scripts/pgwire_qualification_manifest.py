@@ -30,7 +30,7 @@ NAME = "adbc-qualification-20261016"
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/adbc-isolated-qualification-ci"
 SUBJECT = "repo:vahid110/arrow-adbc:ref:refs/heads/feature/pgwire-core-redshift"
 PROTECTED = (
-    "odbcpp",
+    "odbcpp",  # Includes protected Serverless and provisioned cluster/groups.
     "sg-06227a706295e3f05",
     "d41cff82-7eb8-410d-be60-1d467c335756",
     "adbc-redshift-ci",

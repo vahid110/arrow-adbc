@@ -38,8 +38,11 @@ Current state only; history is in git and PR descriptions.
   shared-target dispatch is retired; structural admission and installed-artifact
   preflight/rehearsal are offline only. See the
   [qualification contract](../../c/driver/postgresql/REDSHIFT.md#isolated-qualification-preparation-task008a).
-- Actual Task008 live execution is blocked by the missing authorized provisioning
-  identity/access and independently verified dedicated manifest/admission.
+- Actual Task008 live execution is blocked by scoped provisioning authorization
+  for the dedicated Serverless/SG resources and proposed isolated CI role, plus
+  independently verified dedicated manifest/admission. Existing profiles
+  authenticate; the old role exception is not permission to repurpose it.
+  The human resolves an administrator-scoped grant/authorized provisioner externally.
   No dedicated resources or AWS/live qualification are established here.
   Task009 publication remains paused.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
