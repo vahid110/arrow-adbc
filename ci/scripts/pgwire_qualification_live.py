@@ -177,13 +177,16 @@ def validate(admission, *, source, run, now):
     return admission
 
 
-def manifest(admission):
-    # Only the existing installed-byte/TLS/client checks consume this projection.
+def installed_manifest(record):
+    """Installed bytes and fixed TLS target only; this never grants admission.
+
+    Preparation has no host-issued execution window. Admitted execution validates
+    and reads its mandatory deadlines directly from the authenticated admission.
+    """
     return {
-        "binding": admission["artifacts"],
-        "tls": {"trusted_ca_sha256": admission["ca_sha256"], "hostname": HOST},
+        "binding": record["artifacts"],
+        "tls": {"trusted_ca_sha256": record["ca_sha256"], "hostname": HOST},
         "namespace": {"database": "adbc_qualification"},
-        "window": admission["window"],
     }
 
 
@@ -321,8 +324,11 @@ def probe_args(kind, paths, interpreter, admission):
 
 
 def verify_local(admission, paths, interpreter):
-    libraries = preflight(manifest(admission), paths)
+    libraries = preflight(installed_manifest(admission), paths)
     for kind, library in libraries.items():
+        print(
+            "Qualification stage: " + kind + " installed entrypoint probe.", flush=True
+        )
         report = json.loads(
             private_process(
                 [*probe_args(kind, paths, interpreter, admission), "load-only", "-"]
@@ -456,7 +462,7 @@ def execute(
                 sslmode="verify-full",
                 extra_params={"sslrootcert": str(paths["ca"]), "connect_timeout": "10"},
             )
-            validate_uri(uri, manifest(admission), paths["ca"])
+            validate_uri(uri, installed_manifest(admission), paths["ca"])
             fixture = "adbc_q_" + str(run) + str(index)
             argv = (
                 [
