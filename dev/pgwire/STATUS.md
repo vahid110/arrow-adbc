@@ -25,35 +25,43 @@ Current state only; history is in git and PR descriptions.
 
 - Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
   004b (release hardening, PR #8), 005 (Python package, PR #7),
-  005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11).
+  005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11),
+  007 (user documentation, PR #12).
 - Task 006 merged:
   helper `adbc_driver_redshift.iam` with `build_uri` and
   `fetch_{serverless,cluster}_credentials` (injectable clients, offline
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Task 007 (user documentation): draft PR #12 on `task/007-user-documentation`;
-  user guide and approved OSS/shared-auth roadmap documented; revised-head
-  CI and independent review pending.
-- Tasks 008 (live qualification) and 009 (publication) are not authorized;
-  both await separate human authorization.
+- Task008a offline isolated-resource preparation is in progress
+  ([PR #13](https://github.com/vahid110/arrow-adbc/pull/13)). The legacy
+  shared-target dispatch is retired; structural admission and installed-artifact
+  preflight/rehearsal are offline only. See the
+  [qualification contract](../../c/driver/postgresql/REDSHIFT.md#isolated-qualification-preparation-task008a).
+- External host provisioning access is verified through 2027-12-31T23:00:00Z;
+  earlier scoped denials are historical. This worker/coordinator stay offline.
+  Actual Task008 remains blocked by dedicated provisioned resources, independently
+  verified manifest/usage/cleanup admission and a reviewed exact-head live runner.
+  No dedicated resources or live qualification exist yet. Task009 publication
+  remains paused.
 - Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
   `feature/pgwire-core-redshift`.
 
 ## Known issues
 
-- Live Redshift job cannot assume the `adbc-redshift-ci` OIDC role (run
-  38563931739); the next live batch is blocked until the role trust is checked.
-  The next live batch must run
+- Historical shared-target live attempt could not assume `adbc-redshift-ci`
+  (run 38563931739). This failure is retained as evidence, not a current role
+  repair instruction.
+  This does not authorize shared-resource reuse. A future isolated batch must run
   `RedshiftSmokeTest.ReplaceIngestRejectsCollidingIdentifiersBeforeDrop`; the
   Redshift replace preflight is not yet live-qualified.
 - `Integration` and other unrelated Apache workflows are disabled
   in this fork.
 
-## Live Redshift log
+## Historical live Redshift log
 
 Workgroup `odbcpp-redshift-pilot` (eu-north-1, account 385207570137), 4 RPU,
-shared with ODBCPP.
+shared with ODBCPP at the time; protected from current ADBC access.
 
 | Date | Run | Head | Purpose | Result | Est. cost (USD) |
 |---|---|---|---|---|---|

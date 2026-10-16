@@ -59,7 +59,7 @@ on:
         description: Run PostgreSQL and Redshift artifact tests without AWS or live Redshift
         required: false
         type: boolean
-        default: false
+        default: true
   pull_request:
     branches:
       - feature/pgwire-core-redshift
@@ -76,9 +76,8 @@ on:
       - ".github/workflows/pgwire-postgresql.yml"
 
 concurrency:
-  group: pgwire-${{ inputs.copy_fixture_selftest && 'copy-selftest' || inputs.postgresql_only && 'postgresql-only' || (inputs.copy_probe || inputs.copy_csv_semantics_probe) && 'copy-dispatch' || inputs.credential_probe && 'credential-probe' || github.event_name == 'workflow_dispatch' && 'redshift-live' || 'postgresql' }}-${{ github.ref }}
-  # A source push must not cancel a live run before its AWS ingress cleanup.
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || inputs.copy_fixture_selftest || inputs.postgresql_only || (inputs.credential_probe && !inputs.copy_probe && !inputs.copy_csv_semantics_probe) }}
+  group: pgwire-offline-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -99,18 +98,15 @@ jobs:
           bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
           bash .github/scripts/test-pgwire-redshift-ingress.sh
 
-  redshift-credential-probe:
-    name: Redshift OIDC credential/COPY fixture (manual only)
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.copy_fixture_selftest && !inputs.postgresql_only && (inputs.credential_probe || inputs.copy_probe || inputs.copy_csv_semantics_probe) }}
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/pgwire-redshift-copy.yml  # zizmor: ignore[self-repository]
-    with:
-      copy: ${{ inputs.copy_probe }}
-      csv_semantics: ${{ inputs.copy_csv_semantics_probe }}
-    secrets:
-      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  retired-live-request:
+    name: Reject retired Redshift dispatch paths (no AWS)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.benchmark || inputs.cancel_test || inputs.package_run_id != '' || inputs.credential_probe || inputs.copy_probe || inputs.copy_csv_semantics_probe || (!inputs.postgresql_only && !inputs.copy_fixture_selftest)) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed
+        run: |
+          echo '::error::Legacy Redshift dispatch is retired. Dedicated admission and external attestation are unavailable; Task008a is offline only.'
+          exit 1
 
   cpp-postgresql:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
@@ -303,185 +299,3 @@ jobs:
           if test -f "$RUNNER_TEMP/pgdata/postmaster.pid"; then
             pg_ctl -D "$RUNNER_TEMP/pgdata" stop -m immediate
           fi
-
-  cpp-redshift:
-    name: C++ / Redshift Serverless
-    # Keep billed Redshift compute opt-in. Pushes still test the Redshift
-    # artifact and installed driver against PostgreSQL on every platform.
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.postgresql_only && !inputs.copy_fixture_selftest && !inputs.credential_probe && !inputs.copy_probe && !inputs.copy_csv_semantics_probe }}
-    needs: [cpp-postgresql, cpp-macos]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-
-    env:
-      AWS_REGION: eu-north-1
-      REDSHIFT_SECURITY_GROUP_ID: sg-06227a706295e3f05
-      REDSHIFT_WORKGROUP: odbcpp-redshift-pilot
-      REDSHIFT_DBNAME: odbcpp_pilot
-      REDSHIFT_HOST: odbcpp-redshift-pilot.385207570137.eu-north-1.redshift-serverless.amazonaws.com
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes build-essential ca-certificates cmake jq libpq-dev ninja-build pkg-config
-
-      - name: Configure
-        run: >-
-          cmake -S c -B build/pgwire-ci -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DADBC_BUILD_TESTS=ON
-          -DADBC_DRIVER_POSTGRESQL=ON
-          -DADBC_DRIVER_MANAGER=ON
-          -DADBC_DRIVER_SQLITE=OFF
-          -DADBC_DRIVER_FLIGHTSQL=OFF
-          -DADBC_USE_ASAN=OFF
-          -DADBC_USE_UBSAN=OFF
-
-      - name: Build Redshift tests
-        run: cmake --build build/pgwire-ci --parallel 4
-
-      - name: Package and relocate Redshift client artifact
-        run: |
-          cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
-          tar -C "$RUNNER_TEMP/pgwire-prefix" -czf "$RUNNER_TEMP/pgwire-live.tar.gz" .
-          mkdir "$RUNNER_TEMP/pgwire-relocated"
-          tar -C "$RUNNER_TEMP/pgwire-relocated" -xzf "$RUNNER_TEMP/pgwire-live.tar.gz"
-          test -f "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
-          cc -std=c11 -Wall -Wextra -Werror \
-            -I "$RUNNER_TEMP/pgwire-relocated/include" \
-            c/driver/pgwire/redshift_install_smoke.c \
-            -L "$RUNNER_TEMP/pgwire-relocated/lib" \
-            -Wl,-rpath,"$RUNNER_TEMP/pgwire-relocated/lib" \
-            -ladbc_driver_manager \
-            -o "$RUNNER_TEMP/redshift-install-smoke"
-
-      - name: Prepare downloaded Release archive (manual runs only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_run_id != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
-        run: |
-          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
-          package_run="$(gh run view "$PACKAGE_RUN_ID" -R "$GITHUB_REPOSITORY" \
-            --json name,conclusion,headSha)"
-          test "$(jq -r '.name' <<< "$package_run")" = 'PgWire Development Package'
-          test "$(jq -r '.conclusion' <<< "$package_run")" = 'success'
-          test "$(jq -r '.headSha' <<< "$package_run")" = "$GITHUB_SHA"
-          archive_dir="$RUNNER_TEMP/pgwire-release-download"
-          mkdir "$archive_dir"
-          gh run download "$PACKAGE_RUN_ID" -R "$GITHUB_REPOSITORY" \
-            -n adbc-redshift-dev-ubuntu24-x86_64 -D "$archive_dir"
-          (cd "$archive_dir" && sha256sum -c ./*.sha256)
-          archive="$archive_dir/adbc-redshift-dev-ubuntu24-x86_64-${GITHUB_SHA}.tar.gz"
-          test -f "$archive"
-          mkdir "$RUNNER_TEMP/pgwire-release-extracted"
-          tar -C "$RUNNER_TEMP/pgwire-release-extracted" -xzf "$archive"
-          test -f "$RUNNER_TEMP/pgwire-release-extracted/LICENSE.txt"
-          test -f "$RUNNER_TEMP/pgwire-release-extracted/NOTICE.txt"
-          test -f "$RUNNER_TEMP/pgwire-release-extracted/lib/libadbc_driver_redshift.so"
-          cc -std=c11 -Wall -Wextra -Werror \
-            -I "$RUNNER_TEMP/pgwire-release-extracted/include" \
-            c/driver/pgwire/redshift_install_smoke.c \
-            -L "$RUNNER_TEMP/pgwire-release-extracted/lib" \
-            -Wl,-rpath,"$RUNNER_TEMP/pgwire-release-extracted/lib" \
-            -ladbc_driver_manager \
-            -o "$RUNNER_TEMP/redshift-release-smoke"
-
-      - name: Configure temporary AWS credentials
-        id: aws-credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          # Not a secret; the role trusts only feature/pgwire-core-redshift.
-          role-to-assume: arn:aws:iam::385207570137:role/adbc-redshift-ci
-
-      - name: Fetch temporary Redshift database credentials
-        run: |
-          set +x
-          credentials="$(aws redshift-serverless get-credentials \
-            --workgroup-name "$REDSHIFT_WORKGROUP" --db-name "$REDSHIFT_DBNAME" \
-            --duration-seconds 3600 --output json)"
-          password="$(jq -er '.dbPassword | select(type == "string" and length > 0)' <<< "$credentials")"
-          echo "::add-mask::$password"
-          user="$(jq -er '.dbUser | select(type == "string" and length > 0)' <<< "$credentials")"
-          unset credentials
-          encoded_password="$(jq -rn --arg value "$password" '$value | @uri')"
-          echo "::add-mask::$encoded_password"
-          encoded_user="$(jq -rn --arg value "$user" '$value | @uri')"
-          uri="postgresql://${encoded_user}:${encoded_password}@${REDSHIFT_HOST}:5439/${REDSHIFT_DBNAME}?sslmode=require"
-          echo "::add-mask::$uri"
-          if [[ "$uri" == *$'\n'* ]]; then
-            echo '::error::Redshift credentials contain a newline.'
-            exit 1
-          fi
-          echo "ADBC_REDSHIFT_TEST_URI=$uri" >> "$GITHUB_ENV"
-          echo "Fetched temporary credentials for database user $user."
-
-      - name: Resolve runner address
-        id: runner-address
-        run: |
-          runner_ip="$(curl --fail --silent --show-error --retry 3 https://checkip.amazonaws.com | tr -d '[:space:]')"
-          python3 -c 'import ipaddress,sys; address=ipaddress.ip_address(sys.argv[1]); assert address.version == 4' "$runner_ip"
-          echo "::add-mask::$runner_ip"
-          echo "cidr=$runner_ip/32" >> "$GITHUB_OUTPUT"
-
-      - name: Open temporary Redshift ingress
-        id: ingress
-        env:
-          RUNNER_CIDR: ${{ steps.runner-address.outputs.cidr }}
-        run: bash .github/scripts/pgwire-redshift-ingress.sh open
-
-      - name: Run live Redshift tests
-        env:
-          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
-        run: >-
-          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
-          --gtest_filter='RedshiftSmokeTest.*'
-
-      - name: Benchmark parameterized inserts (manual runs only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
-        env:
-          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
-          ADBC_REDSHIFT_BENCHMARK: "1"
-        run: >-
-          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
-          --gtest_filter='RedshiftBenchmarkTest.*'
-
-      - name: Qualify Redshift query cancellation (manual runs only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.cancel_test }}
-        env:
-          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
-          ADBC_REDSHIFT_CANCEL_TEST: "1"
-        run: >-
-          build/pgwire-ci/driver/postgresql/adbc-driver-postgresql-test
-          --gtest_filter='RedshiftCancelTest.*'
-
-      - name: Connect through relocated Redshift driver manager
-        env:
-          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
-        run: >-
-          "$RUNNER_TEMP/redshift-install-smoke"
-          "$RUNNER_TEMP/pgwire-relocated/lib/libadbc_driver_redshift.so"
-          "$ADBC_REDSHIFT_TEST_URI"
-
-      - name: Connect through downloaded Release archive (manual runs only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_run_id != '' }}
-        env:
-          ADBC_REDSHIFT_TEST_URI: ${{ env.ADBC_REDSHIFT_TEST_URI }}
-        run: >-
-          "$RUNNER_TEMP/redshift-release-smoke"
-          "$RUNNER_TEMP/pgwire-release-extracted/lib/libadbc_driver_redshift.so"
-          "$ADBC_REDSHIFT_TEST_URI"
-
-      - name: Close temporary Redshift ingress
-        if: ${{ always() && steps.aws-credentials.outcome == 'success' }}
-        run: bash .github/scripts/pgwire-redshift-ingress.sh cleanup
