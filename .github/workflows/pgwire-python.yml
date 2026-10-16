@@ -99,6 +99,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Trust the exact runner checkout in this container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Build the Redshift C driver
         run: |
           cmake -S c -B build/pgwire-python -G Ninja \
