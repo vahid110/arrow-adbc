@@ -33,7 +33,8 @@ Current state only; history is in git and PR descriptions.
   tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
   and `python/adbc_driver_redshift/README.md`; offline tests only, live
   IAM check deferred to next authorized batch.
-- Task008a offline isolated-resource preparation is in progress. The legacy
+- Task008a offline isolated-resource preparation is in progress
+  ([PR #13](https://github.com/vahid110/arrow-adbc/pull/13)). The legacy
   shared-target dispatch is retired; structural admission and installed-artifact
   preflight/rehearsal are offline only. See the
   [qualification contract](../../c/driver/postgresql/REDSHIFT.md#isolated-qualification-preparation-task008a).
