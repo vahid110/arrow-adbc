@@ -55,6 +55,13 @@ required, each SQL statement has a 10-second service/driver limit, and a new dai
 total host lifecycle at most 60 minutes, plus bounded teardown observation.
 Incremental target is USD 5, one batch, paid retries zero.
 
+`CreateWorkgroup` sends `extraComputeForAutomaticOptimization=false` and omits
+`pricePerformanceTarget`: the service rejects both fields together, even when
+their values are false/disabled. The [AWS example](https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_CreateWorkgroup.html#API_CreateWorkgroup_Examples)
+omits the pricing target and returns `DISABLED`. Actual readbacks must still
+report `pricePerformanceTarget.status=DISABLED`, extra compute false and base/max
+4; absent or enabled controls fail closed. No fallback or retry is authorized.
+
 IAM isolates ingress to the exact new SG. EC2's request-tag condition alone does
 not guarantee that all callers tag rules; the runner always tags, checks the exact
 returned rule, independently describes it, revokes only its rule ID and verifies
@@ -74,6 +81,9 @@ Data API and tears down dedicated resources even when CI fails.
 Run only after the reviewed Task008c head is merged and its applicable CI is green.
 The worker and reviewer must stay offline. Use only the already authorized host
 profile; do not modify global profiles, the OIDC provider, VPC or subnet settings.
+The host attempt/receipt for failed run `38916730017` remains spent evidence;
+this offline API repair does not authorize another host invocation. The
+coordinator must resolve further authority with the human before a new attempt.
 
 1. Generate the IAM baseline with AWS Autopilot from the actual SDK sources
    `ci/scripts/pgwire_qualification_live.py` and the installed wheel's

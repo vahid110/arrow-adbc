@@ -48,6 +48,10 @@ class NotFound(Exception):
     pass
 
 
+class ValidationException(Exception):
+    pass
+
+
 def admission():
     return {
         "review": {
@@ -322,6 +326,13 @@ class AWS:
 
     def create_workgroup(self, **kwargs):
         self.event("create-workgroup")
+        # Captured service constraint: presence conflicts even for False/DISABLED.
+        if (
+            "pricePerformanceTarget" in kwargs
+            and "extraComputeForAutomaticOptimization" in kwargs
+        ):
+            raise ValidationException("conflicting scaling and pricing controls")
+        self.workgroup_request = copy.deepcopy(kwargs)
         self.wg_exists = True
         return self.get_workgroup()
 
@@ -583,7 +594,28 @@ class LiveTest(unittest.TestCase):
 
     def test_resource_control_and_association_mismatch_never_claims(self):
         changes = [
+            ("get_workgroup", "workgroup", "baseCapacity", 8),
             ("get_workgroup", "workgroup", "maxCapacity", 8),
+            (
+                "get_workgroup",
+                "workgroup",
+                "extraComputeForAutomaticOptimization",
+                True,
+            ),
+            (
+                "get_workgroup",
+                "workgroup",
+                "extraComputeForAutomaticOptimization",
+                None,
+            ),
+            ("get_workgroup", "workgroup", "pricePerformanceTarget", None),
+            ("get_workgroup", "workgroup", "pricePerformanceTarget", {}),
+            (
+                "get_workgroup",
+                "workgroup",
+                "pricePerformanceTarget",
+                {"status": "ENABLED"},
+            ),
             (
                 "get_workgroup",
                 "workgroup",
@@ -598,7 +630,10 @@ class LiveTest(unittest.TestCase):
 
             def mutated(*args, **kwargs):
                 result = original(*args, **kwargs)
-                result[key][field] = value
+                if value is None:
+                    result[key].pop(field)
+                else:
+                    result[key][field] = value
                 return result
 
             with patch.object(self.sdk, method, side_effect=mutated):
@@ -1303,6 +1338,12 @@ class HostTest(unittest.TestCase):
                     policy_sha256=live.file_sha(template),
                 )
             self.assertEqual(result["external_teardown"], "verified")
+            self.assertNotIn("pricePerformanceTarget", sdk.workgroup_request)
+            self.assertIs(
+                sdk.workgroup_request["extraComputeForAutomaticOptimization"], False
+            )
+            self.assertEqual(sdk.workgroup_request["baseCapacity"], 4)
+            self.assertEqual(sdk.workgroup_request["maxCapacity"], 4)
             self.assertTrue(result["independent_observation"]["fixtures_absent"])
             self.assertEqual(sdk.events.count("host-sql"), 3)
             self.assertEqual(sdk.events.count("read-initial-policy"), 2)
@@ -1324,6 +1365,74 @@ class HostTest(unittest.TestCase):
                 receipt["created"]["namespace"], a["resources"]["namespace_id"]
             )
             self.assertNotIn("PRIVATE", json.dumps(receipt))
+
+    def test_conflicting_workgroup_controls_cleanup_without_admission_or_retry(self):
+        a = admission()
+        sdk = AWS(a)
+        sdk.ns_exists = sdk.wg_exists = sdk.sg_exists = False
+        sdk.get_caller_identity = lambda: {
+            "Account": live.ACCOUNT,
+            "Arn": f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host",
+        }
+        create = sdk.create_workgroup
+
+        def conflicting(**kwargs):
+            kwargs["pricePerformanceTarget"] = {"status": "DISABLED"}
+            return create(**kwargs)
+
+        sdk.create_workgroup = conflicting
+        github = Mock()
+        github.get.return_value = {"status": "completed", "conclusion": "cancelled"}
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            patch.object(
+                socket, "socket", side_effect=AssertionError("NETWORK FORBIDDEN")
+            ),
+        ):
+            host = Host(
+                {
+                    k: sdk
+                    for k in (
+                        "sts",
+                        "ssm",
+                        "redshift-serverless",
+                        "redshift-data",
+                        "ec2",
+                        "iam",
+                    )
+                },
+                github,
+                Path(temp) / "receipt.json",
+                clock=lambda: NOW,
+                pause=lambda _: None,
+            )
+            with (
+                patch.object(host, "preflight", return_value={}),
+                self.assertRaises(Rejected),
+            ):
+                host.run(preflight_id=1, run=RUN, source=SOURCE, nonce=a["nonce"])
+            self.assertEqual(sdk.events.count("create-workgroup"), 1)
+            self.assertFalse(
+                set(sdk.events)
+                & {
+                    "create-usage",
+                    "install-runtime-policy",
+                    "admission",
+                    "claim",
+                    "credentials",
+                    "host-sql",
+                }
+            )
+            self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
+            self.assertEqual(host.state["external_teardown"], "verified")
+            self.assertNotIn("workgroup", host.state["created"])
+            self.assertIn("delete-namespace", sdk.events)
+            self.assertIn("delete-group", sdk.events)
+            original_receipt = host.path.read_bytes()
+            with self.assertRaisesRegex(Rejected, "existing host receipt"):
+                host.run(preflight_id=1, run=RUN, source=SOURCE, nonce=a["nonce"])
+            self.assertEqual(host.path.read_bytes(), original_receipt)
+            self.assertEqual(sdk.events.count("create-workgroup"), 1)
 
     def test_partial_create_failure_still_deletes_owned_namespace_and_no_admission(
         self,

@@ -434,7 +434,6 @@ class Host:
                 enhancedVpcRouting=False,
                 extraComputeForAutomaticOptimization=False,
                 ipAddressType="ipv4",
-                pricePerformanceTarget={"status": "DISABLED"},
                 port=5439,
                 publiclyAccessible=True,
                 securityGroupIds=[group],
