@@ -23,6 +23,9 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-aws-safety.yml"
+      - ".github/workflows/pgwire-postgresql.yml"
+      - "ci/scripts/pgwire_qualification*.py"
+      - "ci/scripts/test_pgwire_qualification.py"
       - ".github/scripts/pgwire-redshift-ingress.sh"
       - ".github/scripts/test-pgwire-redshift-ingress.sh"
       - ".github/scripts/pgwire-redshift-copy-fixture.sh"
@@ -32,6 +35,9 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-aws-safety.yml"
+      - ".github/workflows/pgwire-postgresql.yml"
+      - "ci/scripts/pgwire_qualification*.py"
+      - "ci/scripts/test_pgwire_qualification.py"
       - ".github/scripts/pgwire-redshift-ingress.sh"
       - ".github/scripts/test-pgwire-redshift-ingress.sh"
       - ".github/scripts/pgwire-redshift-copy-fixture.sh"
@@ -71,3 +77,5 @@ jobs:
         shell: bash
         run: |
           bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
+      - name: Test isolated qualification contract and runner without AWS
+        run: python3 -m unittest discover -s ci/scripts -p test_pgwire_qualification.py -v

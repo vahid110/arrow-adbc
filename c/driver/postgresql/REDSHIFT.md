@@ -236,3 +236,104 @@ CA bundle).  The driver delegates TLS to libpq.
 - [Using IAM authentication to generate database user credentials](https://docs.aws.amazon.com/redshift/latest/mgmt/generating-user-credentials.html)
 - [GetCredentials API](https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html)
 - [GetClusterCredentials API](https://docs.aws.amazon.com/redshift/latest/APIReference/API_GetClusterCredentials.html)
+
+## Isolated qualification preparation (Task008a)
+
+Task007 is complete (PR #12). Task008a prepares offline controls only. Actual
+Task008 remains blocked by an authorized provisioning identity/access and verified
+dedicated admission. Task009 publication is paused. Nothing here establishes AWS
+verification, provisioned resources, live qualification or an absolute bill cap.
+
+The legacy `cpp-redshift` and credential/COPY handoff in `PgWire Drivers` are
+removed. Default dispatch runs PostgreSQL/artifact regression; retired live flags
+fail without OIDC credentials or cloud actions. PR/push runs keep the original
+PostgreSQL, installed-artifact and cleanup-mock gates. Do not dispatch live work.
+
+### Manifest and external evidence
+
+`ci/scripts/pgwire_qualification_manifest.py` defines a closed, versioned schema;
+unknown/missing fields, duplicate JSON keys and non-finite values fail. No real
+manifest is supplied: provisioned UUIDs, SG, endpoint observations and usage-limit
+IDs do not exist yet. Synthetic test claims are explicitly `offline-synthetic`.
+They never grant admission. Intended names/account/region are fixed to the human
+plan: `adbc-qualification-20261016`, `adbc_qualification`,
+`adbc-isolated-qualification-ci`, `385207570137`, `eu-north-1`.
+
+Claims include exact workgroup/namespace ARN/UUID association, dedicated SG,
+endpoint/port/database, OIDC role/provider/audience/merged-ref trust, policy/trust
+hashes and the exact authorization resource list. Wildcards, shared-role fallback
+and protected ODBCPP identifiers anywhere in the manifest fail. A structurally
+correct ARN or attester identity is still only a claim.
+
+`manifest_digest` is SHA256 of canonical sorted compact JSON excluding only the
+`evidence` object. Four mandatory evidence references (provisioning, usage,
+cleanup, source/artifacts) bind that digest, observation bytes SHA256, independent
+review receipt SHA256, identified external attester, observation time and expiry.
+Observations must be at most 15 minutes old and remain valid through teardown.
+A future trusted external verifier must independently retrieve the authoritative
+observations and review receipts, authenticate the attester through a separately
+reviewed trust decision, and compare every identity/control to that exact digest.
+This is deliberately **not implemented** by accepting a boolean, JSON receipt,
+environment variable, arbitrary verifier callback or general signing service.
+Both `admit_live` and `run_live` always reject while that boundary is unavailable.
+
+The external observation bundle must establish: actual workgroup/namespace/SG
+association and TLS hostname; effective dedicated IAM policy/trust and absence of
+shared authorization; usage-limit identity/scope/action; capacity controls;
+authorized provisioner and cleanup ownership; exact merged source, independent
+review/current-head CI receipts and successful artifact workflow run provenance.
+Structural validation and local checksums alone cannot prove those facts.
+
+### Installed artifacts and coverage
+
+`pgwire_qualification.py` compares installed C archive and wheel bytes/links to
+checksum-bound artifacts and reviewed installed inventories before any credential
+or ingress step. Both artifacts must have the same merged source SHA, identified
+build runs/workflows and qualification-run binding. Wheel package/module/library
+origins must match its installation prefix, with no source/fallback library or
+extra package files. `pgwire_qualification_probe.py` is a future isolated
+interpreter load-only probe of `AdbcDriverRedshiftInit`; rehearsal uses fake
+reports and does not launch it. Trusted CA bytes are pinned; future connections
+must use `verify-full`, that CA and the exact attested hostname, without fallback.
+
+| Surface | Prepared coverage | Remaining before live qualification |
+|---|---|---|
+| Installed C archive | Byte/link inventory, load-only probe contract; existing smoke client query/version path | Wire actual isolated probe and bounded client execution; move secret URI out of argv and sanitize diagnostics |
+| Installed Python wheel | Inventory and origin/entrypoint checks; fake-tested DBAPI query, bound parameter, GetInfo and two-row fixture-ingest payload | Invoke through the verified installed interpreter with real Arrow fixture and finite cancellation/close |
+| Current IAM helper | Existing Serverless helper with fake GetCredentials client, 900-second credentials and verify-full URI tested offline | Call only after trusted admission; no new auth method, client/profile fallback or refresh framework |
+| C vs Python | C scalar query; Python query/params/metadata/ingest payload | C parameters/ingest are **not covered** by this thin client; explicitly qualify or record this gap in the live batch |
+| Cleanup | Rehearsal failure/cancellation/unknown-receipt paths; existing exact ingress lost-reply mocks retained | Independent authoritative cleanup confirmation and external teardown receipt |
+
+The small follow-up is trusted evidence admission plus real installed-process/IAM/
+ingress adapters with bounded termination, private credential transport and the
+coverage gaps above. This preparation deliberately supplies no live workflow or
+adapter. It cannot be enabled by a dispatch input. No broad C client expansion,
+provisioning/IAM implementation or driver authentication refactor is included.
+
+### Finite execution and cleanup handoff
+
+Admission requires base/max 4 RPUs, optimization/growth disabled, a dedicated daily
+4 RPU-hour usage limit with `deactivate` already present, USD5 incremental ceiling,
+one 15-minute query window, at most 60 minutes through compute/teardown, and no
+automatic paid retry. These controls are necessary, not an absolute total-bill cap
+(storage, secrets/network and enforcement delay can add cost).
+
+Before admission an identified authorized external provisioner and cleanup owner
+must accept the teardown deadline. On any failure/cancellation, close owned
+sessions, remove only run-owned fixture objects, and revoke only exact owned IPv4
+/32 rule IDs (including lost-reply recovery using the existing ingress helper).
+Independently confirm those receipts bound to the manifest digest and run ID.
+Then hand teardown of only the new workgroup/namespace/ancillaries to the authorized
+external provisioner. No resource teardown is implemented here. Unknown cleanup
+is a blocking failed result; the rehearsal reports external teardown pending and
+never reports live success or permits another target. Retain sanitized stage,
+exit/cancellation and ownership evidence; never log credentials/URIs or put them
+in argv/process diagnostics.
+
+Offline checks (stdlib only, sockets/processes disabled in qualification tests):
+
+```sh
+python3 -m unittest discover -s ci/scripts -p test_pgwire_qualification.py -v
+bash .github/scripts/test-pgwire-redshift-ingress.sh
+bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
+```
