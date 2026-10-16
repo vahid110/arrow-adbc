@@ -23,8 +23,11 @@ import hashlib
 import importlib.util
 import io
 import itertools
+import marshal
 import socket
+import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -432,6 +435,78 @@ class QualificationTest(unittest.TestCase):
                     self.assertNotIn(
                         "temporary-serverless-IAM-helper", self.adapter.events
                     )
+
+    def test_unverified_bytecode_rejected_before_probe_or_credentials(self):
+        for module, flags in itertools.product(("__init__", "iam"), (0, 1)):
+            with (
+                self.subTest(module=module, flags=flags),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                paths = self.artifacts(temp)
+                package = paths["python_wheel"]["root"] / "adbc_driver_redshift"
+                source = package / (module + ".py")
+                original = source.read_bytes()
+                # Actual timestamp/size and unchecked-hash pyc headers. Neither
+                # kind may execute code outside the checksum-bound wheel bytes.
+                header = importlib.util.MAGIC_NUMBER + struct.pack("<I", flags)
+                header += (
+                    struct.pack("<II", int(source.stat().st_mtime), len(original))
+                    if flags == 0
+                    else b"x" * 8
+                )
+                cached = (
+                    package
+                    / "__pycache__"
+                    / f"{module}.{sys.implementation.cache_tag}.pyc"
+                )
+                cached.parent.mkdir()
+                cached.write_bytes(
+                    header
+                    + marshal.dumps(
+                        compile("value = 'unverified'", str(source), "exec")
+                    )
+                )
+                with self.assertRaisesRegex(contract.Rejected, "bytecode"):
+                    self.rehearse(paths)
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(self.adapter.events, [])
+                # The load-only probe independently rejects the cache before
+                # package import, metadata lookup or native-library load.
+                import pgwire_qualification_probe as probe
+
+                with (
+                    patch.object(probe.importlib.metadata, "distribution") as metadata,
+                    patch.object(probe.ctypes, "CDLL") as loader,
+                ):
+                    with self.assertRaisesRegex(ValueError, "bytecode"):
+                        probe.probe(paths["python_wheel"]["root"], "python_wheel")
+                    metadata.assert_not_called()
+                    loader.assert_not_called()
+
+    def test_wheel_bytecode_and_legacy_pyc_are_rejected(self):
+        for cached in ("iam.pyc", "__pycache__/extra.pyc"):
+            for in_wheel in (False, True):
+                with (
+                    self.subTest(cached=cached, in_wheel=in_wheel),
+                    tempfile.TemporaryDirectory() as temp,
+                ):
+                    paths = self.artifacts(temp)
+                    name = "adbc_driver_redshift/" + cached
+                    installed = paths["python_wheel"]["root"] / name
+                    installed.parent.mkdir(exist_ok=True)
+                    installed.write_bytes(b"unverified bytecode")
+                    if in_wheel:
+                        with zipfile.ZipFile(
+                            paths["python_wheel"]["artifact"], "a"
+                        ) as archive:
+                            archive.writestr(name, installed.read_bytes())
+                        self.manifest["binding"]["python_wheel"]["sha256"] = (
+                            runner.file_sha(paths["python_wheel"]["artifact"])
+                        )
+                        bind(self.manifest)
+                    with self.assertRaisesRegex(contract.Rejected, "bytecode"):
+                        self.rehearse(paths)
+                    self.assertEqual(self.adapter.events, [])
 
     def test_probe_rejects_source_import_fallback_entrypoint(self):
         with tempfile.TemporaryDirectory() as temp:

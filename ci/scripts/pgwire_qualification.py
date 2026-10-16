@@ -70,6 +70,11 @@ def verify_installed(artifact, root, claims, *, wheel):
                     continue
                 name = _member(item.filename)
                 require(
+                    "__pycache__" not in PurePosixPath(name).parts
+                    and PurePosixPath(name).suffix not in (".pyc", ".pyo"),
+                    "wheel bytecode is not allowed",
+                )
+                require(
                     name not in tree
                     and (item.external_attr >> 16) & 0o170000 != 0o120000,
                     "duplicate member or wheel symlink",
@@ -98,12 +103,18 @@ def verify_installed(artifact, root, claims, *, wheel):
             <= tree.keys(),
             "incomplete installed package",
         )
+        # Install with --no-compile. -B prevents writing caches, but still reads
+        # them, so reject all bytecode before the future load-only probe/import.
+        package_paths = list((root / "adbc_driver_redshift").rglob("*"))
+        require(
+            not any(
+                p.name == "__pycache__" or p.suffix in (".pyc", ".pyo")
+                for p in package_paths
+            ),
+            "installed bytecode is not allowed",
+        )
         # Prevent extra source modules from shadowing the attested wheel in its root.
-        actual = {
-            str(p.relative_to(root))
-            for p in (root / "adbc_driver_redshift").rglob("*")
-            if p.is_file() and "__pycache__" not in p.parts
-        }
+        actual = {str(p.relative_to(root)) for p in package_paths if p.is_file()}
         require(
             actual == {n for n in tree if n.startswith(package)},
             "extra installed package files",

@@ -239,18 +239,19 @@ CA bundle).  The driver delegates TLS to libpq.
 
 ## Isolated qualification preparation (Task008a)
 
-Task007 is complete (PR #12). Task008a prepares offline controls only. Actual
-Task008 remains blocked by an authorized provisioning identity/access and verified
-dedicated admission. Task009 publication is paused. Nothing here establishes AWS
-verification, provisioned resources, live qualification or an absolute bill cap.
-The human-provided access recheck reports successful authentication but scoped
-denial for dedicated namespace/workgroup/usage-limit/SG creation and
-CreateRole/PutRolePolicy for `adbc-isolated-qualification-ci`. The existing
-`adbc-redshift-ci` CreateRole/boundary exception grants no isolated-resource
-permission or authority to repurpose it. The protected provisioned cluster
-`odbcpp-redshift-provisioned-pilot` and its subnet/parameter groups are also
-forbidden fallbacks. The human resolves an administrator-scoped grant or an
-authorized external provisioner; Task008a performs no AWS recheck.
+Task007 is complete (PR #12). Task008a prepares offline controls only. External
+host provisioner access is verified through 2027-12-31T23:00:00Z. Actual Task008
+still requires dedicated resources, verified manifest/usage/cleanup admission and
+a reviewed exact-head live runner; none is established by IAM availability.
+Task009 publication is paused. This worker/coordinator remain offline and must
+not use the provisioner profile. No dedicated resources or live tests exist yet.
+
+Earlier scoped denials for dedicated Serverless/SG creation and the isolated CI
+role are historical evidence, superseded as the current access blocker by the
+external provisioner validation. The old `adbc-redshift-ci` role/boundary exception
+never authorized fallback. The protected `odbcpp-redshift-provisioned-pilot`
+cluster and its subnet/parameter groups also remain forbidden fallbacks.
+Task008a performs no AWS recheck, provisioning or live qualification.
 
 The legacy `cpp-redshift` and credential/COPY handoff in `PgWire Drivers` are
 removed. Default dispatch runs PostgreSQL/artifact regression; retired live flags
@@ -299,8 +300,13 @@ checksum-bound artifacts and reviewed installed inventories before any credentia
 or ingress step. Both artifacts must have the same merged source SHA, identified
 build runs/workflows and qualification-run binding. Wheel package/module/library
 origins must match its installation prefix, with no source/fallback library or
-extra package files. `pgwire_qualification_probe.py` is a future isolated
-interpreter load-only probe of `AdbcDriverRedshiftInit`; rehearsal uses fake
+extra package files. Install with `pip --no-compile` into a cache-free prefix;
+preflight rejects `__pycache__`, legacy `.pyc`/`.pyo`, and wheel-contained bytecode.
+The future `python -I -B` probe rechecks for caches before importing and forbids
+an external bytecode-cache prefix. `-B` prevents writes but does not suppress
+reads, so it is not sufficient by itself. Keep the verified installation
+unchanged between preflight and probe. `pgwire_qualification_probe.py` is a future
+isolated interpreter load-only probe of `AdbcDriverRedshiftInit`; rehearsal uses fake
 reports and does not launch it. Trusted CA bytes are pinned; future connections
 must use `verify-full`, that CA and the exact attested hostname, without fallback.
 

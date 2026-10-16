@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Future load-only subprocess probe: python -I SCRIPT ROOT KIND.
+"""Future load-only subprocess probe: python -I -B SCRIPT ROOT KIND.
 
 Only load after external admission and archive preflight. This probe does not
 connect, obtain credentials or accept a URI. Task008a tests use fake reports.
@@ -31,6 +31,12 @@ from pathlib import Path
 def probe(root, kind):
     root = Path(root).resolve(strict=True)
     if kind == "python_wheel":
+        # Recheck before importing: -B only prevents writes, not cache reads.
+        if any(
+            p.name == "__pycache__" or p.suffix in (".pyc", ".pyo")
+            for p in (root / "adbc_driver_redshift").rglob("*")
+        ):
+            raise ValueError("cached bytecode is not allowed")
         import adbc_driver_redshift as package
 
         distribution = importlib.metadata.distribution("adbc-driver-redshift")
@@ -61,8 +67,13 @@ def probe(root, kind):
 
 if __name__ == "__main__":
     try:
-        if not sys.flags.isolated or len(sys.argv) != 3:
-            raise ValueError("isolated interpreter required")
+        if (
+            not sys.flags.isolated
+            or not sys.flags.dont_write_bytecode
+            or sys.pycache_prefix is not None
+            or len(sys.argv) != 3
+        ):
+            raise ValueError("isolated cache-free interpreter required")
         print(json.dumps(probe(sys.argv[1], sys.argv[2])))
     except Exception:
         sys.exit("Installed artifact load-only probe failed.")
