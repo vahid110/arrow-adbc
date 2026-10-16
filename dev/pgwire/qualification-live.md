@@ -82,10 +82,26 @@ profile; do not modify global profiles, the OIDC provider, VPC or subnet setting
    Prepare and independently review the runtime template with placeholders
    `EXACT_OWNED_WG`, `EXACT_OWNED_NS`, `EXACT_OWNED_SG`, `EXACT_RUN_ID`,
    `EXACT_CUTOFF`, and the exact ownership nonce. Every Allow expires at cutoff.
-2. Confirm exact dedicated namespace/workgroup/SG/role names are absent. Create
-   only the new CI role, tagged `adbc-qualification-nonce=<64-hex nonce>`, with
-   OIDC audience `sts.amazonaws.com` and subject
-   `repo:vahid110/arrow-adbc:ref:refs/heads/feature/pgwire-core-redshift`.
+2. Before dispatch, the coordinator freshly authenticates repository metadata:
+   `GET /repos/vahid110/arrow-adbc` must return owner ID `5770674` and repository
+   ID `1363017696`; `GET /repos/vahid110/arrow-adbc/actions/oidc/customization/sub`
+   must return `use_default=true`, `use_immutable_subject=true`, and
+   `sub_claim_prefix=repo:vahid110@5770674/arrow-adbc@1363017696`.
+   These are host checks, with no additional CI permissions. GitHub documents
+   this [immutable subject format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims).
+   Confirm exact dedicated namespace/workgroup/SG names are absent. Create only
+   the new CI role if absent, tagged `adbc-qualification-nonce=<64-hex nonce>`,
+   with the account's exact GitHub OIDC provider principal, action
+   `sts:AssumeRoleWithWebIdentity`, and `StringEquals` audience
+   `sts.amazonaws.com` and subject
+   `repo:vahid110@5770674/arrow-adbc@1363017696:ref:refs/heads/feature/pgwire-core-redshift`.
+   `OIDC_SUBJECT` pins this exact value; legacy subjects, alternate IDs/refs,
+   wildcard/OR subjects and `StringLike` are rejected.
+   For the owned role retained after run `38912745155`, only the coordinator
+   applies the independently reviewed exact trust via `UpdateAssumeRolePolicy`.
+   Fresh `GetRole` must match the full trust, ARN and ownership tag before
+   dispatch. Do not change repository OIDC settings or the global provider, and
+   do not capture/log JWTs or introduce another authentication method.
    Its sole inline policy `adbc-qualification-initial` has two Allow statements:
    `sts:GetCallerIdentity` on `"*"` (Sid `Identity`) and `ssm:GetParameter`
    on the exact admission ARN (Sid `ReadSingleAdmission`), with no other actions

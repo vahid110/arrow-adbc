@@ -43,8 +43,12 @@ Current state only; history is in git and PR descriptions.
   implementation, **not a completed Redshift live qualification**. Dedicated
   resources, exact-head review/green CI, host issuance, one successful batch and
   independent cleanup/secret/IAM teardown observations remain required.
-  The successor repair separates load-only installed evidence from the mandatory
-  admitted execution window, with real prepare-to-consumer regressions.
+  PR #16 repaired load-only installed evidence separately from the mandatory
+  admitted execution window, with real prepare-to-consumer regressions. The next
+  dispatch passed installed preflight but failed OIDC: the retained role and host
+  validator pinned a legacy subject while this repository issues immutable IDs.
+  The successor pins the exact immutable subject; independently reviewed host-only
+  trust update/readback and a new exact-head dispatch remain required.
   AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
@@ -75,10 +79,12 @@ shared with ODBCPP at the time; protected from current ADBC access.
 
 ## Isolated preflight log
 
-This failure occurred before preflight publication/OIDC. No dedicated Redshift
-resources, admission, claim or paid batch were started; the paid batch remains
-unspent. The original failed run is retained, not rerun or relabeled as success.
+Neither failure started dedicated Redshift resources, admission, claim or a paid
+batch; the paid batch remains unspent. Both original failed runs are retained.
+Three failed revisions were escalated to the human/coordinator; failure counters
+and finite budgets are preserved.
 
 | Date | Run | Head | Result | Est. incremental cost (USD) |
 |---|---|---|---|---|
 | 2026-10-16 | [38908550615](https://github.com/vahid110/arrow-adbc/actions/runs/38908550615) | `596aec4a23fd3c6fd134f5e569b902cd3134d28f` | failed before OIDC: load-only projection required an absent execution window; offline reproduction and successor repair | 0.00 |
+| 2026-10-16 | [38912745155](https://github.com/vahid110/arrow-adbc/actions/runs/38912745155) | `9f3bbaa770386b165f8e0cc9e1de4a4cdae9109c` | installed preflight passed (artifact `12051211152`); OIDC denied because dedicated trust used a legacy subject instead of authenticated immutable owner/repository IDs | 0.00 |
