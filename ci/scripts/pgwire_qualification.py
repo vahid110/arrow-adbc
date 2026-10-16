@@ -15,10 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Installed-artifact preflight and offline-only Task008a rehearsal.
+"""Installed-artifact checks, DBAPI payload and offline rehearsal.
 
-No cloud SDK, process launcher, database constructor or live adapter exists here.
-The live entry point always rejects, before even an artifact is opened.
+The live entry point always rejects before artifacts, credentials or connections.
+Process primitives are in pgwire_qualification_process; no ingress adapter exists.
 """
 
 import hashlib
@@ -150,6 +150,12 @@ def verify_installed(artifact, root, claims, *, wheel):
             and "include/arrow-adbc/adbc.h" in tree,
             "incomplete installed C archive",
         )
+        actual = {
+            str(p.relative_to(root))
+            for p in root.rglob("*")
+            if p.is_file() or p.is_symlink()
+        }
+        require(actual == set(tree), "extra installed C archive files")
         library = root / "lib/libadbc_driver_redshift.so"
     require(
         digest(tree) == claims["installed_tree_sha256"], "installed inventory mismatch"
@@ -199,32 +205,76 @@ def preflight(manifest, paths):
     return libraries
 
 
-def python_coverage(connection, arrow_table, schema):
-    """Small future installed-DBAPI payload, tested with fakes only in Task008a.
+def python_coverage(connection, arrow_table, schema, *, plumbing=False):
+    """Actual DBAPI payload; caller owns process deadline and connection close.
 
-    Caller owns deadline/cancel/close. Schema is the validated run-owned fixture.
-    No URI or package import is accepted here. No broad DROP CASCADE cleanup.
+    An unsuccessful CREATE has unknown ownership: never drop a prior fixture.
+    All errors are sanitized and no raw database exception crosses this boundary.
     """
     require(
-        schema.startswith("adbc_q_") and schema[7:].isdigit(), "invalid fixture schema"
+        schema.startswith("adbc_q_") and schema[7:].isdigit() and len(schema) <= 40,
+        "invalid fixture schema",
     )
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT CAST(42 AS BIGINT)")
-        require(cursor.fetchone() == (42,), "query result mismatch")
-        cursor.execute("SELECT $1::INTEGER + 1", (41,))
-        require(cursor.fetchone() == (42,), "parameter result mismatch")
-        require(bool(connection.adbc_get_info()), "missing metadata")
-        # Only the validated run-owned schema is used. Unknown cleanup fails.
-        cursor.execute(f'CREATE SCHEMA "{schema}"')
-        try:
+    owned = False
+    attempted = False
+    failed = False
+    cleanup = "not-created"
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SET statement_timeout = 10000")
+            cursor.execute("SELECT CAST(42 AS BIGINT)")
+            require(cursor.fetchone() == (42,), "query result mismatch")
+            cursor.execute("SELECT CAST($1 AS BIGINT) + CAST(1 AS BIGINT)", (41,))
+            require(cursor.fetchone() == (42,), "parameter result mismatch")
+            info = connection.adbc_get_info()
+            require(
+                info.get("vendor_name") == ("PostgreSQL" if plumbing else "Redshift")
+                and info.get("driver_name")
+                == ("ADBC PostgreSQL Driver" if plumbing else "ADBC Redshift Driver")
+                and bool(info.get("driver_version")),
+                "metadata mismatch",
+            )
+            attempted = True
+            cursor.execute(f'CREATE SCHEMA "{schema}"')
+            owned = True
             cursor.adbc_ingest(
                 "fixture", arrow_table, mode="create", db_schema_name=schema
             )
-            cursor.execute(f'SELECT COUNT(*) FROM "{schema}"."fixture"')
-            require(cursor.fetchone() == (2,), "ingest result mismatch")
-        finally:
-            cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."fixture"')
-            cursor.execute(f'DROP SCHEMA "{schema}"')
+            cursor.adbc_ingest(
+                "fixture", arrow_table, mode="append", db_schema_name=schema
+            )
+            actual_schema = connection.adbc_get_table_schema(
+                "fixture", db_schema_filter=schema
+            )
+            require(actual_schema == arrow_table.schema, "table metadata mismatch")
+            cursor.execute(f'SELECT value FROM "{schema}"."fixture" ORDER BY value')
+            require(cursor.fetchall() == [(1,), (1,), (2,), (2,)], "ingest mismatch")
+    except BaseException:
+        failed = True
+    finally:
+        if attempted and not owned:
+            cleanup = "unknown"
+        if owned:
+            cleanup = "removed"
+            # Independent attempts: a failed DROP TABLE does not skip DROP SCHEMA.
+            for sql in (
+                f'DROP TABLE IF EXISTS "{schema}"."fixture"',
+                f'DROP SCHEMA "{schema}"',
+            ):
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute(sql)
+                except BaseException:
+                    cleanup = "unknown"
+    if failed or cleanup == "unknown":
+        raise Rejected(
+            "Python qualification failed; cleanup requires observation"
+        ) from None
+    return {
+        "coverage": True,
+        "cleanup": cleanup,
+        "mode": "postgresql-plumbing" if plumbing else "redshift",
+    }
 
 
 class OfflineAdapter:

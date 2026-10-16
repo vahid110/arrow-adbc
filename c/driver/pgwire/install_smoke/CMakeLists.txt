@@ -29,3 +29,11 @@ add_executable(adbc_redshift_manifest_smoke ../redshift_manifest_smoke.c)
 target_compile_features(adbc_redshift_manifest_smoke PRIVATE c_std_11)
 target_link_libraries(adbc_redshift_manifest_smoke
                       PRIVATE AdbcDriverManager::adbc_driver_manager_shared)
+
+# Dedicated POSIX private-pipe qualification client; portable smoke stays unchanged.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(adbc_redshift_qualification ../redshift_qualification.c)
+  target_compile_features(adbc_redshift_qualification PRIVATE c_std_11)
+  target_link_libraries(adbc_redshift_qualification
+                        PRIVATE AdbcDriverManager::adbc_driver_manager_shared)
+endif()

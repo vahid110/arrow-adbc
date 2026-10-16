@@ -35,7 +35,8 @@ not scheduled without a concrete unmet need and a new product decision.
 V1 keeps task006's boto3 IAM helper thin, caller-owned and replaceable: no native
 C++ auth framework, extra auth methods, federation/Identity Center, shared
 credential cache or background refresh. Task007 documentation is complete
-(PR #12). Prepare Task008a offline, then qualify the installed C archive and
+(PR #12). Task008a is merged (PR #13). Task008b implements the offline installed-artifact
+clients and external evidence handoff, then qualify the installed C archive and
 Python wheel including IAM only under separately
 human-authorized finite live admission. CI, offline tests and credential-API
 success do not establish installed-driver/live qualification. External provisioner
@@ -65,7 +66,8 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 005b | Portable wheels mirroring upstream's `ci/scripts/python_wheel_*` scripts: Linux x64/arm64 (manylinux, static libpq via vcpkg plus auditwheel), macOS x64/arm64 (delocate), Windows x64; wheels attached to the draft release; wheel version mapped from the `redshift-v*` tag (`SETUPTOOLS_SCM_PRETEND_VERSION`). | Wheels built for all targets and import/rejection-tested on each |
 | 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Offline implementation done (PR #11); live check deferred to a separately human-authorized qualification batch |
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
-| 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | In progress ([PR #13](https://github.com/vahid110/arrow-adbc/pull/13)); live admission stays closed pending externally verified dedicated evidence |
+| 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
+| 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Offline implementation; live remains closed without pinned external issuers, durable one-shot paid admission and dedicated observations |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Blocked: dedicated provisioned resources, verified manifest/usage/cleanup admission and reviewed exact-head live runner; then one green bounded batch |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 
