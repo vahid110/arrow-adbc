@@ -374,10 +374,10 @@ class AWS:
                                     "token.actions.githubusercontent.com:aud": (
                                         "sts.amazonaws.com"
                                     ),
-                                    "token.actions.githubusercontent.com:sub": "repo:"
-                                    + live.REPOSITORY
-                                    + ":ref:"
-                                    + live.REF,
+                                    "token.actions.githubusercontent.com:sub": (
+                                        "repo:vahid110@5770674/arrow-adbc@1363017696:"
+                                        "ref:refs/heads/feature/pgwire-core-redshift"
+                                    ),
                                 }
                             },
                         }
@@ -1053,7 +1053,7 @@ class ProvenanceTest(unittest.TestCase):
 
 
 class HostTest(unittest.TestCase):
-    def test_broad_initial_or_incomplete_inventory_rejects_before_creation(self):
+    def test_invalid_initial_role_rejects_before_creation(self):
         for failure in (
             "all-actions",
             "admission-wildcard",
@@ -1062,6 +1062,15 @@ class HostTest(unittest.TestCase):
             "managed-truncated",
             "inline-marker",
             "managed-marker",
+            "trust-legacy",
+            "trust-owner-id",
+            "trust-repository-id",
+            "trust-ref",
+            "trust-wildcard",
+            "trust-stringlike",
+            "trust-or-legacy",
+            "trust-audience",
+            "trust-principal",
         ):
             with (
                 self.subTest(failure=failure),
@@ -1080,7 +1089,48 @@ class HostTest(unittest.TestCase):
                         "adbc-provisioner/host"
                     ),
                 }
-                if failure == "all-actions":
+                if failure.startswith("trust-"):
+                    role = sdk.get_role()
+                    statement = role["Role"]["AssumeRolePolicyDocument"]["Statement"][0]
+                    condition = statement["Condition"]["StringEquals"]
+                    subject_key = "token.actions.githubusercontent.com:sub"
+                    subject = condition[subject_key]
+                    legacy_subject = (
+                        "repo:vahid110/arrow-adbc:ref:"
+                        "refs/heads/feature/pgwire-core-redshift"
+                    )
+                    if failure == "trust-legacy":
+                        condition[subject_key] = legacy_subject
+                    elif failure == "trust-owner-id":
+                        condition[subject_key] = subject.replace(
+                            "@5770674/", "@5770675/"
+                        )
+                    elif failure == "trust-repository-id":
+                        condition[subject_key] = subject.replace(
+                            "@1363017696:", "@1363017697:"
+                        )
+                    elif failure == "trust-ref":
+                        condition[subject_key] = subject.replace(
+                            "feature/pgwire-core-redshift", "main"
+                        )
+                    elif failure == "trust-wildcard":
+                        condition[subject_key] = (
+                            "repo:vahid110@5770674/arrow-adbc@1363017696:*"
+                        )
+                    elif failure == "trust-stringlike":
+                        statement["Condition"] = {"StringLike": condition}
+                    elif failure == "trust-or-legacy":
+                        condition[subject_key] = [subject, legacy_subject]
+                    elif failure == "trust-audience":
+                        condition["token.actions.githubusercontent.com:aud"] = (
+                            "wrong-audience"
+                        )
+                    else:
+                        statement["Principal"]["Federated"] = (
+                            "arn:aws:iam::385207570137:oidc-provider/other.invalid"
+                        )
+                    sdk.get_role = lambda **kwargs: copy.deepcopy(role)
+                elif failure == "all-actions":
                     sdk.initial_policy = {
                         "Version": "2012-10-17",
                         "Statement": [

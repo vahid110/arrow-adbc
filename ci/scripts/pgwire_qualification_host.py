@@ -39,6 +39,7 @@ from pgwire_qualification_live import (
     ACCOUNT,
     KINDS,
     NAME,
+    OIDC_SUBJECT,
     PARAMETER,
     REF,
     REGION,
@@ -225,10 +226,7 @@ class Host:
                             "token.actions.githubusercontent.com:aud": (
                                 "sts.amazonaws.com"
                             ),
-                            "token.actions.githubusercontent.com:sub": "repo:"
-                            + REPOSITORY
-                            + ":ref:"
-                            + REF,
+                            "token.actions.githubusercontent.com:sub": OIDC_SUBJECT,
                         }
                     },
                 }

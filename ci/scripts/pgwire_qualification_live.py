@@ -52,6 +52,11 @@ PARAMETER = "/adbc/qualification/20261016/admission"
 CLAIMS = "/adbc/qualification/20261016/claims/"
 REPOSITORY = "vahid110/arrow-adbc"
 REF = "refs/heads/feature/pgwire-core-redshift"
+# Pinned to authenticated repository OIDC metadata, including immutable IDs.
+OIDC_SUBJECT = (
+    "repo:vahid110@5770674/arrow-adbc@1363017696:"
+    "ref:refs/heads/feature/pgwire-core-redshift"
+)
 WORKFLOW = ".github/workflows/pgwire-qualification-live.yml"
 HOST = f"{NAME}.{ACCOUNT}.{REGION}.redshift-serverless.amazonaws.com"
 TAG = "adbc-qualification-nonce"
