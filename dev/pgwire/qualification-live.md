@@ -87,8 +87,10 @@ profile; do not modify global profiles, the OIDC provider, VPC or subnet setting
    OIDC audience `sts.amazonaws.com` and subject
    `repo:vahid110/arrow-adbc:ref:refs/heads/feature/pgwire-core-redshift`.
    Its sole inline policy `adbc-qualification-initial` has two Allow statements:
-   `sts:GetCallerIdentity` on `["*"]` and `ssm:GetParameter` on the exact
-   admission ARN, with no other actions or managed policies. No DB/ingress grant
+   `sts:GetCallerIdentity` on `"*"` (Sid `Identity`) and `ssm:GetParameter`
+   on the exact admission ARN (Sid `ReadSingleAdmission`), with no other actions
+   or managed policies. The exact approved JSON document is pinned in
+   `INITIAL_POLICY_DOCUMENT`; incomplete/paginated IAM inventories are rejected. No DB/ingress grant
    exists yet. Preserve role creation ownership and trust/policy receipts.
 3. Dispatch `.github/workflows/pgwire-qualification-live.yml` explicitly at the
    exact merged integration SHA, supplying that SHA and the successful same-SHA
@@ -111,7 +113,9 @@ profile; do not modify global profiles, the OIDC provider, VPC or subnet setting
 
    `GH_TOKEN` authenticates GitHub REST; the SDK uses only `adbc-provisioner`.
    The helper authenticates preflight/run/original-review/artifact provenance,
-   journals calls before mutation, rejects pre-existing names, creates tagged
+   journals calls before mutation, checks the exact initial IAM document before
+   any resource creation and again before runtime-policy installation, rejects
+   pre-existing names, creates tagged
    dedicated resources and the managed admin secret, verifies associations and
    finite controls, installs/readbacks only the exact run policy, and uses the
    namespace's **SecretArn** with `redshift-data:ExecuteStatement` to create

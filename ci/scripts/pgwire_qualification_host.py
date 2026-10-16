@@ -54,13 +54,30 @@ from pgwire_qualification_live import (
     rules,
     validate,
 )
-from pgwire_qualification_manifest import PROTECTED, SHA, require
+from pgwire_qualification_manifest import PROTECTED, SHA, digest, require
 from pgwire_qualification_prepare import GitHub, parse_json
 
 OWNER = f"arn:aws:iam::{ACCOUNT}:role/adbc-provisioner"
 INITIAL_POLICY = "adbc-qualification-initial"
 RUN_POLICY = "adbc-qualification-20261016-runtime"
 ROLE_NAME = "adbc-isolated-qualification-ci"
+INITIAL_POLICY_DOCUMENT = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Identity",
+            "Effect": "Allow",
+            "Action": ["sts:GetCallerIdentity"],
+            "Resource": "*",
+        },
+        {
+            "Sid": "ReadSingleAdmission",
+            "Effect": "Allow",
+            "Action": ["ssm:GetParameter"],
+            "Resource": f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter" + PARAMETER,
+        },
+    ],
+}
 
 
 class Host:
@@ -182,7 +199,7 @@ class Host:
             )
         return result
 
-    def install_policy(self, template, expected_sha):
+    def verify_initial_role(self):
         iam = self.aws["iam"]
         role = iam.get_role(RoleName=ROLE_NAME)["Role"]
         require(
@@ -218,14 +235,32 @@ class Host:
             ],
         }
         require(role["AssumeRolePolicyDocument"] == trust, "CI OIDC trust mismatch")
+        inline = iam.list_role_policies(RoleName=ROLE_NAME)
+        attached = iam.list_attached_role_policies(RoleName=ROLE_NAME)
         require(
-            iam.list_role_policies(RoleName=ROLE_NAME)["PolicyNames"]
-            == [INITIAL_POLICY]
-            and not iam.list_attached_role_policies(RoleName=ROLE_NAME)[
-                "AttachedPolicies"
-            ],
-            "pre-existing CI policy inventory",
+            inline.get("IsTruncated", False) is False
+            and attached.get("IsTruncated", False) is False
+            and "Marker" not in inline
+            and "Marker" not in attached
+            and inline["PolicyNames"] == [INITIAL_POLICY]
+            and attached["AttachedPolicies"] == [],
+            "pre-existing or incomplete CI policy inventory",
         )
+        observed = iam.get_role_policy(RoleName=ROLE_NAME, PolicyName=INITIAL_POLICY)[
+            "PolicyDocument"
+        ]
+        require(
+            observed == INITIAL_POLICY_DOCUMENT,
+            "initial CI policy exceeds exact admission read",
+        )
+        self.state["initial_policy_sha256"] = digest(observed)
+        self.phase("initial-role-verified")
+
+    def install_policy(self, template, expected_sha):
+        # Recheck after resource creation; an expected policy NAME is not proof
+        # of the permissions that remain alongside the finite runtime policy.
+        self.verify_initial_role()
+        iam = self.aws["iam"]
         require(
             file_sha(template) == expected_sha, "unreviewed runtime policy template"
         )
@@ -328,6 +363,8 @@ class Host:
         failed = False
         try:
             preflight = self.preflight(preflight_id, run, source)
+            # Reject broad initial authority before any resource can be created.
+            self.verify_initial_role()
             rs, ec2 = self.aws["redshift-serverless"], self.aws["ec2"]
             require(
                 self.absent(

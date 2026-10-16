@@ -97,6 +97,26 @@ class AWS:
         self.ingress = []
         self.ns_exists = self.wg_exists = self.sg_exists = self.usage_exists = True
         self.policy = None
+        self.inline_inventory = {"PolicyNames": ["adbc-qualification-initial"]}
+        self.attached_inventory = {"AttachedPolicies": []}
+        self.initial_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "Identity",
+                    "Effect": "Allow",
+                    "Action": ["sts:GetCallerIdentity"],
+                    "Resource": "*",
+                },
+                {
+                    "Sid": "ReadSingleAdmission",
+                    "Effect": "Allow",
+                    "Action": ["ssm:GetParameter"],
+                    "Resource": f"arn:aws:ssm:{live.REGION}:{live.ACCOUNT}:parameter"
+                    + live.PARAMETER,
+                },
+            ],
+        }
         self.exceptions = types.SimpleNamespace(
             ResourceNotFoundException=NotFound, NoSuchEntityException=NotFound
         )
@@ -361,10 +381,10 @@ class AWS:
         }
 
     def list_role_policies(self, **kwargs):
-        return {"PolicyNames": ["adbc-qualification-initial"]}
+        return copy.deepcopy(self.inline_inventory)
 
     def list_attached_role_policies(self, **kwargs):
-        return {"AttachedPolicies": []}
+        return copy.deepcopy(self.attached_inventory)
 
     def put_role_policy(self, **kwargs):
         self.event("install-runtime-policy")
@@ -372,26 +392,8 @@ class AWS:
 
     def get_role_policy(self, **kwargs):
         if kwargs["PolicyName"] == "adbc-qualification-initial":
-            return {
-                "PolicyDocument": {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Action": ["sts:GetCallerIdentity"],
-                            "Resource": ["*"],
-                        },
-                        {
-                            "Effect": "Allow",
-                            "Action": ["ssm:GetParameter"],
-                            "Resource": [
-                                f"arn:aws:ssm:{live.REGION}:{live.ACCOUNT}:parameter"
-                                + live.PARAMETER
-                            ],
-                        },
-                    ],
-                }
-            }
+            self.event("read-initial-policy")
+            return {"PolicyDocument": copy.deepcopy(self.initial_policy)}
         if self.policy is None:
             raise NotFound()
         return {"PolicyDocument": self.policy}
@@ -863,13 +865,140 @@ class ProvenanceTest(unittest.TestCase):
 
 
 class HostTest(unittest.TestCase):
+    def test_broad_initial_or_incomplete_inventory_rejects_before_creation(self):
+        for failure in (
+            "all-actions",
+            "admission-wildcard",
+            "extra-grant",
+            "inline-truncated",
+            "managed-truncated",
+            "inline-marker",
+            "managed-marker",
+        ):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as temp,
+                patch.object(
+                    socket, "socket", side_effect=AssertionError("NETWORK FORBIDDEN")
+                ),
+            ):
+                a = admission()
+                sdk = AWS(a)
+                sdk.ns_exists = sdk.wg_exists = sdk.sg_exists = False
+                sdk.get_caller_identity = lambda: {
+                    "Account": live.ACCOUNT,
+                    "Arn": (
+                        f"arn:aws:sts::{live.ACCOUNT}:assumed-role/"
+                        "adbc-provisioner/host"
+                    ),
+                }
+                if failure == "all-actions":
+                    sdk.initial_policy = {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {"Effect": "Allow", "Action": "*", "Resource": "*"}
+                        ],
+                    }
+                elif failure == "admission-wildcard":
+                    sdk.initial_policy["Statement"][1]["Resource"] = "*"
+                elif failure == "extra-grant":
+                    sdk.initial_policy["Statement"].append(
+                        {
+                            "Effect": "Allow",
+                            "Action": "redshift-serverless:GetCredentials",
+                            "Resource": "*",
+                        }
+                    )
+                elif failure == "inline-truncated":
+                    sdk.inline_inventory["IsTruncated"] = True
+                elif failure == "managed-truncated":
+                    sdk.attached_inventory["IsTruncated"] = True
+                elif failure == "inline-marker":
+                    sdk.inline_inventory["Marker"] = "hidden-page"
+                else:
+                    sdk.attached_inventory["Marker"] = "hidden-page"
+                github = Mock()
+                github.get.return_value = {
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+                host = Host(
+                    {
+                        k: sdk
+                        for k in (
+                            "sts",
+                            "ssm",
+                            "redshift-serverless",
+                            "redshift-data",
+                            "ec2",
+                            "iam",
+                        )
+                    },
+                    github,
+                    Path(temp) / "receipt.json",
+                    clock=lambda: NOW,
+                    pause=lambda _: None,
+                )
+                template = Path(temp) / "template.json"
+                template.write_text(
+                    json.dumps(
+                        {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "ssm:PutParameter",
+                                    "Resource": a["nonce"] + "-EXACT_RUN_ID",
+                                }
+                            ],
+                        }
+                    )
+                )
+                preflight = {
+                    k: a[k]
+                    for k in (
+                        "source_sha",
+                        "run_id",
+                        "artifacts",
+                        "ca_sha256",
+                        "runner_cidr",
+                        "c_client_sha256",
+                        "review",
+                    )
+                }
+                with (
+                    patch.object(host, "preflight", return_value=preflight),
+                    self.assertRaises(Rejected),
+                ):
+                    host.run(
+                        preflight_id=1,
+                        run=RUN,
+                        source=SOURCE,
+                        nonce=a["nonce"],
+                        policy_template=template,
+                        policy_sha256=live.file_sha(template),
+                    )
+                self.assertFalse(
+                    set(sdk.events)
+                    & {
+                        "create-namespace",
+                        "create-group",
+                        "create-workgroup",
+                        "install-runtime-policy",
+                        "host-sql",
+                        "admission",
+                        "credentials",
+                    }
+                )
+                self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
+
     def test_actual_fake_host_lifecycle_bootstraps_observes_and_deletes(self):
         a = admission()
         sdk = AWS(a)
         sdk.ns_exists = sdk.wg_exists = sdk.sg_exists = False
         sdk.get_caller_identity = lambda: {
             "Account": live.ACCOUNT,
-            "Arn": f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host",
+            "Arn": (f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host"),
         }
         github = Mock()
         github.get.return_value = {"status": "completed", "conclusion": "success"}
@@ -938,6 +1067,11 @@ class HostTest(unittest.TestCase):
             self.assertEqual(result["external_teardown"], "verified")
             self.assertTrue(result["independent_observation"]["fixtures_absent"])
             self.assertEqual(sdk.events.count("host-sql"), 3)
+            self.assertEqual(sdk.events.count("read-initial-policy"), 2)
+            self.assertLess(
+                sdk.events.index("read-initial-policy"),
+                sdk.events.index("create-namespace"),
+            )
             self.assertLess(
                 sdk.events.index("independent-observation"),
                 sdk.events.index("delete-workgroup"),
@@ -962,7 +1096,7 @@ class HostTest(unittest.TestCase):
         sdk.fail = "create-group"
         sdk.get_caller_identity = lambda: {
             "Account": live.ACCOUNT,
-            "Arn": f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host",
+            "Arn": (f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host"),
         }
         with tempfile.TemporaryDirectory() as temp:
             host = Host(
