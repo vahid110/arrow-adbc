@@ -62,7 +62,7 @@ def validate_uri(uri, manifest, ca):
         and not parts.fragment,
         "credential target mismatch",
     )
-    query = parse_qs(parts.query, strict_parsing=True)
+    query = parse_qs(parts.query, keep_blank_values=True, strict_parsing=True)
     require(
         query
         == {
@@ -71,6 +71,29 @@ def validate_uri(uri, manifest, ca):
             "connect_timeout": ["10"],
         },
         "unsafe connection options",
+    )
+    frame(uri)
+
+
+def validate_plumbing_uri(uri):
+    """Same option semantics as the dedicated guard, for local no-AWS CI only."""
+    parts = urlsplit(uri)
+    require(
+        parts.scheme == "postgresql"
+        and parts.hostname in ("postgres", "127.0.0.1")
+        and parts.port == 5432
+        and parts.path == "/postgres"
+        and parts.username
+        and parts.password
+        and not parts.fragment,
+        "invalid local plumbing target",
+    )
+    # libpq retains blank values and applies duplicate options. Preserve them in
+    # this parser too, so no empty host/TLS/timeout override can disappear.
+    require(
+        parse_qs(parts.query, keep_blank_values=True, strict_parsing=True)
+        == {"connect_timeout": ["10"]},
+        "unsafe local connection options",
     )
     frame(uri)
 

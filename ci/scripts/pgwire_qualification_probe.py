@@ -85,6 +85,50 @@ def probe(root, kind):
     }
 
 
+def read_connection_uri(operation):
+    """Private-input path shared by the executable and offline parser regressions."""
+    import os
+    import signal
+    import stat
+    import struct
+    from urllib.parse import parse_qs, urlsplit
+
+    from pgwire_qualification_manifest import schema
+    from pgwire_qualification_process import validate_plumbing_uri, validate_uri
+
+    signal.alarm(60)
+    if not stat.S_ISFIFO(os.fstat(0).st_mode):
+        raise ValueError("private pipe required")
+
+    def exact(n):
+        value = bytearray()
+        while len(value) < n:
+            chunk = os.read(0, n - len(value))
+            if not chunk:
+                raise ValueError("truncated input")
+            value.extend(chunk)
+        return bytes(value)
+
+    size = struct.unpack("!I", exact(4))[0]
+    if not 16 <= size <= 4096:
+        raise ValueError("invalid input size")
+    uri = exact(size).decode("ascii")
+    if any(not 32 < ord(c) < 127 for c in uri) or os.read(0, 1):
+        raise ValueError("invalid or extra input")
+    os.close(0)
+    if operation == "--postgresql-plumbing":
+        validate_plumbing_uri(uri)
+    elif operation == "--redshift":
+        options = parse_qs(
+            urlsplit(uri).query, keep_blank_values=True, strict_parsing=True
+        )
+        ca = options["sslrootcert"][0]
+        validate_uri(uri, schema(), ca)
+    else:
+        raise ValueError("invalid operation")
+    return uri
+
+
 def main():
     try:
         if (
@@ -124,57 +168,10 @@ def main():
             "--redshift",
         ):
             raise ValueError("invalid operation")
-        # Secret URI only from the private length-framed pipe, never argv/env.
-        import os
-        import signal
-        import stat
-        import struct
-
-        signal.alarm(60)
-        if not stat.S_ISFIFO(os.fstat(0).st_mode):
-            raise ValueError("private pipe required")
-
-        def exact(n):
-            value = bytearray()
-            while len(value) < n:
-                chunk = os.read(0, n - len(value))
-                if not chunk:
-                    raise ValueError("truncated input")
-                value.extend(chunk)
-            return bytes(value)
-
-        size = struct.unpack("!I", exact(4))[0]
-        if not 16 <= size <= 4096:
-            raise ValueError("invalid input size")
-        uri = exact(size).decode("ascii")
-        if any(not 32 < ord(c) < 127 for c in uri) or os.read(0, 1):
-            raise ValueError("invalid or extra input")
-        os.close(0)
+        # Validation and private-input reading use the same executable path
+        # covered by parser regressions; imports below cannot run on rejection.
+        uri = read_connection_uri(operation)
         plumbing = operation == "--postgresql-plumbing"
-        from urllib.parse import parse_qs, urlsplit
-
-        from pgwire_qualification_manifest import schema
-        from pgwire_qualification_process import validate_uri
-
-        if plumbing:
-            target = urlsplit(uri)
-            if (
-                target.hostname not in ("postgres", "127.0.0.1")
-                or target.port != 5432
-                or target.path != "/postgres"
-                or target.scheme != "postgresql"
-                or target.fragment
-                or not target.username
-                or not target.password
-                or parse_qs(target.query, strict_parsing=True)
-                != {"connect_timeout": ["10"]}
-            ):
-                raise ValueError("invalid local plumbing target")
-        else:
-            # TLS/target is additionally checked here. CA bytes were pinned by
-            # parent preflight; this primitive cannot grant admission itself.
-            ca = parse_qs(urlsplit(uri).query)["sslrootcert"][0]
-            validate_uri(uri, schema(), ca)
         import pyarrow
 
         import adbc_driver_manager

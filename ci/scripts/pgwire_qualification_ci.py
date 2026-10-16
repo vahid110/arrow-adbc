@@ -74,6 +74,7 @@ def exercise(artifact, root, kind, interpreter, *, c_client=None):
     wheel = kind == "python_wheel"
     inventory = claims(artifact, root, wheel=wheel)
     library = verify_installed(artifact, root, inventory, wheel=wheel)
+    print("Qualification stage: installed inventory verified.", flush=True)
     probe = [
         str(Path(interpreter).absolute()),
         "-I",
@@ -87,6 +88,7 @@ def exercise(artifact, root, kind, interpreter, *, c_client=None):
     ]
     report = json.loads(private_process([*probe, "load-only", "-"]))
     verify_probe(report, package_root=root, library=library, wheel=wheel)
+    print("Qualification stage: installed Redshift entrypoint verified.", flush=True)
     # Fixed local PostgreSQL service only, no AWS credentials, no host environment.
     uri = "postgresql://postgres:password@postgres:5432/postgres?connect_timeout=10"
     argv = (

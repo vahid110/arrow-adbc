@@ -1226,6 +1226,168 @@ class ExternalEvidenceTest(unittest.TestCase):
             {"enum": ["offline-synthetic", "dedicated-qualification"]},
         )
         self.assertEqual(schema["$defs"]["Manifest"]["additionalProperties"], False)
+        self.assertIn("Codex", schema["x-producer-inputs"]["native"])
+        self.assertNotIn("Authoritative AO", schema["x-producer-inputs"]["native"])
+
+
+class UriParserRegressionTest(unittest.TestCase):
+    """No connections: compare the guard to libpq's actual URI parser only."""
+
+    def test_blank_duplicate_unknown_options_rejected_in_helpers_and_private_probe(
+        self,
+    ):
+        from urllib.parse import urlencode
+
+        import pgwire_qualification_process as process
+
+        manifest = contract.schema()
+        dedicated = (
+            "postgresql://fake:synthetic@"
+            + manifest["tls"]["hostname"]
+            + ":5439/adbc_qualification?"
+            + urlencode(
+                {
+                    "sslmode": "verify-full",
+                    "sslrootcert": "/tmp/ca.pem",
+                    "connect_timeout": "10",
+                }
+            )
+        )
+        local = "postgresql://fake:synthetic@127.0.0.1:5432/postgres?connect_timeout=10"
+        harness = (
+            "import sys; sys.path.insert(0," + repr(str(ROOT / "ci/scripts")) + "); "
+            "from pgwire_qualification_probe import read_connection_uri; "
+            "import socket; socket.socket=lambda *a,**k:sys.exit(99); "
+            "read_connection_uri(sys.argv[1]); print('accepted')"
+        )
+        for uri, operation in (
+            (dedicated, "--redshift"),
+            (local, "--postgresql-plumbing"),
+        ):
+
+            def validate(value):
+                if operation == "--redshift":
+                    process.validate_uri(value, manifest, "/tmp/ca.pem")
+                else:
+                    process.validate_plumbing_uri(value)
+
+            validate(uri)
+            valid = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", harness, operation],
+                input=process.frame(uri),
+                capture_output=True,
+                timeout=3,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertEqual(valid.stdout, b"accepted\n")
+            for suffix in (
+                "&host=",
+                "&host=localhost",
+                "&user=",
+                "&password=",
+                "&sslmode=",
+                "&sslmode=disable",
+                "&connect_timeout=",
+                "&connect_timeout=10",
+                "&sslrootcert=",
+                "&service=",
+                "&host",
+                "&%68ost=",
+                "&connect_timeout=%20",
+            ):
+                with self.subTest(operation=operation, suffix=suffix):
+                    with self.assertRaises(ValueError):
+                        validate(uri + suffix)
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", "-c", harness, operation],
+                        input=process.frame(uri + suffix),
+                        capture_output=True,
+                        timeout=3,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotEqual(result.returncode, 99)  # No socket operation.
+                    self.assertNotIn(b"accepted", result.stdout)
+
+    def test_effective_libpq_target_tls_timeout_are_the_validated_values(self):
+        import ctypes
+        import ctypes.util
+        from urllib.parse import urlencode
+
+        import pgwire_qualification_process as process
+
+        class Option(ctypes.Structure):
+            _fields_ = [
+                (name, ctypes.c_char_p)
+                for name in (
+                    "keyword",
+                    "envvar",
+                    "compiled",
+                    "val",
+                    "label",
+                    "dispchar",
+                )
+            ]
+            _fields_ += [("dispsize", ctypes.c_int)]
+
+        library = ctypes.util.find_library("pq")
+        if (
+            library is None
+            and Path("/opt/homebrew/opt/libpq/lib/libpq.dylib").is_file()
+        ):
+            library = "/opt/homebrew/opt/libpq/lib/libpq.dylib"
+        self.assertIsNotNone(
+            library, "libpq parser is a required offline test dependency"
+        )
+        pq = ctypes.CDLL(library)
+        pq.PQconninfoParse.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
+        pq.PQconninfoParse.restype = ctypes.POINTER(Option)
+        pq.PQconninfoFree.argtypes = [ctypes.POINTER(Option)]
+        pq.PQfreemem.argtypes = [ctypes.c_void_p]
+        manifest = contract.schema()
+        uri = (
+            "postgresql://fake:synthetic@"
+            + manifest["tls"]["hostname"]
+            + ":5439/adbc_qualification?"
+            + urlencode(
+                {
+                    "sslmode": "verify-full",
+                    "sslrootcert": "/tmp/ca.pem",
+                    "connect_timeout": "10",
+                }
+            )
+        )
+        for suffix, changed in (
+            ("", None),
+            ("&host=", "host"),
+            ("&sslmode=", "sslmode"),
+            ("&connect_timeout=", "connect_timeout"),
+        ):
+            error = ctypes.c_char_p()
+            options = pq.PQconninfoParse((uri + suffix).encode(), ctypes.byref(error))
+            self.assertTrue(options)
+            try:
+                actual = {}
+                index = 0
+                while options[index].keyword:
+                    item = options[index]
+                    actual[item.keyword.decode()] = (
+                        item.val.decode() if item.val else ""
+                    )
+                    index += 1
+                if changed is None:
+                    process.validate_uri(uri, manifest, "/tmp/ca.pem")
+                    self.assertEqual(actual["host"], manifest["tls"]["hostname"])
+                    self.assertEqual(actual["sslmode"], "verify-full")
+                    self.assertEqual(actual["sslrootcert"], "/tmp/ca.pem")
+                    self.assertEqual(actual["connect_timeout"], "10")
+                else:
+                    self.assertEqual(actual[changed], "")
+                    with self.assertRaises(ValueError):
+                        process.validate_uri(uri + suffix, manifest, "/tmp/ca.pem")
+            finally:
+                pq.PQconninfoFree(options)
+                if error:
+                    pq.PQfreemem(error)
 
 
 def json_load(value):

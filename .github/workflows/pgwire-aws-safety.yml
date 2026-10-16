@@ -65,7 +65,7 @@ jobs:
       - name: Install offline test dependencies
         run: |
           sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install --yes build-essential jq python3
+          sudo apt-get install --yes build-essential jq libpq5 python3
       - name: Check script syntax
         shell: bash
         run: |

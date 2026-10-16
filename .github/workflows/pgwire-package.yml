@@ -104,15 +104,15 @@ jobs:
       PACKAGE_PLATFORM: ${{ matrix.platform }}
       PACKAGE_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Install build dependencies
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
           apt-get update -o Acquire::Retries=3
-          apt-get install --yes build-essential ca-certificates cmake libpq-dev ninja-build pkg-config python3
+          apt-get install --yes build-essential ca-certificates cmake git libpq-dev ninja-build pkg-config python3
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Resolve package version
         shell: bash
