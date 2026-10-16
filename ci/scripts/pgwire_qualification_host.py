@@ -73,8 +73,10 @@ FAILURE_STAGES = {
     "initial-resource-verification": "INITIAL_RESOURCES",
     "runtime-policy-write-attempted": "RUNTIME_POLICY",
     "host-sql-attempted": "HOST_SQL",
+    "host-sql-validation": "HOST_SQL",
     "observer-sql": "OBSERVER",
     "admission-write-attempted": "ADMISSION",
+    "admission-run-verification": "ADMISSION_RUN",
     "admission-issued": "CI_COMPLETION",
 }
 FAILURE_REASONS = {
@@ -93,6 +95,8 @@ FAILURE_REASONS = {
     "host SQL failed": "SQL_FAILED",
     "observer identity or counts invalid": "OBSERVER_PROOF_INVALID",
     "observer found remaining fixtures or sessions": "OBSERVER_NONZERO",
+    "host dispatch origin mismatch": "DISPATCH_PROVENANCE",
+    "host dispatch no longer running": "DISPATCH_STOPPED",
 }
 TERMINAL = ("FINISHED", "FAILED", "ABORTED")
 
@@ -148,11 +152,19 @@ class Host:
     def until(self, operation, predicate, *, seconds=300):
         deadline = min(self.deadline, self.clock() + seconds)
         while True:
+            self.check_deadline(deadline)
             value = operation()
+            self.check_deadline(deadline)
             if predicate(value):
                 return value
-            require(self.clock() < deadline, "host stage deadline reached")
             self.pause(5)
+
+    def check_deadline(self, deadline=None):
+        require(
+            self.clock()
+            < min(self.deadline, self.deadline if deadline is None else deadline),
+            "host stage deadline reached",
+        )
 
     def absent(self, operation, exception):
         try:
@@ -162,6 +174,8 @@ class Host:
         return False
 
     def statement(self, sql, *, records=False):
+        self.check_deadline()
+        self.phase("host-sql-validation")
         rs, data = self.aws["redshift-serverless"], self.aws["redshift-data"]
         # Fresh resource and ownership reads precede EVERY host SQL operation.
         resources(self.state["admission"], rs, self.aws["ec2"])
@@ -172,6 +186,7 @@ class Host:
             "managed secret association changed",
         )
         self.phase("host-sql-attempted")
+        self.check_deadline()
         response = data.execute_statement(
             WorkgroupName=NAME, Database="adbc_qualification", SecretArn=secret, Sql=sql
         )
@@ -180,21 +195,31 @@ class Host:
         evidence = {"terminal": "UNKNOWN", "cancel": "NOT_ATTEMPTED"}
         self.state.setdefault("statements", []).append(evidence)
         self.save()
+
+        def describe():
+            result = data.describe_statement(Id=statement_id)
+            if result["Status"] in TERMINAL:
+                # A late response is still proof of termination. Preserve this
+                # fact before until() rejects time, so finally never cancels it.
+                evidence["terminal"] = result["Status"]
+                evidence["cancel"] = "NOT_NEEDED"
+                self.save()
+            return result
+
         try:
             result = self.until(
-                lambda: data.describe_statement(Id=statement_id),
+                describe,
                 lambda r: r["Status"] in TERMINAL,
                 seconds=30,
             )
-            evidence["terminal"] = result["Status"]
-            evidence["cancel"] = "NOT_NEEDED"
-            self.save()
             require(result["Status"] == "FINISHED", "host SQL failed")
-            return (
+            rows = (
                 data.get_statement_result(Id=statement_id)["Records"]
                 if records
                 else None
             )
+            self.check_deadline()
+            return rows
         finally:
             if evidence["terminal"] == "UNKNOWN":
                 # Never mask the original failure. A completed-statement race
@@ -231,16 +256,7 @@ class Host:
             and item["workflow_run"]["head_sha"] == source,
             "host preflight origin mismatch",
         )
-        actual = self.github.get("/actions/runs/" + str(run))
-        require(
-            actual["path"] == WORKFLOW
-            and actual["head_sha"] == source
-            and actual["head_branch"] == REF.removeprefix("refs/heads/")
-            and actual["event"] == "workflow_dispatch"
-            and actual["run_attempt"] == 1
-            and actual["repository"]["full_name"] == REPOSITORY,
-            "host dispatch origin mismatch",
-        )
+        self.verify_run(run, source)
         archive = self.github.get(
             "/actions/artifacts/" + str(artifact_id) + "/zip", binary=True
         )
@@ -271,6 +287,22 @@ class Host:
                 "host artifact run mismatch",
             )
         return result
+
+    def verify_run(self, run, source, *, active=False):
+        actual = self.github.get("/actions/runs/" + str(run))
+        require(
+            actual["path"] == WORKFLOW
+            and actual["head_sha"] == source
+            and actual["head_branch"] == REF.removeprefix("refs/heads/")
+            and actual["event"] == "workflow_dispatch"
+            and actual["run_attempt"] == 1
+            and actual["repository"]["full_name"] == REPOSITORY,
+            "host dispatch origin mismatch",
+        )
+        require(
+            not active or actual["status"] == "in_progress",
+            "host dispatch no longer running",
+        )
 
     def verify_initial_role(self):
         iam = self.aws["iam"]
@@ -327,9 +359,11 @@ class Host:
         self.phase("initial-role-verified")
 
     def install_policy(self, template, expected_sha):
+        self.check_deadline()
         # Recheck after resource creation; an expected policy NAME is not proof
         # of the permissions that remain alongside the finite runtime policy.
         self.verify_initial_role()
+        self.check_deadline()
         iam = self.aws["iam"]
         require(
             file_sha(template) == expected_sha, "unreviewed runtime policy template"
@@ -363,6 +397,7 @@ class Host:
         self.state["runtime_policy_template_sha256"] = expected_sha
         self.state["attempted"].append("runtime_policy")
         self.phase("runtime-policy-write-attempted")
+        self.check_deadline()
         iam.put_role_policy(
             RoleName=ROLE_NAME,
             PolicyName=RUN_POLICY,
@@ -375,6 +410,7 @@ class Host:
             == policy,
             "runtime policy readback mismatch",
         )
+        self.check_deadline()
 
     def remove_policy(self):
         if "runtime_policy" not in self.state["attempted"]:
@@ -409,6 +445,8 @@ class Host:
         policy_template=None,
         policy_sha256=None,
     ):
+        started = self.clock()
+        self.deadline = started + 3600
         identity(self.aws["sts"], OWNER)
         require(SHA.fullmatch(nonce), "invalid host ownership nonce")
         require(
@@ -416,13 +454,12 @@ class Host:
             "existing host receipt requires recovery, never retry",
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.deadline = self.clock() + 3600
         self.state = {
             "version": 1,
             "nonce": nonce,
             "source_sha": source,
             "run_id": run,
-            "started_at": int(self.clock()),
+            "started_at": int(started),
             "deadline": int(self.deadline),
             "attempted": [],
             "created": {},
@@ -433,10 +470,13 @@ class Host:
         failed = False
         try:
             self.phase("preflight-verification")
+            self.check_deadline()
             preflight = self.preflight(preflight_id, run, source)
+            self.check_deadline()
             # Reject broad initial authority before any resource can be created.
             self.phase("initial-role-verification")
             self.verify_initial_role()
+            self.check_deadline()
             rs, ec2 = self.aws["redshift-serverless"], self.aws["ec2"]
             require(
                 self.absent(
@@ -486,13 +526,16 @@ class Host:
                     ),
                 ),
             ):
+                self.check_deadline()
                 self.state["attempted"].append(kind)
                 self.phase("create-" + kind + "-attempted")
+                self.check_deadline()
                 value = create()
                 self.state["created"][kind] = (
                     value["namespaceId"] if kind == "namespace" else value["GroupId"]
                 )
                 self.save()
+                self.check_deadline()
             self.until(
                 lambda: rs.get_namespace(namespaceName=NAME)["namespace"],
                 lambda n: n["status"] == "AVAILABLE",
@@ -500,6 +543,7 @@ class Host:
             group = self.state["created"]["security_group"]
             self.state["attempted"].append("workgroup")
             self.phase("create-workgroup-attempted")
+            self.check_deadline()
             wg = rs.create_workgroup(
                 workgroupName=NAME,
                 namespaceName=NAME,
@@ -532,6 +576,7 @@ class Host:
             self.state["managed_secret_arn"] = ns["adminPasswordSecretArn"]
             self.state["attempted"].append("usage_limit")
             self.phase("create-usage-limit-attempted")
+            self.check_deadline()
             usage = rs.create_usage_limit(
                 amount=4,
                 breachAction="deactivate",
@@ -541,6 +586,7 @@ class Host:
             )["usageLimit"]
             self.state["created"]["usage_limit"] = usage["usageLimitId"]
             self.save()
+            self.check_deadline()
             now = int(self.clock())
             admission = {
                 **preflight,
@@ -587,11 +633,16 @@ class Host:
                 observed["fixtures_absent"] and observed["sessions_absent"],
                 "observer found remaining fixtures or sessions",
             )
+            self.check_deadline(admission["window"]["admit_before"])
+            self.phase("admission-run-verification")
+            self.verify_run(run, source, active=True)
+            self.check_deadline(admission["window"]["admit_before"])
             require(
                 self.clock() < admission["window"]["admit_before"],
                 "bootstrap exhausted admission window",
             )
             self.phase("admission-write-attempted")
+            self.check_deadline(admission["window"]["admit_before"])
             self.aws["ssm"].put_parameter(
                 Name=PARAMETER,
                 Value=json.dumps(admission, sort_keys=True, separators=(",", ":")),

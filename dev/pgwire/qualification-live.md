@@ -152,12 +152,20 @@ coordinator must resolve further authority with the human before a new attempt.
    exact owned workgroup/namespace to be AVAILABLE, and installs/readbacks only
    the exact run policy. Only this bounded host observation permits MODIFYING;
    all ownership/compute/network/TLS/usage checks still apply on every poll.
+   Polls check the deadline before the read and after its response, including
+   matching responses. Slow fresh reads cannot authorize later provisioning,
+   runtime-policy, bootstrap SQL or admission writes after the original deadline.
+   Cleanup retains its separate finite allowance.
    CI and every SQL call require AVAILABLE. The helper uses the
    namespace's **SecretArn** with `redshift-data:ExecuteStatement` to create
    `"IAMR:adbc-isolated-qualification-ci" PASSWORD DISABLE` and grant CREATE on
    this database. It never calls `GetSecretValue`. Before immutable admission it
    executes the same supported identity/fixture/session observer used at cleanup,
-   requiring verified visibility and zero counts. It then issues the immutable
+   requiring verified visibility and zero counts. Immediately before admission,
+   authenticated GitHub must freshly match this exact run's source, workflow,
+   integration ref, dispatch event, attempt and repository, with status
+   `in_progress`. Both host/admission clocks are checked again after that read
+   and before the single immutable write. It then issues the immutable
    admission, waits boundedly for the exact CI run, and always enters cleanup.
    SIGINT/ordinary failures enter `finally`; a host crash requires exact-owned
    recovery from the durable receipt, never a second paid batch.
@@ -177,8 +185,10 @@ coordinator must resolve further authority with the human before a new attempt.
    unknown for host inspection; no guessed rule is revoked.
    First-failure stage/reason, SQL terminal status and cancellation outcome use
    closed static enums; cleanup cannot replace the primary failure. FINISHED,
-   FAILED and ABORTED statements are never cancelled. Unknown/inflight paths
-   attempt cancellation once and freshly read terminal status, preserving any
+   FAILED and ABORTED statements are never cancelled. A terminal response is
+   retained even when it arrives after the polling deadline.
+   That late response fails the time gate without a blind cancellation.
+   Unknown/inflight paths attempt cancellation once and freshly read terminal status, preserving any
    completion race or uncertainty without a SQL retry or arbitrary error text.
 6. Independently verify the managed secret is removed or scheduled for deletion
    using **DescribeSecret only**, then remove the exact owned initial inline

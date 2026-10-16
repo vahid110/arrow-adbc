@@ -18,6 +18,7 @@
 """Fake-only admission, authenticated provenance and finite lifecycle regressions."""
 
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -1164,6 +1165,45 @@ class HostStatementTest(unittest.TestCase):
         self.assertEqual(rows[0][0], {"longValue": 1})
         self.assertNotIn("cancel-host-sql", self.sdk.events)
 
+    def test_late_terminal_status_is_retained_before_deadline_rejection(self):
+        for status in ("FINISHED", "FAILED", "ABORTED"):
+            with self.subTest(status=status):
+                self.tick = NOW
+
+                def describe(**kwargs):
+                    self.tick += 31
+                    return {"Status": status, "Error": "PRIVATE SQL"}
+
+                self.sdk.describe_statement = describe
+                with self.assertRaisesRegex(Rejected, "host stage deadline reached"):
+                    self.host.statement("SELECT 0", records=True)
+                self.assertNotIn("cancel-host-sql", self.sdk.events)
+                self.assertEqual(
+                    self.host.state["statements"][-1],
+                    {"terminal": status, "cancel": "NOT_NEEDED"},
+                )
+                self.assertNotIn("PRIVATE", self.host.path.read_text())
+
+    def test_until_does_not_start_read_after_deadline(self):
+        self.host.deadline = NOW
+        operation = Mock(return_value=True)
+        with self.assertRaisesRegex(Rejected, "host stage deadline reached"):
+            self.host.until(operation, bool)
+        operation.assert_not_called()
+
+    def test_until_stops_before_next_read_when_pause_crosses_deadline(self):
+        operation = Mock(return_value=False)
+        with self.assertRaisesRegex(Rejected, "host stage deadline reached"):
+            self.host.until(operation, bool, seconds=1)
+        self.assertEqual(operation.call_count, 1)
+
+    def test_cleanup_allowance_remains_after_original_deadline(self):
+        self.tick = NOW + 121
+        self.host.cleanup()
+        self.assertTrue(self.host.state["independent_observation"]["sessions_absent"])
+        self.assertEqual(self.host.state["external_teardown"], "verified")
+        self.assertFalse(self.sdk.ns_exists or self.sdk.wg_exists or self.sdk.sg_exists)
+
     def test_failed_and_aborted_sql_are_not_masked_by_cancel(self):
         for status in ("FAILED", "ABORTED"):
             with self.subTest(status=status):
@@ -1320,6 +1360,285 @@ class HostStatementTest(unittest.TestCase):
         observed = self.host.state["independent_observation"]
         self.assertEqual(observed["failure_reason"], "OBSERVER_PROOF_INVALID")
         self.assertIsNot(observed.get("sessions_absent"), True)
+
+
+class HostDeadlineTest(unittest.TestCase):
+    def test_real_preflight_lifecycle_rejects_late_reads_and_stopped_runs(self):
+        for mode in (
+            "readiness-stage",
+            "readiness-total",
+            "preflight",
+            "initial-role",
+            "policy",
+            "presql",
+            "cancelled",
+            "failure",
+            "final-github",
+            "final-github-total",
+        ):
+            with self.subTest(mode=mode):
+                self.run_lifecycle(mode)
+
+    def test_fresh_run_rejects_changed_provenance(self):
+        for field in (
+            "path",
+            "head_sha",
+            "head_branch",
+            "event",
+            "run_attempt",
+            "repository",
+        ):
+            with self.subTest(field=field):
+                self.run_lifecycle("wrong-" + field)
+
+    def run_lifecycle(self, mode):
+        a = admission()
+        prepared = {
+            k: a[k]
+            for k in (
+                "source_sha",
+                "run_id",
+                "artifacts",
+                "ca_sha256",
+                "runner_cidr",
+                "c_client_sha256",
+                "review",
+            )
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("preflight.json", json.dumps(prepared))
+        zipped = buffer.getvalue()
+        sdk = AWS(a)
+        sdk.ns_exists = sdk.wg_exists = sdk.sg_exists = False
+        sdk.get_caller_identity = lambda: {
+            "Account": live.ACCOUNT,
+            "Arn": f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host",
+        }
+        tick = [NOW]
+        state = {
+            "cleanup": False,
+            "usage": False,
+            "delayed": False,
+            "policy_reads": 0,
+            "runtime": False,
+            "observed": False,
+            "status": "in_progress",
+        }
+        events = []
+        original_event = sdk.event
+
+        def event(name):
+            events.append((name, tick[0] - NOW, state["cleanup"]))
+            original_event(name)
+
+        sdk.event = event
+        usage = sdk.create_usage_limit
+
+        def create_usage(**kwargs):
+            result = usage(**kwargs)
+            state["usage"] = True
+            return result
+
+        sdk.create_usage_limit = create_usage
+        workgroup = sdk.get_workgroup
+
+        def get_workgroup(**kwargs):
+            result = workgroup(**kwargs)
+            if (
+                mode.startswith("readiness-")
+                and state["usage"]
+                and not state["delayed"]
+            ):
+                state["delayed"] = True
+                tick[0] += 121 if mode == "readiness-stage" else 3601
+            return result
+
+        sdk.get_workgroup = get_workgroup
+        policy = sdk.get_role_policy
+
+        def get_policy(**kwargs):
+            if kwargs["PolicyName"] == "adbc-qualification-initial":
+                state["policy_reads"] += 1
+                if (mode == "policy" and state["policy_reads"] == 2) or (
+                    mode == "initial-role" and state["policy_reads"] == 1
+                ):
+                    tick[0] += 3601
+            return policy(**kwargs)
+
+        sdk.get_role_policy = get_policy
+        install = sdk.put_role_policy
+
+        def put_policy(**kwargs):
+            result = install(**kwargs)
+            state["runtime"] = True
+            return result
+
+        sdk.put_role_policy = put_policy
+        namespace = sdk.get_namespace
+
+        def get_namespace(**kwargs):
+            result = namespace(**kwargs)
+            if mode == "presql" and state["runtime"] and not state["delayed"]:
+                state["delayed"] = True
+                tick[0] += 3601
+            return result
+
+        sdk.get_namespace = get_namespace
+        statement_result = sdk.get_statement_result
+
+        def get_result(**kwargs):
+            result = statement_result(**kwargs)
+            state["observed"] = True
+            if mode in ("cancelled", "failure"):
+                state["status"] = "completed"
+            return result
+
+        sdk.get_statement_result = get_result
+        put = sdk.put_parameter
+
+        def put_admission(**kwargs):
+            result = put(**kwargs)
+            state["status"] = "completed"
+            return result
+
+        sdk.put_parameter = put_admission
+
+        class GitHub:
+            def get(self, route, **kwargs):
+                if route.endswith("/zip"):
+                    return zipped
+                if route.startswith("/actions/artifacts/"):
+                    return {
+                        "name": f"qualification-preflight-{RUN}",
+                        "expired": False,
+                        "workflow_run": {"id": RUN, "head_sha": SOURCE},
+                        "digest": "sha256:" + hashlib.sha256(zipped).hexdigest(),
+                    }
+                if route.endswith("/cancel"):
+                    state["status"] = "completed"
+                    return b""
+                result = {
+                    "path": live.WORKFLOW,
+                    "head_sha": SOURCE,
+                    "head_branch": live.REF.removeprefix("refs/heads/"),
+                    "event": "workflow_dispatch",
+                    "run_attempt": 1,
+                    "repository": {"full_name": live.REPOSITORY},
+                    "status": state["status"],
+                    "conclusion": mode
+                    if mode in ("cancelled", "failure")
+                    else "success",
+                }
+                if state["observed"] and not state["cleanup"]:
+                    if mode.startswith("wrong-"):
+                        result[mode.removeprefix("wrong-")] = "wrong"
+                    if mode.startswith("final-github"):
+                        tick[0] += 301 if mode == "final-github" else 3601
+                return result
+
+            def review(self, source):
+                return a["review"]
+
+            def artifact(self, kind, artifact_id, source):
+                return {"workflow_run": {"id": a["artifacts"][kind]["run_id"]}}
+
+        class ObservedHost(Host):
+            def cleanup(self):
+                state["cleanup"] = True
+                super().cleanup()
+
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            patch.object(
+                socket, "socket", side_effect=AssertionError("NETWORK FORBIDDEN")
+            ),
+        ):
+            host = ObservedHost(
+                {
+                    k: sdk
+                    for k in (
+                        "sts",
+                        "ssm",
+                        "redshift-serverless",
+                        "redshift-data",
+                        "ec2",
+                        "iam",
+                    )
+                },
+                GitHub(),
+                Path(temp) / "receipt.json",
+                clock=lambda: tick[0],
+                pause=lambda n: tick.__setitem__(0, tick[0] + n),
+            )
+            template = Path(temp) / "policy.json"
+            template.write_text(
+                json.dumps(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "ssm:PutParameter",
+                                "Resource": a["nonce"] + "-EXACT_RUN_ID",
+                            }
+                        ],
+                    }
+                )
+            )
+            if mode == "preflight":
+                preflight = host.preflight
+
+                def slow(*args):
+                    result = preflight(*args)
+                    tick[0] += 3601
+                    return result
+
+                host.preflight = slow
+            with self.assertRaises(Rejected):
+                host.run(
+                    preflight_id=1,
+                    run=RUN,
+                    source=SOURCE,
+                    nonce=a["nonce"],
+                    policy_template=template,
+                    policy_sha256=live.file_sha(template),
+                )
+            self.assertNotIn("admission", sdk.events)
+            if mode not in ("cancelled", "failure") and not mode.startswith("wrong-"):
+                self.assertEqual(host.state["first_failure"]["reason"], "DEADLINE")
+            if mode in ("cancelled", "failure") or mode.startswith("wrong-"):
+                self.assertEqual(host.state["first_failure"]["stage"], "ADMISSION_RUN")
+            self.assertFalse(
+                [
+                    (name, elapsed)
+                    for name, elapsed, cleanup in events
+                    if not cleanup
+                    and elapsed >= 3600
+                    and name
+                    in {
+                        "create-namespace",
+                        "create-group",
+                        "create-workgroup",
+                        "create-usage",
+                        "install-runtime-policy",
+                        "host-sql",
+                        "admission",
+                    }
+                ]
+            )
+            if mode.startswith("readiness-"):
+                self.assertNotIn("install-runtime-policy", sdk.events)
+            self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
+            self.assertEqual(host.state["external_teardown"], "verified")
+            if mode.startswith("wrong-") or mode in (
+                "cancelled",
+                "failure",
+                "final-github",
+                "final-github-total",
+            ):
+                self.assertTrue(state["observed"])
+            self.assertNotIn("PRIVATE", host.path.read_text())
 
 
 class HostTest(unittest.TestCase):
@@ -1596,7 +1915,25 @@ class HostTest(unittest.TestCase):
                     else describe(**kwargs)
                 )
         github = Mock()
-        github.get.return_value = {"status": "completed", "conclusion": "success"}
+        cancelled = [False]
+
+        def github_get(route, **kwargs):
+            if route.endswith("/cancel"):
+                cancelled[0] = True
+            return {
+                "path": live.WORKFLOW,
+                "head_sha": SOURCE,
+                "head_branch": live.REF.removeprefix("refs/heads/"),
+                "event": "workflow_dispatch",
+                "run_attempt": 1,
+                "repository": {"full_name": live.REPOSITORY},
+                "status": "completed"
+                if cancelled[0] or "admission" in sdk.events
+                else "in_progress",
+                "conclusion": "success",
+            }
+
+        github.get.side_effect = github_get
         preflight = {
             k: a[k]
             for k in (

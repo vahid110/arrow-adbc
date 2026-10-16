@@ -48,6 +48,9 @@ adds bounded readiness observation, static diagnostics, terminal-aware SQL
 cancellation and a supported SYS observer with strict visibility proof before
 admission and at cleanup. Original receipts/counters/budgets remain; further host
 authority requires coordinator/human resolution, with no retry from this repair.
+PR #19's initial review requested strict deadlines around slow reads and fresh
+same-run status/provenance before admission; the batched repair requires
+independent exact-head re-review and CI, preserving the failed review/CI evidence.
 Offline success is not live qualification: one exact merged-head batch and verified dedicated
 resource/secret/IAM teardown remain required. The human publication gate remains;
 this roadmap grants no additional spend, tag or publication authority.

@@ -56,6 +56,10 @@ Current state only; history is in git and PR descriptions.
   receipts, terminal-aware cancellation and a supported cross-user SYS observer
   before admission and at cleanup. Original receipts remain spent; further host
   authority requires coordinator/human resolution after review.
+  PR #19's first head `f10b26670` required independent deadline/fresh-run repairs;
+  its [cancelled Dev run](https://github.com/vahid110/arrow-adbc/actions/runs/38923832691)
+  remains evidence. The batched successor requires fresh exact-head review/CI;
+  no external resources or CI role remain and no live authority is renewed.
   AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
