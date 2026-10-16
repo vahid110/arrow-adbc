@@ -211,7 +211,7 @@ def arn(kind, value):
     return f"arn:aws:redshift-serverless:{REGION}:{ACCOUNT}:{kind}/{value}"
 
 
-def resources(admission, redshift, ec2):
+def resources(admission, redshift, ec2, *, initializing=False):
     r = admission["resources"]
     wg = redshift.get_workgroup(workgroupName=NAME)["workgroup"]
     ns = redshift.get_namespace(namespaceName=NAME)["namespace"]
@@ -219,17 +219,23 @@ def resources(admission, redshift, ec2):
         wg["workgroupId"] == r["workgroup_id"]
         and wg["workgroupArn"] == arn("workgroup", r["workgroup_id"])
         and wg["workgroupName"] == NAME
-        and wg["namespaceName"] == NAME
-        and wg["status"] == "AVAILABLE",
+        and wg["namespaceName"] == NAME,
         "workgroup ownership mismatch",
+    )
+    require(
+        wg["status"] == "AVAILABLE" or (initializing and wg["status"] == "MODIFYING"),
+        "workgroup not ready",
     )
     require(
         ns["namespaceId"] == r["namespace_id"]
         and ns["namespaceArn"] == arn("namespace", r["namespace_id"])
         and ns["namespaceName"] == NAME
-        and ns["dbName"] == "adbc_qualification"
-        and ns["status"] == "AVAILABLE",
+        and ns["dbName"] == "adbc_qualification",
         "namespace ownership mismatch",
+    )
+    require(
+        ns["status"] == "AVAILABLE" or (initializing and ns["status"] == "MODIFYING"),
+        "namespace not ready",
     )
     require(
         wg["baseCapacity"] == wg["maxCapacity"] == 4

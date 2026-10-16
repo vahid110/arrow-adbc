@@ -128,7 +128,9 @@ class AWS:
             ],
         }
         self.exceptions = types.SimpleNamespace(
-            ResourceNotFoundException=NotFound, NoSuchEntityException=NotFound
+            ResourceNotFoundException=NotFound,
+            NoSuchEntityException=NotFound,
+            ValidationException=ValidationException,
         )
 
     def event(self, name):
@@ -421,20 +423,28 @@ class AWS:
 
     def execute_statement(self, **kwargs):
         self.event("host-sql")
+        self.statement_sql = kwargs["Sql"]
         assert "SecretArn" in kwargs and not any(
             k in kwargs for k in ("Password", "DbUser")
         )
         return {"Id": "fake-statement-id"}
 
     def describe_statement(self, **kwargs):
+        if "stv_sessions" in getattr(self, "statement_sql", ""):
+            return {"Status": "FAILED", "Error": "PRIVATE permission denied"}
         return {"Status": "FINISHED"}
 
     def get_statement_result(self, **kwargs):
         self.event("independent-observation")
-        return {"Records": [[{"longValue": 0}, {"longValue": 0}]]}
+        return {
+            "Records": [
+                [{"longValue": 1}, {"longValue": 1}, {"longValue": 0}, {"longValue": 0}]
+            ]
+        }
 
     def cancel_statement(self, **kwargs):
         self.event("cancel-host-sql")
+        raise ValidationException("already FINISHED or FAILED")
 
 
 class LiveTest(unittest.TestCase):
@@ -592,8 +602,17 @@ class LiveTest(unittest.TestCase):
             self.assertNotIn("claim", self.sdk.events)
             path.write_bytes(original)
 
+    def test_caller_cannot_enable_initializing_mode(self):
+        self.a["initializing"] = True
+        with self.assertRaises(Rejected):
+            self.execute()
+        self.assertNotIn("identity", self.sdk.events)
+        self.assertNotIn("claim", self.sdk.events)
+
     def test_resource_control_and_association_mismatch_never_claims(self):
         changes = [
+            ("get_workgroup", "workgroup", "status", "MODIFYING"),
+            ("get_namespace", "namespace", "status", "MODIFYING"),
             ("get_workgroup", "workgroup", "baseCapacity", 8),
             ("get_workgroup", "workgroup", "maxCapacity", 8),
             (
@@ -1087,6 +1106,222 @@ class ProvenanceTest(unittest.TestCase):
                 prepare.parse_json(text)
 
 
+class HostStatementTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.network = patch.object(
+            socket, "socket", side_effect=AssertionError("NETWORK FORBIDDEN")
+        )
+        self.network.start()
+        self.addCleanup(self.network.stop)
+        self.a = admission()
+        self.sdk = AWS(self.a)
+        self.sdk.get_caller_identity = lambda: {
+            "Account": live.ACCOUNT,
+            "Arn": f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host",
+        }
+        self.tick = NOW
+        self.host = Host(
+            {
+                k: self.sdk
+                for k in (
+                    "sts",
+                    "ssm",
+                    "redshift-serverless",
+                    "redshift-data",
+                    "ec2",
+                    "iam",
+                )
+            },
+            Mock(),
+            Path(self.temp.name) / "receipt.json",
+            clock=lambda: self.tick,
+            pause=self.pause,
+        )
+        self.host.github.get.return_value = {
+            "status": "completed",
+            "conclusion": "cancelled",
+        }
+        self.host.deadline = NOW + 120
+        self.host.state = {
+            "nonce": self.a["nonce"],
+            "attempted": ["namespace", "workgroup", "security_group", "usage_limit"],
+            "created": {},
+            "admission": self.a,
+            "run_id": RUN,
+            "deadline": NOW + 120,
+            "managed_secret_arn": self.sdk.get_namespace()["namespace"][
+                "adminPasswordSecretArn"
+            ],
+        }
+
+    def pause(self, seconds):
+        self.tick += seconds
+
+    def test_finished_records_survive_without_cancel(self):
+        rows = self.host.statement("SELECT 0", records=True)
+        self.assertEqual(rows[0][0], {"longValue": 1})
+        self.assertNotIn("cancel-host-sql", self.sdk.events)
+
+    def test_failed_and_aborted_sql_are_not_masked_by_cancel(self):
+        for status in ("FAILED", "ABORTED"):
+            with self.subTest(status=status):
+                self.sdk.describe_statement = lambda **kwargs: {
+                    "Status": status,
+                    "Error": "PRIVATE SQL ERROR",
+                }
+                with self.assertRaisesRegex(Rejected, "host SQL failed"):
+                    self.host.statement("SELECT 0")
+                self.assertNotIn("cancel-host-sql", self.sdk.events)
+                self.assertEqual(
+                    self.host.state["statements"][-1],
+                    {"terminal": status, "cancel": "NOT_NEEDED"},
+                )
+                self.assertNotIn("PRIVATE", self.host.path.read_text())
+
+    def test_finished_result_error_preserves_failure_without_cancel(self):
+        self.sdk.get_statement_result = Mock(
+            side_effect=RuntimeError("PRIVATE result error")
+        )
+        with self.assertRaises(RuntimeError):
+            self.host.statement("SELECT 0", records=True)
+        self.assertNotIn("cancel-host-sql", self.sdk.events)
+        self.assertEqual(self.host.state["statements"][-1]["terminal"], "FINISHED")
+        self.assertNotIn("PRIVATE", self.host.path.read_text())
+
+    def test_unknown_describe_cancel_race_preserves_primary_failure(self):
+        self.sdk.describe_statement = Mock(
+            side_effect=[
+                RuntimeError("PRIVATE original"),
+                {"Status": "FAILED", "Error": "PRIVATE SQL"},
+            ]
+        )
+        with self.assertRaisesRegex(RuntimeError, "PRIVATE original"):
+            self.host.statement("SELECT 0")
+        self.assertEqual(self.sdk.events.count("cancel-host-sql"), 1)
+        self.assertEqual(
+            self.host.state["statements"][-1],
+            {"terminal": "FAILED", "cancel": "TERMINAL_RACE"},
+        )
+        self.assertNotIn("PRIVATE", self.host.path.read_text())
+
+    def test_inflight_timeout_cancels_once_and_checks_terminal(self):
+        cancelled = []
+        self.sdk.describe_statement = lambda **kwargs: {
+            "Status": "ABORTED" if cancelled else "STARTED"
+        }
+
+        def cancel(**kwargs):
+            cancelled.append(kwargs["Id"])
+            return {"Status": True}
+
+        self.sdk.cancel_statement = cancel
+        with self.assertRaisesRegex(Rejected, "host stage deadline reached"):
+            self.host.statement("SELECT 0")
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(self.tick - NOW, 30)
+        self.assertEqual(
+            self.host.state["statements"][-1],
+            {"terminal": "ABORTED", "cancel": "REQUESTED_AND_TERMINAL"},
+        )
+
+    def test_uncertain_cancellation_and_failed_observation_remain_unknown(self):
+        self.sdk.describe_statement = Mock(side_effect=RuntimeError("PRIVATE describe"))
+        self.sdk.cancel_statement = Mock(
+            side_effect=RuntimeError("PRIVATE cancellation")
+        )
+        self.host.cleanup()
+        self.assertEqual(
+            self.host.state["statements"][-1],
+            {"terminal": "UNKNOWN", "cancel": "UNKNOWN"},
+        )
+        self.assertEqual(
+            self.host.state["independent_observation"]["failure_reason"],
+            "SDK_OR_UNEXPECTED_FAILURE",
+        )
+        self.assertIsNot(
+            self.host.state["independent_observation"].get("sessions_absent"), True
+        )
+        self.assertEqual(self.host.state["external_teardown"], "verified")
+        self.assertNotIn("PRIVATE", self.host.path.read_text())
+
+    def test_restricted_or_malformed_observer_cannot_prove_zero(self):
+        self.sdk.cancel_statement = lambda **kwargs: {"Status": True}
+        for rows in (
+            [[{"longValue": 0}, {"longValue": 0}]],
+            [[{"longValue": 0}, {"longValue": 0}, {"longValue": 0}, {"longValue": 0}]],
+            [[{"longValue": 1}, {"longValue": 0}]],
+            [
+                [
+                    {"longValue": True},
+                    {"longValue": 1},
+                    {"longValue": 0},
+                    {"longValue": 0},
+                ]
+            ],
+            [[{"longValue": 1}, {"longValue": 2}, {"longValue": 0}, {"longValue": 0}]],
+            [[{"longValue": 1}, {"longValue": 0}, {"longValue": 0}, {"longValue": 0}]],
+            [[{"longValue": 1}, {"longValue": 1}, {"longValue": -1}, {"longValue": 0}]],
+            [],
+        ):
+            with self.subTest(rows=rows):
+                self.sdk.ns_exists = self.sdk.wg_exists = self.sdk.sg_exists = (
+                    self.sdk.usage_exists
+                ) = True
+                self.sdk.get_statement_result = lambda **kwargs: {"Records": rows}
+                self.host.cleanup()
+                observation = self.host.state["independent_observation"]
+                self.assertIsNot(observation.get("fixtures_absent"), True)
+                self.assertIsNot(observation.get("sessions_absent"), True)
+
+    def test_supported_observer_counts_sessions_without_database_filter(self):
+        for fixtures, sessions in ((0, 0), (1, 0), (0, 1)):
+            with self.subTest(fixtures=fixtures, sessions=sessions):
+                self.sdk.ns_exists = self.sdk.wg_exists = self.sdk.sg_exists = (
+                    self.sdk.usage_exists
+                ) = True
+                self.sdk.get_statement_result = lambda **kwargs: {
+                    "Records": [
+                        [
+                            {"longValue": 1},
+                            {"longValue": 1},
+                            {"longValue": fixtures},
+                            {"longValue": sessions},
+                        ]
+                    ]
+                }
+                execute = self.sdk.execute_statement
+                with patch.object(
+                    self.sdk, "execute_statement", wraps=execute
+                ) as called:
+                    self.host.cleanup()
+                sql = called.call_args.kwargs["Sql"]
+                self.assertIn("sys_session_history", sql)
+                self.assertIn("svv_user_info", sql)
+                self.assertIn("user_name=current_user", sql)
+                self.assertIn("AND superuser", sql)
+                self.assertIn("status='active'", sql)
+                self.assertIn("IAMR:adbc-isolated-qualification-ci", sql)
+                self.assertNotIn("database_name", sql)
+                self.assertNotIn("stv_sessions", sql)
+                observed = self.host.state["independent_observation"]
+                self.assertTrue(observed["admin_visibility_verified"])
+                self.assertEqual(observed["fixtures_absent"], fixtures == 0)
+                self.assertEqual(observed["sessions_absent"], sessions == 0)
+
+    def test_absent_ci_user_cannot_prove_cleanup_even_with_admin_visibility(self):
+        self.sdk.get_statement_result = lambda **kwargs: {
+            "Records": [
+                [{"longValue": 1}, {"longValue": 0}, {"longValue": 0}, {"longValue": 0}]
+            ]
+        }
+        self.host.cleanup()
+        observed = self.host.state["independent_observation"]
+        self.assertEqual(observed["failure_reason"], "OBSERVER_PROOF_INVALID")
+        self.assertIsNot(observed.get("sessions_absent"), True)
+
+
 class HostTest(unittest.TestCase):
     def test_invalid_initial_role_rejects_before_creation(self):
         for failure in (
@@ -1266,6 +1501,26 @@ class HostTest(unittest.TestCase):
                 self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
 
     def test_actual_fake_host_lifecycle_bootstraps_observes_and_deletes(self):
+        self.run_host_lifecycle()
+
+    def test_post_usage_modifying_waits_without_repeating_mutations(self):
+        for transition in (True, "namespace"):
+            with self.subTest(transition=transition):
+                self.run_host_lifecycle(transition=transition)
+
+    def test_never_ready_or_unsafe_initialization_fails_before_policy_and_sql(self):
+        for failure in ("stuck", "ns-stuck", "compute", "owner", "tls"):
+            with self.subTest(failure=failure):
+                self.run_host_lifecycle(transition=True, failure=failure)
+
+    def test_observer_fails_before_admission_for_hidden_user_nonzero_or_sql_error(self):
+        for failure in ("identity", "user", "nonzero", "sql"):
+            with self.subTest(failure=failure):
+                self.run_host_lifecycle(observation_failure=failure)
+
+    def run_host_lifecycle(
+        self, *, transition=False, failure=None, observation_failure=None
+    ):
         a = admission()
         sdk = AWS(a)
         sdk.ns_exists = sdk.wg_exists = sdk.sg_exists = False
@@ -1273,6 +1528,73 @@ class HostTest(unittest.TestCase):
             "Account": live.ACCOUNT,
             "Arn": (f"arn:aws:sts::{live.ACCOUNT}:assumed-role/adbc-provisioner/host"),
         }
+        tick = [NOW]
+        readiness = ["MODIFYING", "AVAILABLE"]
+        original_workgroup = sdk.get_workgroup
+        original_namespace = sdk.get_namespace
+        original_usage = sdk.create_usage_limit
+        usage_created = [False]
+
+        def create_usage(**kwargs):
+            result = original_usage(**kwargs)
+            usage_created[0] = True
+            return result
+
+        def workgroup(**kwargs):
+            result = original_workgroup(**kwargs)
+            if (
+                transition
+                and transition != "namespace"
+                and failure != "ns-stuck"
+                and usage_created[0]
+            ):
+                w = result["workgroup"]
+                w["status"] = (
+                    "MODIFYING"
+                    if failure
+                    else (readiness.pop(0) if readiness else "AVAILABLE")
+                )
+                if failure == "compute":
+                    w["maxCapacity"] = 8
+                elif failure == "owner":
+                    w["workgroupId"] = "a" * 36
+                elif failure == "tls":
+                    w["configParameters"][0]["parameterValue"] = "false"
+            return result
+
+        def namespace(**kwargs):
+            result = original_namespace(**kwargs)
+            if (transition == "namespace" or failure == "ns-stuck") and usage_created[
+                0
+            ]:
+                result["namespace"]["status"] = (
+                    "MODIFYING"
+                    if failure
+                    else (readiness.pop(0) if readiness else "AVAILABLE")
+                )
+            return result
+
+        sdk.get_workgroup = workgroup
+        sdk.get_namespace = namespace
+        sdk.create_usage_limit = create_usage
+        if observation_failure:
+            sdk.get_statement_result = lambda **kwargs: {
+                "Records": [
+                    [
+                        {"longValue": 0 if observation_failure == "identity" else 1},
+                        {"longValue": 0 if observation_failure == "user" else 1},
+                        {"longValue": 0},
+                        {"longValue": 1 if observation_failure == "nonzero" else 0},
+                    ]
+                ]
+            }
+            if observation_failure == "sql":
+                describe = sdk.describe_statement
+                sdk.describe_statement = lambda **kwargs: (
+                    {"Status": "FAILED", "Error": "PRIVATE permission denied"}
+                    if "sys_session_history" in getattr(sdk, "statement_sql", "")
+                    else describe(**kwargs)
+                )
         github = Mock()
         github.get.return_value = {"status": "completed", "conclusion": "success"}
         preflight = {
@@ -1307,8 +1629,8 @@ class HostTest(unittest.TestCase):
                 },
                 github,
                 Path(temp) / "receipt.json",
-                clock=lambda: NOW,
-                pause=lambda _: None,
+                clock=lambda: tick[0],
+                pause=lambda seconds: tick.__setitem__(0, tick[0] + seconds),
             )
             template = Path(temp) / "policy.json"
             template.write_text(
@@ -1328,6 +1650,87 @@ class HostTest(unittest.TestCase):
                     }
                 )
             )
+            if failure:
+                with (
+                    patch.object(host, "preflight", return_value=preflight),
+                    self.assertRaises(Rejected),
+                ):
+                    host.run(
+                        preflight_id=1,
+                        run=RUN,
+                        source=SOURCE,
+                        nonce=a["nonce"],
+                        policy_template=template,
+                        policy_sha256=live.file_sha(template),
+                    )
+                self.assertEqual(
+                    host.state["first_failure"]["stage"], "INITIAL_RESOURCES"
+                )
+                self.assertEqual(
+                    host.state["first_failure"]["reason"],
+                    {
+                        "stuck": "DEADLINE",
+                        "ns-stuck": "DEADLINE",
+                        "compute": "COMPUTE_CONTROLS",
+                        "owner": "WORKGROUP_OWNERSHIP",
+                        "tls": "SQL_CONTROLS",
+                    }[failure],
+                )
+                self.assertFalse(
+                    set(sdk.events)
+                    & {"install-runtime-policy", "host-sql", "admission", "credentials"}
+                )
+                self.assertLessEqual(tick[0] - NOW, 120)
+                if failure == "owner":
+                    self.assertTrue(sdk.wg_exists)
+                    self.assertNotIn("delete-workgroup", sdk.events)
+                    self.assertTrue(
+                        host.state["external_teardown"].startswith("unknown")
+                    )
+                else:
+                    self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
+                    self.assertEqual(host.state["external_teardown"], "verified")
+                return
+            if observation_failure:
+                with (
+                    patch.object(host, "preflight", return_value=preflight),
+                    self.assertRaises(Rejected),
+                ):
+                    host.run(
+                        preflight_id=1,
+                        run=RUN,
+                        source=SOURCE,
+                        nonce=a["nonce"],
+                        policy_template=template,
+                        policy_sha256=live.file_sha(template),
+                    )
+                self.assertEqual(
+                    host.state["first_failure"],
+                    {
+                        "stage": "OBSERVER",
+                        "reason": "SQL_FAILED"
+                        if observation_failure == "sql"
+                        else "OBSERVER_NONZERO"
+                        if observation_failure == "nonzero"
+                        else "OBSERVER_PROOF_INVALID",
+                    },
+                )
+                self.assertFalse(
+                    set(sdk.events)
+                    & {"admission", "claim", "credentials", "cancel-host-sql"}
+                )
+                self.assertEqual(sdk.events.count("install-runtime-policy"), 1)
+                self.assertIn("remove-runtime-policy", sdk.events)
+                self.assertEqual(host.state["external_teardown"], "verified")
+                self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
+                self.assertNotIn("PRIVATE", host.path.read_text())
+                if observation_failure == "sql":
+                    self.assertEqual(host.state["statements"][-1]["terminal"], "FAILED")
+                    self.assertEqual(
+                        host.state["independent_observation"]["failure_reason"],
+                        "SQL_FAILED",
+                    )
+                return
             with patch.object(host, "preflight", return_value=preflight):
                 result = host.run(
                     preflight_id=1,
@@ -1338,6 +1741,10 @@ class HostTest(unittest.TestCase):
                     policy_sha256=live.file_sha(template),
                 )
             self.assertEqual(result["external_teardown"], "verified")
+            self.assertEqual(sdk.events.count("create-workgroup"), 1)
+            self.assertEqual(sdk.events.count("create-usage"), 1)
+            self.assertEqual(tick[0], NOW + (5 if transition else 0))
+            self.assertNotIn("cancel-host-sql", sdk.events)
             self.assertNotIn("pricePerformanceTarget", sdk.workgroup_request)
             self.assertIs(
                 sdk.workgroup_request["extraComputeForAutomaticOptimization"], False
@@ -1345,7 +1752,14 @@ class HostTest(unittest.TestCase):
             self.assertEqual(sdk.workgroup_request["baseCapacity"], 4)
             self.assertEqual(sdk.workgroup_request["maxCapacity"], 4)
             self.assertTrue(result["independent_observation"]["fixtures_absent"])
-            self.assertEqual(sdk.events.count("host-sql"), 3)
+            self.assertEqual(sdk.events.count("host-sql"), 4)
+            self.assertLess(
+                sdk.events.index("independent-observation"),
+                sdk.events.index("admission"),
+            )
+            self.assertTrue(
+                result["pre_admission_observation"]["admin_visibility_verified"]
+            )
             self.assertEqual(sdk.events.count("read-initial-policy"), 2)
             self.assertLess(
                 sdk.events.index("read-initial-policy"),

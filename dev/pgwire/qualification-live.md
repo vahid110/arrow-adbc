@@ -81,8 +81,8 @@ Data API and tears down dedicated resources even when CI fails.
 Run only after the reviewed Task008c head is merged and its applicable CI is green.
 The worker and reviewer must stay offline. Use only the already authorized host
 profile; do not modify global profiles, the OIDC provider, VPC or subnet settings.
-The host attempt/receipt for failed run `38916730017` remains spent evidence;
-this offline API repair does not authorize another host invocation. The
+The host attempts/receipts for failed runs `38916730017` and `38920727258` remain
+spent evidence; this offline repair does not authorize another host invocation. The
 coordinator must resolve further authority with the human before a new attempt.
 
 1. Generate the IAM baseline with AWS Autopilot from the actual SDK sources
@@ -107,8 +107,10 @@ coordinator must resolve further authority with the human before a new attempt.
    `repo:vahid110@5770674/arrow-adbc@1363017696:ref:refs/heads/feature/pgwire-core-redshift`.
    `OIDC_SUBJECT` pins this exact value; legacy subjects, alternate IDs/refs,
    wildcard/OR subjects and `StringLike` are rejected.
-   For the owned role retained after run `38912745155`, only the coordinator
-   applies the independently reviewed exact trust via `UpdateAssumeRolePolicy`.
+   The role retained after run `38912745155` was independently deleted after run
+   `38920727258`; no CI role currently remains. Any separately authorized future
+   trust update is coordinator-only, independently reviewed, and uses the exact
+   document via `UpdateAssumeRolePolicy`.
    Fresh `GetRole` must match the full trust, ARN and ownership tag before
    dispatch. Do not change repository OIDC settings or the global provider, and
    do not capture/log JWTs or introduce another authentication method.
@@ -146,20 +148,38 @@ coordinator must resolve further authority with the human before a new attempt.
    any resource creation and again before runtime-policy installation, rejects
    pre-existing names, creates tagged
    dedicated resources and the managed admin secret, verifies associations and
-   finite controls, installs/readbacks only the exact run policy, and uses the
+   finite controls, waits at most 120 seconds after usage-limit creation for both
+   exact owned workgroup/namespace to be AVAILABLE, and installs/readbacks only
+   the exact run policy. Only this bounded host observation permits MODIFYING;
+   all ownership/compute/network/TLS/usage checks still apply on every poll.
+   CI and every SQL call require AVAILABLE. The helper uses the
    namespace's **SecretArn** with `redshift-data:ExecuteStatement` to create
    `"IAMR:adbc-isolated-qualification-ci" PASSWORD DISABLE` and grant CREATE on
-   this database. It never calls `GetSecretValue`. It then issues the immutable
+   this database. It never calls `GetSecretValue`. Before immutable admission it
+   executes the same supported identity/fixture/session observer used at cleanup,
+   requiring verified visibility and zero counts. It then issues the immutable
    admission, waits boundedly for the exact CI run, and always enters cleanup.
    SIGINT/ordinary failures enter `finally`; a host crash requires exact-owned
    recovery from the durable receipt, never a second paid batch.
 5. Inspect independent Data API counts for exactly `adbc_q_<run>0/1` and sessions
-   for `IAMR:adbc-isolated-qualification-ci`. Unknown/nonzero observation is a
+   for `IAMR:adbc-isolated-qualification-ci`. The fixed query uses
+   [SYS_SESSION_HISTORY](https://docs.aws.amazon.com/redshift/latest/dg/SYS_SESSION_HISTORY.html)
+   with status `active`, across all databases in the owned namespace. It accepts
+   counts only after [SVV_USER_INFO](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_USER_INFO.html)
+   proves the current user is exactly `adbc_qualification_admin`, is a superuser
+   with cross-user visibility, and resolves exactly one CI-user ID. Missing or
+   restricted identity, including a genuinely absent pre-bootstrap user, remains
+   UNKNOWN. No new monitoring roles/grants are added. Unknown/nonzero observation is a
    failure even if resource deletion succeeds. The helper stops the exact CI run
    if needed, removes only the unchanged owned runtime policy, deletes/verifies
    the tagged workgroup with the usage control still active, then its usage
    limit, namespace and new SG. Unexpected/untagged ingress is preserved as
    unknown for host inspection; no guessed rule is revoked.
+   First-failure stage/reason, SQL terminal status and cancellation outcome use
+   closed static enums; cleanup cannot replace the primary failure. FINISHED,
+   FAILED and ABORTED statements are never cancelled. Unknown/inflight paths
+   attempt cancellation once and freshly read terminal status, preserving any
+   completion race or uncertainty without a SQL retry or arbitrary error text.
 6. Independently verify the managed secret is removed or scheduled for deletion
    using **DescribeSecret only**, then remove the exact owned initial inline
    policy and CI role using `DeleteRolePolicy`, `DeleteRole`, and fresh

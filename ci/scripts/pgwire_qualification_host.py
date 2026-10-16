@@ -55,13 +55,57 @@ from pgwire_qualification_live import (
     rules,
     validate,
 )
-from pgwire_qualification_manifest import PROTECTED, SHA, digest, require
+from pgwire_qualification_manifest import PROTECTED, SHA, Rejected, digest, require
 from pgwire_qualification_prepare import GitHub, parse_json
 
 OWNER = f"arn:aws:iam::{ACCOUNT}:role/adbc-provisioner"
 INITIAL_POLICY = "adbc-qualification-initial"
 RUN_POLICY = "adbc-qualification-20261016-runtime"
 ROLE_NAME = "adbc-isolated-qualification-ci"
+FAILURE_STAGES = {
+    "preflight-verification": "PREFLIGHT",
+    "initial-role-verification": "INITIAL_ROLE",
+    "initial-role-verified": "INITIAL_ROLE",
+    "create-namespace-attempted": "CREATE_NAMESPACE",
+    "create-security_group-attempted": "CREATE_SECURITY_GROUP",
+    "create-workgroup-attempted": "CREATE_WORKGROUP",
+    "create-usage-limit-attempted": "CREATE_USAGE_LIMIT",
+    "initial-resource-verification": "INITIAL_RESOURCES",
+    "runtime-policy-write-attempted": "RUNTIME_POLICY",
+    "host-sql-attempted": "HOST_SQL",
+    "observer-sql": "OBSERVER",
+    "admission-write-attempted": "ADMISSION",
+    "admission-issued": "CI_COMPLETION",
+}
+FAILURE_REASONS = {
+    "workgroup not ready": "WORKGROUP_NOT_READY",
+    "workgroup ownership mismatch": "WORKGROUP_OWNERSHIP",
+    "namespace ownership mismatch": "NAMESPACE_OWNERSHIP",
+    "namespace not ready": "NAMESPACE_NOT_READY",
+    "finite compute control mismatch": "COMPUTE_CONTROLS",
+    "workgroup network mismatch": "NETWORK_CONTROLS",
+    "workgroup SQL limits mismatch": "SQL_CONTROLS",
+    "unowned Redshift resource": "RESOURCE_TAGS",
+    "finite usage control mismatch": "USAGE_CONTROLS",
+    "unowned security group": "SECURITY_GROUP_OWNERSHIP",
+    "subnet association mismatch": "SUBNET_ASSOCIATION",
+    "host stage deadline reached": "DEADLINE",
+    "host SQL failed": "SQL_FAILED",
+    "observer identity or counts invalid": "OBSERVER_PROOF_INVALID",
+    "observer found remaining fixtures or sessions": "OBSERVER_NONZERO",
+}
+TERMINAL = ("FINISHED", "FAILED", "ABORTED")
+
+
+def failure_reason(error):
+    # Compare only our static rejection messages; never serialize SDK/SQL text.
+    return (
+        FAILURE_REASONS.get(str(error), "REJECTED")
+        if isinstance(error, Rejected)
+        else "SDK_OR_UNEXPECTED_FAILURE"
+    )
+
+
 INITIAL_POLICY_DOCUMENT = {
     "Version": "2012-10-17",
     "Statement": [
@@ -133,13 +177,18 @@ class Host:
         )
         statement_id = response["Id"]
         self.state.setdefault("statement_ids", []).append(statement_id)
+        evidence = {"terminal": "UNKNOWN", "cancel": "NOT_ATTEMPTED"}
+        self.state.setdefault("statements", []).append(evidence)
         self.save()
         try:
             result = self.until(
                 lambda: data.describe_statement(Id=statement_id),
-                lambda r: r["Status"] in ("FINISHED", "FAILED", "ABORTED"),
+                lambda r: r["Status"] in TERMINAL,
                 seconds=30,
             )
+            evidence["terminal"] = result["Status"]
+            evidence["cancel"] = "NOT_NEEDED"
+            self.save()
             require(result["Status"] == "FINISHED", "host SQL failed")
             return (
                 data.get_statement_result(Id=statement_id)["Records"]
@@ -147,8 +196,31 @@ class Host:
                 else None
             )
         finally:
-            # Bounded cancellation even on unknown describe/result replies.
-            data.cancel_statement(Id=statement_id)
+            if evidence["terminal"] == "UNKNOWN":
+                # Never mask the original failure. A completed-statement race
+                # needs a fresh terminal readback, not a blind cancel retry.
+                cancelled = False
+                race = False
+                try:
+                    cancelled = (
+                        data.cancel_statement(Id=statement_id).get("Status") is True
+                    )
+                except data.exceptions.ValidationException:
+                    race = True
+                except BaseException:
+                    pass
+                evidence["cancel"] = "UNKNOWN"
+                try:
+                    observed = data.describe_statement(Id=statement_id)["Status"]
+                    if observed in TERMINAL:
+                        evidence["terminal"] = observed
+                        if race:
+                            evidence["cancel"] = "TERMINAL_RACE"
+                        elif cancelled:
+                            evidence["cancel"] = "REQUESTED_AND_TERMINAL"
+                except BaseException:
+                    pass
+                self.save()
 
     def preflight(self, artifact_id, run, source):
         item = self.github.get("/actions/artifacts/" + str(artifact_id))
@@ -360,8 +432,10 @@ class Host:
             json.dump(self.state, stream)
         failed = False
         try:
+            self.phase("preflight-verification")
             preflight = self.preflight(preflight_id, run, source)
             # Reject broad initial authority before any resource can be created.
+            self.phase("initial-role-verification")
             self.verify_initial_role()
             rs, ec2 = self.aws["redshift-serverless"], self.aws["ec2"]
             require(
@@ -491,6 +565,12 @@ class Host:
             validate(admission, source=source, run=run, now=now)
             self.state["admission"] = admission
             self.save()
+            self.phase("initial-resource-verification")
+            self.until(
+                lambda: resources(admission, rs, ec2, initializing=True),
+                lambda pair: all(v["status"] == "AVAILABLE" for v in pair),
+                seconds=120,
+            )
             resources(admission, rs, ec2)
             self.install_policy(policy_template, policy_sha256)
             self.statement(
@@ -499,6 +579,13 @@ class Host:
             self.statement(
                 "GRANT CREATE ON DATABASE adbc_qualification "
                 'TO "IAMR:adbc-isolated-qualification-ci"'
+            )
+            observed = self.observe()
+            self.state["pre_admission_observation"] = observed
+            self.save()
+            require(
+                observed["fixtures_absent"] and observed["sessions_absent"],
+                "observer found remaining fixtures or sessions",
             )
             require(
                 self.clock() < admission["window"]["admit_before"],
@@ -523,8 +610,14 @@ class Host:
             require(
                 result["conclusion"] == "success", "CI qualification did not succeed"
             )
-        except BaseException:
+        except BaseException as error:
             failed = True
+            self.state["first_failure"] = {
+                "stage": FAILURE_STAGES.get(
+                    self.state.get("phase"), "OTHER_HOST_STAGE"
+                ),
+                "reason": failure_reason(error),
+            }
             self.state["failure"] = "host-lifecycle-failed; no paid retry"
             self.save()
         finally:
@@ -588,6 +681,58 @@ class Host:
         self.save()
         return value
 
+    def observe(self):
+        self.phase("observer-sql")
+        identity(self.aws["sts"], OWNER)
+        try:
+            run = self.state["run_id"]
+            rows = self.statement(
+                "SELECT (SELECT COUNT(*) FROM svv_user_info "
+                "WHERE user_name=current_user "
+                "AND user_name='adbc_qualification_admin' AND superuser), "
+                "(SELECT COUNT(*) FROM svv_user_info "
+                "WHERE user_name='IAMR:adbc-isolated-qualification-ci'), "
+                "(SELECT COUNT(*) FROM pg_namespace "
+                "WHERE nspname IN ('adbc_q_"
+                + str(run)
+                + "0','adbc_q_"
+                + str(run)
+                + "1')), (SELECT COUNT(*) FROM sys_session_history "
+                "WHERE status='active' AND user_id IN "
+                "(SELECT CAST(user_id AS VARCHAR) FROM svv_user_info "
+                "WHERE user_name='IAMR:adbc-isolated-qualification-ci'))",
+                records=True,
+            )
+            require(
+                type(rows) is list
+                and len(rows) == 1
+                and type(rows[0]) is list
+                and len(rows[0]) == 4
+                and all(
+                    type(v) is dict
+                    and set(v) == {"longValue"}
+                    and type(v["longValue"]) is int
+                    and v["longValue"] >= 0
+                    for v in rows[0]
+                ),
+                "observer identity or counts invalid",
+            )
+            admin, users, fixtures, sessions = [v["longValue"] for v in rows[0]]
+            require(
+                admin == 1 and users == 1 and fixtures <= 2,
+                "observer identity or counts invalid",
+            )
+            return {
+                "authenticated_role": OWNER,
+                "observed_at": int(self.clock()),
+                "admin_visibility_verified": True,
+                "ci_user": "PRESENT",
+                "fixtures_absent": fixtures == 0,
+                "sessions_absent": sessions == 0,
+            }
+        finally:
+            self.phase("observer-sql")
+
     def cleanup(self):
         # Cleanup has a finite extra observation allowance, never paid SQL retry.
         self.deadline = min(self.state["deadline"] + 180, self.clock() + 180)
@@ -619,26 +764,11 @@ class Host:
         self.save()
         if "admission" in self.state:
             try:
-                run = self.state["run_id"]
-                rows = self.statement(
-                    "SELECT (SELECT COUNT(*) FROM pg_namespace "
-                    "WHERE nspname IN ('adbc_q_"
-                    + str(run)
-                    + "0','adbc_q_"
-                    + str(run)
-                    + "1')), (SELECT COUNT(*) FROM stv_sessions "
-                    "WHERE user_name = 'IAMR:adbc-isolated-qualification-ci')",
-                    records=True,
-                )
+                self.state["independent_observation"] = self.observe()
+            except BaseException as error:
                 self.state["independent_observation"] = {
-                    "authenticated_role": OWNER,
-                    "observed_at": int(self.clock()),
-                    "fixtures_absent": rows == [[{"longValue": 0}, {"longValue": 0}]],
-                    "sessions_absent": rows == [[{"longValue": 0}, {"longValue": 0}]],
-                }
-            except BaseException:
-                self.state["independent_observation"] = {
-                    "state": "unknown; dedicated resource teardown still required"
+                    "state": "unknown; dedicated resource teardown still required",
+                    "failure_reason": failure_reason(error),
                 }
             self.save()
         rs, ec2 = self.aws["redshift-serverless"], self.aws["ec2"]
