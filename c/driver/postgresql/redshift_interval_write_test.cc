@@ -24,6 +24,7 @@
 #include "copy/reader.h"
 #include "copy/writer.h"
 #include "driver/framework/utility.h"
+#include "redshift_interval_catalog.h"
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
 
@@ -373,6 +374,45 @@ TEST(RedshiftIntervalWriteTest,
     EXPECT_NE(MakeCopyFieldReader(type, schema.get(), &reader, nullptr), 0);
   }
 }
+TEST(RedshiftIntervalWriteTest, NullShortcutRejectsForeignSemanticsAndDictionary) {
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
+  PostgresType target;
+  ASSERT_EQ(resolver->Find(testing::kDaySecondOid, &target, nullptr), 0);
+  target = target.WithIntervalConstraint(
+      testing::IntervalReferenceConstraint(Family::kDaySecond, Qualifier::kDay));
+  for (const auto& marker : {std::pair{"ARROW:extension:name", "foreign"},
+                             {"ARROW:extension:metadata", "{}"},
+                             {"ADBC:redshift:sql_type", "HLLSKETCH"},
+                             {"ADBC:redshift:byte_width", "10"},
+                             {"ADBC:redshift:type_modifier", "-1"}}) {
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_NA);
+    ASSERT_EQ(testing::DecimalMetadata(schema.get(), marker.first, marker.second), 0);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), nullptr), 0);
+    std::unique_ptr<PostgresCopyFieldWriter> writer;
+    EXPECT_NE(PostgresType::ValidateIntervalWriteSchema(*resolver, schema.get(), nullptr),
+              0);
+    EXPECT_NE(MakeCopyFieldWriter(schema.get(), view.get(), *resolver, &target, &writer,
+                                  false, nullptr),
+              0);
+    EXPECT_FALSE(writer);
+  }
+  nanoarrow::UniqueSchema dictionary;
+  ArrowSchemaInitFromType(dictionary.get(), NANOARROW_TYPE_INT8);
+  ASSERT_EQ(ArrowSchemaAllocateDictionary(dictionary.get()), 0);
+  ArrowSchemaInitFromType(dictionary->dictionary, NANOARROW_TYPE_NA);
+  nanoarrow::UniqueArrayView view;
+  ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), dictionary.get(), nullptr), 0);
+  std::unique_ptr<PostgresCopyFieldWriter> writer;
+  EXPECT_NE(
+      PostgresType::ValidateIntervalWriteSchema(*resolver, dictionary.get(), nullptr), 0);
+  EXPECT_NE(MakeCopyFieldWriter(dictionary.get(), view.get(), *resolver, &target, &writer,
+                                false, nullptr),
+            0);
+  EXPECT_FALSE(writer);
+}
 TEST(RedshiftIntervalWriteTest,
      ActualTargetValidationPrecedesGenuineNullWriterAndOidSelection) {
   for (auto family : {Family::kYearMonth, Family::kDaySecond})
@@ -396,6 +436,8 @@ TEST(RedshiftIntervalWriteTest,
         ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 1), 0);
         ASSERT_EQ(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_NA), 0);
         ASSERT_EQ(ArrowSchemaSetName(schema->children[0], "amount"), 0);
+        ASSERT_EQ(testing::DecimalMetadata(schema->children[0], "example:note", "client"),
+                  0);
         nanoarrow::UniqueArray array;
         ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
         ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
@@ -413,6 +455,82 @@ TEST(RedshiftIntervalWriteTest,
         EXPECT_EQ(result.ok(), known);
         if (known) EXPECT_EQ(bind.param_types[0], type.oid());
       }
+}
+}  // namespace
+}  // namespace adbcpq
+
+namespace adbcpq {
+namespace {
+void SetObservation(PqResultHelper* out,
+                    const std::vector<std::vector<const char*>>& rows, int columns) {
+  auto* result = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  out->SetResult(result);
+  std::vector<PGresAttDesc> attrs(columns);
+  for (auto& attr : attrs) attr.name = const_cast<char*>("fixture");
+  ASSERT_EQ(PQsetResultAttrs(result, columns, attrs.data()), 1);
+  for (size_t row = 0; row < rows.size(); ++row)
+    for (int col = 0; col < columns; ++col) {
+      const auto* value = rows[row][col];
+      ASSERT_EQ(PQsetvalue(result, static_cast<int>(row), col, const_cast<char*>(value),
+                           value ? static_cast<int>(std::strlen(value)) : -1),
+                1);
+    }
+}
+TEST(RedshiftIntervalCatalogTest, ObservationNeverPromotesPlausibleCatalogToKnown) {
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
+  PostgresType target;
+  ASSERT_EQ(resolver->Find(testing::kDaySecondOid, &target, nullptr), 0);
+  target = target.WithFieldDescriptor(-1, BackendProfile::Redshift());
+  PostgresType table(PostgresTypeId::kRecord);
+  table.AppendChild("amount", target);
+  PqResultHelper before(nullptr, "");
+  const std::vector<std::vector<const char*>> identity = {
+      {"fixturedb", "pg_temp_17", "owned", "12345", "3", "amount", "65017", "-1"}};
+  SetObservation(&before, identity, 8);
+  std::vector<RedshiftIntervalCatalogColumn> columns;
+  ASSERT_TRUE(ParseIntervalCatalogIdentity(before, table, &columns).ok());
+  for (const char* qualifier : {"DAY TO SECOND", "SECOND", "unrecognized", ""}) {
+    PqResultHelper detail(nullptr, "");
+    SetObservation(&detail, {{"3", "amount", qualifier, "6", "3"}}, 5);
+    auto selected = table;
+    ASSERT_TRUE(ApplyIntervalCatalogObservation(detail, columns, &selected).ok());
+    auto c = selected.child(0).interval_constraint();
+    EXPECT_EQ(c.state, RedshiftIntervalState::kUnknown);
+    EXPECT_EQ(c.qualifier, RedshiftIntervalQualifier::kNone);
+    EXPECT_FALSE(c.precision);
+    EXPECT_EQ(c.raw_type, qualifier);
+    EXPECT_EQ(c.raw_precision, "6");
+    EXPECT_EQ(c.raw_datetime_precision, "3");
+    EXPECT_NE(c.RequireKnown(nullptr), 0);
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(selected.child(0).SetSchema(schema.get(), "Redshift"), 0);
+    RedshiftIntervalSchema parsed;
+    EXPECT_EQ(RedshiftIntervalSchema::Parse(schema.get(), true, &parsed, nullptr, true),
+              0);
+    EXPECT_EQ(parsed.constraint.state, RedshiftIntervalState::kUnknown);
+    EXPECT_NE(RedshiftIntervalSchema::Parse(schema.get(), true, &parsed, nullptr), 0);
+  }
+  for (auto rows : {std::vector<std::vector<const char*>>{},
+                    {{"3", "amount", nullptr, nullptr, nullptr},
+                     {"3", "amount", nullptr, nullptr, nullptr}},
+                    {{"2", "amount", nullptr, nullptr, nullptr}},
+                    {{"3", "other", nullptr, nullptr, nullptr}},
+                    {{nullptr, "amount", nullptr, nullptr, nullptr}}}) {
+    PqResultHelper detail(nullptr, "");
+    SetObservation(&detail, rows, 5);
+    auto selected = table;
+    EXPECT_FALSE(ApplyIntervalCatalogObservation(detail, columns, &selected).ok());
+    EXPECT_EQ(selected.child(0).interval_constraint().raw_type, std::nullopt);
+  }
+  for (int col : {3, 4, 5, 6, 7}) {
+    auto changed = identity;
+    changed[0][col] = col == 5 ? "other" : col == 7 ? "999" : "0";
+    PqResultHelper result(nullptr, "");
+    SetObservation(&result, changed, 8);
+    EXPECT_FALSE(ParseIntervalCatalogIdentity(result, table, &columns).ok());
+  }
 }
 }  // namespace
 }  // namespace adbcpq

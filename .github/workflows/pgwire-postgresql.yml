@@ -175,7 +175,7 @@ jobs:
         run: >-
           cmake --build build/pgwire-ci
           --target adbc-driver-postgresql-test adbc-driver-postgresql-copy-test
-          adbc-driver-redshift-test
+          adbc-driver-redshift-test adbc-driver-redshift-interval-recording-test
           --parallel 4
 
       - name: Run PostgreSQL tests
@@ -218,12 +218,14 @@ jobs:
           meson compile -C build/pgwire-meson \
             adbc-driver-postgresql-test \
             adbc-driver-postgresql-copy-test \
-            adbc-driver-redshift-test
+            adbc-driver-redshift-test \
+            adbc-driver-redshift-interval-recording-test
           meson test -C build/pgwire-meson --no-rebuild --num-processes 1 \
             --print-errorlogs \
             adbc-driver-postgresql \
             adbc-driver-postgresql-copy \
-            adbc-driver-redshift
+            adbc-driver-redshift \
+            adbc-driver-redshift-interval-recording
 
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})

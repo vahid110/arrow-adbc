@@ -129,6 +129,37 @@ foreach name, conf : postgres_tests
     test('adbc-' + name, exc, timeout: name == 'driver-postgresql' ? 120 : 30)
 endforeach
 
+# Test-only public C API recorder; production artifacts have no fixture symbols.
+interval_recording_args = ['-DADBC_EXPORTING']
+foreach symbol : [
+    'PQconnectdb',
+    'PQstatus',
+    'PQfinish',
+    'PQparameterStatus',
+    'PQgetCancel',
+    'PQfreeCancel',
+    'PQsetNoticeProcessor',
+    'PQtransactionStatus',
+    'PQerrorMessage',
+    'PQescapeIdentifier',
+    'PQexec',
+    'PQexecParams',
+    'PQprepare',
+    'PQexecPrepared',
+    'PQdescribePrepared',
+]
+    interval_recording_args += '-D' + symbol + '=IntervalRecording_' + symbol
+endforeach
+interval_recording = executable(
+    'adbc-driver-redshift-interval-recording-test',
+    sources: pgwire_driver_sources + ['redshift_interval_recording_test.cc'],
+    include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
+    link_with: [adbc_common_lib, adbc_framework_lib],
+    dependencies: [nanoarrow_dep, libpq_dep, gtest_main_dep, gmock_dep, fmt_dep],
+    cpp_args: interval_recording_args,
+)
+test('adbc-driver-redshift-interval-recording', interval_recording, timeout: 30)
+
 redshift_exc = executable(
     'adbc-driver-redshift-test',
     sources: [

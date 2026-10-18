@@ -289,6 +289,28 @@ struct RedshiftIntervalSchema {
     }
     return NANOARROW_OK;
   }
+  static ArrowErrorCode ValidateGenuineNullSource(const ArrowSchema* schema,
+                                                  ArrowError* error) {
+    ArrowSchemaView view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, schema, error));
+    if (view.type != NANOARROW_TYPE_NA || schema->n_children || schema->dictionary)
+      return RedshiftIntervalConstraint::Invalid(
+          error, "null source has non-null/dictionary storage");
+    ArrowMetadataReader metadata;
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataReaderInit(&metadata, schema->metadata));
+    if (metadata.remaining_keys < 0)
+      return RedshiftIntervalConstraint::Invalid(error, "malformed null metadata");
+    ArrowStringView key{}, value{};
+    while (metadata.remaining_keys > 0) {
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataReaderRead(&metadata, &key, &value));
+      const std::string_view name(key.data, key.size_bytes);
+      if (name.starts_with("ADBC:redshift:") || name == "ARROW:extension:name" ||
+          name == "ARROW:extension:metadata")
+        return RedshiftIntervalConstraint::Invalid(
+            error, "null source has semantic/extension metadata");
+    }
+    return NANOARROW_OK;
+  }
   ArrowErrorCode ToNative(const ArrowArrayView* view, int64_t index, int64_t* out,
                           ArrowError* error) const {
     if (constraint.family == RedshiftIntervalFamily::kYearMonth) {

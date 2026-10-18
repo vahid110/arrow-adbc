@@ -1242,6 +1242,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     }
     // Genuine unmarked NA is only safe after validating this actual target.
     if (schema_view.type == NANOARROW_TYPE_NA && target && !interval.enabled()) {
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftIntervalSchema::ValidateGenuineNullSource(schema, error));
       *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
       return NANOARROW_OK;
     }

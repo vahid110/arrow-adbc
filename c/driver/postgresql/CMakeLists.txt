@@ -228,6 +228,53 @@ if(ADBC_BUILD_TESTS)
   )
   adbc_configure_target(adbc-driver-postgresql-test)
 
+  # Separate real public entrypoints with only network libpq symbols replaced.
+  # No installed artifact contains this recorder or a fixture authorization path.
+  add_test_case(driver_redshift_interval_recording_test
+                PREFIX
+                adbc
+                EXTRA_LABELS
+                driver-redshift
+                SOURCES
+                redshift_interval_recording_test.cc
+                ${PGWIRE_DRIVER_SOURCES}
+                EXTRA_LINK_LIBS
+                adbc_driver_common
+                adbc_driver_framework
+                ${LIBPQ_LINK_LIBRARIES})
+  target_compile_features(adbc-driver-redshift-interval-recording-test PRIVATE cxx_std_20)
+  target_compile_definitions(adbc-driver-redshift-interval-recording-test
+                             PRIVATE ADBC_EXPORTING)
+  set_target_properties(adbc-driver-redshift-interval-recording-test
+                        PROPERTIES UNITY_BUILD OFF)
+  target_include_directories(adbc-driver-redshift-interval-recording-test SYSTEM
+                             PRIVATE ${REPOSITORY_ROOT}/c/
+                                     ${REPOSITORY_ROOT}/c/include/
+                                     ${REPOSITORY_ROOT}/c/driver
+                                     ${LIBPQ_INCLUDE_DIRS}
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+  )
+  foreach(PQ_SYMBOL
+          PQconnectdb
+          PQstatus
+          PQfinish
+          PQparameterStatus
+          PQgetCancel
+          PQfreeCancel
+          PQsetNoticeProcessor
+          PQtransactionStatus
+          PQerrorMessage
+          PQescapeIdentifier
+          PQexec
+          PQexecParams
+          PQprepare
+          PQexecPrepared
+          PQdescribePrepared)
+    target_compile_definitions(adbc-driver-redshift-interval-recording-test
+                               PRIVATE ${PQ_SYMBOL}=IntervalRecording_${PQ_SYMBOL})
+  endforeach()
+  adbc_configure_target(adbc-driver-redshift-interval-recording-test)
+
   add_test_case(driver_postgresql_copy_test
                 PREFIX
                 adbc

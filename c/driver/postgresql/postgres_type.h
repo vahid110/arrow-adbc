@@ -889,6 +889,19 @@ inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
   auto validate = [&](auto&& self, const ArrowSchema* node,
                       bool nested) -> ArrowErrorCode {
     if (!node) return NANOARROW_OK;
+    ArrowSchemaView node_view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&node_view, node, error));
+    if (resolver.is_redshift() && node_view.type == NANOARROW_TYPE_NA)
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftIntervalSchema::ValidateGenuineNullSource(node, error));
+    if (resolver.is_redshift() && node->dictionary) {
+      ArrowSchemaView dictionary_view{};
+      NANOARROW_RETURN_NOT_OK(
+          ArrowSchemaViewInit(&dictionary_view, node->dictionary, error));
+      if (dictionary_view.type == NANOARROW_TYPE_NA)
+        return RedshiftIntervalConstraint::Invalid(error,
+                                                   "dictionary null source unsupported");
+    }
     RedshiftIntervalSchema interval;
     NANOARROW_RETURN_NOT_OK(
         RedshiftIntervalSchema::Parse(node, resolver.is_redshift(), &interval, error));

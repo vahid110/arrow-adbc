@@ -60,8 +60,8 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us) civil or closed native-count extension |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C-checked,F,NQ; O-PG | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us, UTC) or closed native-count extension |
-| INTERVAL YEAR TO MONTH | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; qualifier N | month_day_nano_interval(months,0,0) |
-| INTERVAL DAY TO SECOND | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; precision N | duration(us) + interval family |
+| INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-DDL / target producer N | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
+| INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-DDL / target producer N | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
 | HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
@@ -142,6 +142,62 @@ requirement, not proof of a current decimal bug**: the connector
 Each libpq path needs its own qualified descriptor/format/fixture evidence. The generated literal fixture bytes follow only the pinned reference contract, use
 arbitrary fixture catalog OIDs, and are not captured libpq evidence. No upstream
 implementation is copied.
+
+## Interval constraint contract (Task010e2)
+
+Both reference codecs retain the physical representations above and the exact
+`ADBC:redshift:interval_family` values `intervaly2m` / `intervald2s`. Additive field
+keys under `ADBC:redshift:` are `interval_contract_version=1`,
+`interval_constraint_state`, `interval_qualifier` and `fractional_precision`.
+`sql_type` is the canonical `INTERVAL YEAR TO MONTH` / `INTERVAL DAY TO SECOND`.
+States are closed: `known` requires an exact qualifier and SECOND precision;
+`unknown` is decoded diagnostic information and cannot be rebound; `unspecified`
+is a deliberate application assertion with no qualifier/precision/raw facts.
+Removing metadata and asserting a new state is an application semantic decision,
+not authenticated provenance. Legacy family-only readback does not authorize writes.
+
+The 13 qualifier identities are YEAR, MONTH, YEAR TO MONTH, DAY, HOUR, MINUTE,
+SECOND, DAY TO HOUR, DAY TO MINUTE, DAY TO SECOND, HOUR TO MINUTE, HOUR TO SECOND
+and MINUTE TO SECOND. SECOND-ending forms require precision 0..6; others forbid
+fractional precision. Known source and actual-target constraints independently
+require exact integral month/hour/minute/day or fractional-second quanta. No
+rounding, timezone conversion, 24-hour duration cap or float intermediary is used.
+Month-family day/nanosecond components must be zero. Duration s/ms multiplication
+is checked and ns division must be exact. Signed extrema are reference storage
+codes, not proof of native SQL domain endpoints or sentinels.
+
+CREATE renders the exact known qualifier and SECOND precision. Explicitly
+unspecified sources default to `INTERVAL YEAR TO MONTH` / `INTERVAL DAY TO SECOND(6)`.
+Existing CREATE_APPEND skips unused declarations and resolves aligned actual
+columns; missing targets use plain CREATE with the requested shape. Source schema
+errors precede ownership/DDL; runtime conversion retains the existing single
+whole-stream transaction owner and caller-owned transaction boundary. Nested,
+dictionary, duplicate/conflicting metadata, unknown versions and wrong storage
+reject. A null-only source must be genuinely unmarked NA (unrelated user metadata
+is allowed), and even empty/NULL ingest requires a known actual target first.
+Ordinary unmarked PostgreSQL retains its 16-byte interval mechanics; Redshift
+interval semantic writes on PostgreSQL remain unsupported.
+
+Only aligned interval targets trigger additional exact relation/column catalog
+observations. Relation OID, schema/table, name, ordinal, type OID and raw modifier
+are checked around bound exact SVV_COLUMNS reads. Missing/duplicate/inconsistent
+observations and SQL errors fail; raw `interval_type`, `interval_precision` and
+`datetime_precision` remain `interval_raw_type`, `interval_raw_precision` and
+`interval_raw_datetime_precision` diagnostics. **No native producer mapping is
+qualified yet:** neither plausible SVV text, a PostgreSQL mask/default, nor DDL
+issued by this driver becomes a known native target. Actual interval ingest thus
+fails closed after resolution, including newly created targets. This unfinished
+native prerequisite must be closed for first-release append support; rejection
+alone does not complete the all-type goal. Read observations detect observed
+changes, not every concurrent external DDL race or a later typmod change.
+
+Test-only public C libpq recording exercises real ownership, source wire/OID,
+DDL and unknown-target rejection without a server or identity change. Internal
+known-target fixtures exercise the production writer and stream transaction
+owner separately. Codec-produced installed PyArrow/C Data/IPC tests cover all
+qualifiers, precision, NULL/empty/sliced arrays and exact bytes. These fixtures
+are excluded from production artifacts and do not qualify native protocol,
+catalog population, SQL grammar/domain or installed Redshift target behavior.
 
 ## Current Redshift descriptor metadata (Task010c1)
 
@@ -500,10 +556,10 @@ must be reviewed before implementation; an unresolved representation blocks rele
   `ADBC:redshift:interval_family` plus canonical type name across query/metadata
   schema paths. Qualifiers/fractional precision remain unknown because current
   descriptors do not expose them. No extension or qualifier metadata is invented.
-  Both bind APIs reject family-marked schemas before ownership transfer/SQL/DDL;
+  The original read-only gate rejected family-marked schemas before ownership transfer/SQL/DDL;
   Redshift also rejects interval/duration storage with stripped metadata. Unknown
   family-marker values reject. Unmarked PostgreSQL interval behavior is preserved.
-  Bind/create/append remain unsupported. The test-only C Data producer is excluded
+  Task010e2 adds the bounded semantic write contract above. The test-only C Data producer is excluded
   from driver artifacts and normal installs. Native libpq-path qualification is
   still pending a separately admitted installed-artifact batch, with its own finite
   authority; this slice does not complete Task010.
@@ -525,11 +581,14 @@ must be reviewed before implementation; an unresolved representation blocks rele
   read, binding, explicit DDL, target-aware append and metadata checks, with native
   format/charset/size qualification (including the provisional binary write cap)
   still open.
-- **010e1 implemented, final local validation/review pending:** four temporal core
+- **010e1 locally integrated 7fc46fa, independent FULL review and 22 validation steps passed:** four temporal core
   families with connection-local Arrow/lossless contexts, exact binding, known
   precision checks and target-aware ingest. Native wire/domain/sentinel/calendar
   and precision DDL gates remain open.
-- **Prepared successors, not dispatched here:** TIMETZ and interval writes/qualifiers; native SUPER and lossless extension/protocol decisions;
+- **010e2 implemented, final local validation/review pending:** both interval families,
+  all 13 qualifier identities and precision 0..6, exact reference writes/DDL and
+  raw diagnostic catalog observation. Native target producer mapping remains open.
+- **Prepared successors, not dispatched here:** TIMETZ; native SUPER and lossless extension/protocol decisions;
   HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
   these phases; no arbitrary future phase number implies completion or authority.
 - **Final all-type qualification:** complete the 21-row read/bind/create/append/

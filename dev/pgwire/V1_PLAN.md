@@ -62,9 +62,13 @@ ingest (locally integrated c07f811; independent review and all 20 serial
 native/installed validation steps passed). Its provisional plain VARBYTE limit
 is a native/release gate. Task010e1 implements DATE/TIME/TIMESTAMP/TIMESTAMPTZ
 with field-local Arrow/lossless modes, checked units/epochs and source/target
-precision; final local validation/review is pending. Native temporal endpoints,
+precision (locally integrated 7fc46fa; independent FULL review and all 22
+validation steps passed). Task010e2 supplies versioned interval contracts for all
+13 qualifiers and exact reference codecs/DDL; final local validation/review is
+pending. Native interval constraint producers remain unqualified, blocking actual
+target writes even for NULL/empty input. Native temporal endpoints,
 sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
-Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
+Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
 native character/binary boundaries, TIMETZ, SUPER, HLL and spatial
 work remain open before
 separately authorized installed-artifact qualification.

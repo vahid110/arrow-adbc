@@ -53,6 +53,7 @@
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
+#include "redshift_interval_catalog.h"
 #include "redshift_replace_preflight.h"
 #include "result_helper.h"
 #include "result_reader.h"
@@ -588,10 +589,14 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
-  if (type_resolver_ && PostgresType::ValidateIntervalWriteSchema(
-                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+  const int interval_status = type_resolver_
+                                  ? PostgresType::ValidateIntervalWriteSchema(
+                                        *type_resolver_, schema, &interval_error)
+                                  : NANOARROW_OK;
+  if (interval_status != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    return interval_status == ENOTSUP ? ADBC_STATUS_NOT_IMPLEMENTED
+                                      : ADBC_STATUS_INVALID_ARGUMENT;
   }
 
   if (type_resolver_ && PostgresType::ValidateDecimalWriteSchema(
@@ -636,11 +641,14 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
-  if (type_resolver_ &&
-      PostgresType::ValidateIntervalWriteSchema(*type_resolver_, schema.get(),
-                                                &interval_error) != NANOARROW_OK) {
+  const int interval_status = type_resolver_
+                                  ? PostgresType::ValidateIntervalWriteSchema(
+                                        *type_resolver_, schema.get(), &interval_error)
+                                  : NANOARROW_OK;
+  if (interval_status != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    return interval_status == ENOTSUP ? ADBC_STATUS_NOT_IMPLEMENTED
+                                      : ADBC_STATUS_INVALID_ARGUMENT;
   }
   if (type_resolver_ &&
       PostgresType::ValidateDecimalWriteSchema(*type_resolver_, schema.get(),
@@ -1052,7 +1060,9 @@ AdbcStatusCode PostgresStatement::ResolveCopyTargetTypes(
     }
     copy_target_types->AppendChild(field_name, *target);
   }
-
+  if (type_resolver_->is_redshift())
+    RAISE_STATUS(error, ObserveIntervalTargets(connection_->conn(), escaped_table, table,
+                                               copy_target_types));
   return ADBC_STATUS_OK;
 }
 

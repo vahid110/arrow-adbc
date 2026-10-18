@@ -28,6 +28,7 @@ on:
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/pgwire_interval_c_data_test.py"
+      - "ci/scripts/pgwire_interval_write_c_data_test.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -52,6 +53,7 @@ on:
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/pgwire_interval_c_data_test.py"
+      - "ci/scripts/pgwire_interval_write_c_data_test.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -126,7 +128,8 @@ jobs:
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF
           cmake --build build/pgwire-python --target adbc_driver_redshift_shared \
-            adbc_driver_postgresql_shared adbc_redshift_interval_test_fixture --parallel 4
+            adbc_driver_postgresql_shared adbc_redshift_interval_test_fixture \
+            adbc-driver-redshift-interval-recording-test --parallel 4
           cmake --install build/pgwire-python --prefix "$RUNNER_TEMP/interval-test" \
             --component redshift-interval-test
           fixture="$(find "$RUNNER_TEMP/interval-test" -name 'libadbc_redshift_interval_test_fixture.so')"
@@ -178,8 +181,13 @@ jobs:
           assert path.endswith("adbc_driver_redshift/libadbc_driver_redshift.so"), path
           EOF
 
+      - name: Offline public Redshift interval recording
+        run: build/pgwire-python/driver/postgresql/adbc-driver-redshift-interval-recording-test
+
       - name: Import codec-produced interval C Data with installed PyArrow (offline fixtures)
-        run: python -B ci/scripts/pgwire_interval_c_data_test.py "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
+        run: |
+          python -B ci/scripts/pgwire_interval_c_data_test.py "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
+          python -B ci/scripts/pgwire_interval_write_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
 
       - name: Installed Python semantic public APIs (PostgreSQL plumbing)
         run: |
