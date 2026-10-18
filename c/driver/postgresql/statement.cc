@@ -589,6 +589,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     return ADBC_STATUS_NOT_IMPLEMENTED;
   }
 
+  if (type_resolver_ && PostgresType::ValidateDecimalWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
   if (bind_.release) bind_.release(&bind_);
   // Make a one-value stream
   adbc::driver::MakeArrayStream(schema, values, &bind_);
@@ -613,6 +619,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
                                                 &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateDecimalWriteSchema(*type_resolver_, schema.get(),
+                                               &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
   }
   // Move stream
   if (bind_.release) bind_.release(&bind_);
@@ -757,6 +769,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
   create += " (";
   std::vector<std::string> source_field_names;
   source_field_names.reserve(source_schema.n_children);
+  bool has_decimal_schema = false;
 
   for (int64_t i = 0; i < source_schema.n_children; i++) {
     if (i > 0) {
@@ -782,7 +795,19 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                     PostgresType::FromSchema(*type_resolver_, source_schema.children[i],
                                              &pg_type, &na_error),
                     &na_error, error);
-    create += " " + pg_type.sql_type_name();
+    RedshiftDecimalSchema decimal;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftDecimalSchema::Parse(source_schema.children[i],
+                                     type_resolver_->is_redshift(), &decimal, &na_error),
+        &na_error, error);
+    has_decimal_schema |= decimal.enabled;
+    std::string declaration = pg_type.sql_type_name();
+    if (decimal.enabled && ingest_.mode != IngestMode::kAppend) {
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
+                      &na_error, error);
+    }
+    create += " " + declaration;
   }
 
   if (ingest_.mode == IngestMode::kAppend) {
@@ -835,7 +860,8 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     return failure.ToAdbc(error);
   }
   RAISE_STATUS(error, ddl_transaction.Commit());
-  if (ingest_.mode == IngestMode::kCreateAppend) {
+  if (ingest_.mode == IngestMode::kCreateAppend || type_resolver_->is_redshift() ||
+      has_decimal_schema) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {
@@ -850,40 +876,30 @@ AdbcStatusCode PostgresStatement::ResolveCopyTargetTypes(
     const std::string& escaped_table, const std::vector<std::string>& source_field_names,
     PostgresType* copy_target_types, struct AdbcError* error) {
   PqResultHelper result_helper{connection_->conn(),
-                               "SELECT attr.attname, attr.atttypid "
+                               "SELECT attr.attname, attr.atttypid, attr.atttypmod "
                                "FROM pg_catalog.pg_attribute AS attr "
                                "WHERE attr.attrelid = $1::regclass::oid "
-                               "AND attr.attnum > 0 AND NOT attr.attisdropped"};
+                               "AND attr.attnum > 0 AND NOT attr.attisdropped "
+                               "ORDER BY attr.attnum"};
   RAISE_STATUS(error, result_helper.Execute({escaped_table}));
-
-  std::vector<std::pair<std::string, uint32_t>> table_fields;
-  table_fields.reserve(result_helper.NumRows());
-  for (auto row : result_helper) {
-    table_fields.emplace_back(
-        row[0].data, static_cast<uint32_t>(std::strtol(row[1].data, /*str_end=*/nullptr,
-                                                       /*base=*/10)));
-  }
-
+  PostgresType table;
+  RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table));
   *copy_target_types = PostgresType(PostgresTypeId::kRecord);
   for (const auto& field_name : source_field_names) {
-    auto it = std::find_if(table_fields.begin(), table_fields.end(),
-                           [&](const auto& item) { return item.first == field_name; });
-    if (it == table_fields.end()) {
+    const PostgresType* target = nullptr;
+    for (int64_t i = 0; i < table.n_children(); i++) {
+      if (table.child(i).field_name() == field_name) {
+        target = &table.child(i);
+        break;
+      }
+    }
+    if (!target) {
       InternalAdbcSetError(error,
                            "[libpq] Column \"%s\" does not exist in target table %s",
                            field_name.c_str(), escaped_table.c_str());
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
-
-    PostgresType pg_type;
-    if (type_resolver_->FindWithDefault(it->second, &pg_type) != NANOARROW_OK) {
-      InternalAdbcSetError(error,
-                           "[libpq] Could not resolve PostgreSQL type oid %" PRIu32
-                           " for column \"%s\"",
-                           it->second, field_name.c_str());
-      return ADBC_STATUS_NOT_IMPLEMENTED;
-    }
-    copy_target_types->AppendChild(field_name, pg_type);
+    copy_target_types->AppendChild(field_name, *target);
   }
 
   return ADBC_STATUS_OK;
@@ -1130,7 +1146,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
           connection_->conn(), escaped_table, escaped_field_list,
           *connection_->type_resolver(), connection_->autocommit(),
           connection_->backend_profile().capabilities.parameterized_ingest_batch_rows,
-          rows_affected);
+          rows_affected, has_copy_target_types ? &copy_target_types : nullptr);
     }
 
     std::string query = "COPY ";
@@ -1155,7 +1171,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
                                    &copy_cleanup_failed);
   }();
 
-  if (copy_cleanup_failed) {
+  if (copy_cleanup_failed || bind_stream.cleanup_failed) {
     connection_->MarkCopyIngestCleanupFailed();
     replace_transaction.Abandon();
     replace_savepoint.Abandon();

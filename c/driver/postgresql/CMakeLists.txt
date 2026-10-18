@@ -200,6 +200,7 @@ if(ADBC_BUILD_TESTS)
                 redshift_interval_test.cc
                 type_modifier_test.cc
                 redshift_numeric_test.cc
+                redshift_decimal_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc

@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -37,6 +38,8 @@
 #include "bind_stream.h"
 #include "driver/framework/objects.h"
 #include "driver/pgwire/libpq_raii.h"
+#include "redshift_decimal_test_fixture.h"
+#include "type_discovery.h"
 #include "validation/adbc_validation_util.h"
 
 using adbc_validation::IsOkStatus;
@@ -48,6 +51,162 @@ TEST(ParameterizedInsertQueryTest, NumbersParametersAcrossRows) {
       adbcpq::BuildParameterizedInsertQuery("\"target\"", "\"id\", \"label\"", 2, 3),
       "INSERT INTO \"target\" (\"id\", \"label\") VALUES "
       "($1, $2), ($3, $4), ($5, $6)");
+}
+
+TEST(ParameterizedInsertTest,
+     FailedOwnedRollbackKeepsPrimaryAndSignalsUncertainConnection) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (!uri) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK);
+  adbcpq::PqResultHelper setup(connection.get(),
+                               "CREATE TEMP TABLE adbc_rollback_signal(id INTEGER)");
+  ASSERT_TRUE(setup.Execute().ok());
+  adbcpq::PostgresTypeResolver resolver;
+  ArrowError arrow_error{};
+  ASSERT_EQ(resolver.Insert({23, "int4", "int4recv", 0, 0, 0}, &arrow_error), 0);
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 1), 0);
+  ASSERT_EQ(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32), 0);
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(adbc_validation::MakeBatch<int32_t>(schema.get(), array.get(), nullptr, {1}),
+            0);
+  nanoarrow::UniqueArrayStream source;
+  adbc::driver::MakeArrayStream(schema.get(), array.get(), source.get());
+  struct State {
+    ArrowArrayStream* source;
+    PGconn* conn;
+    int calls = 0;
+  } state{source.get(), connection.get()};
+  ArrowArrayStream failing{};
+  failing.private_data = &state;
+  failing.get_schema = [](ArrowArrayStream* stream, ArrowSchema* out) {
+    auto* state = static_cast<State*>(stream->private_data);
+    return state->source->get_schema(state->source, out);
+  };
+  failing.get_next = [](ArrowArrayStream* stream, ArrowArray* out) {
+    auto* state = static_cast<State*>(stream->private_data);
+    if (++state->calls == 2) {
+      // Terminate only this dedicated local-test backend after its first INSERT.
+      // ROLLBACK must now fail; the producer error must remain primary.
+      adbc::driver::pgwire::UniqueResult killed(
+          PQexec(state->conn, "SELECT pg_terminate_backend(pg_backend_pid())"));
+      out->release = nullptr;
+      return EIO;
+    }
+    return state->source->get_next(state->source, out);
+  };
+  failing.get_last_error = [](ArrowArrayStream*) {
+    return "injected rollback-signal producer failure";
+  };
+  failing.release = [](ArrowArrayStream* stream) {
+    auto* state = static_cast<State*>(stream->private_data);
+    if (state->source->release) state->source->release(state->source);
+    stream->release = nullptr;
+  };
+  adbcpq::BindStream bind;
+  bind.SetBind(&failing);
+  ASSERT_TRUE(bind.Begin([] { return adbc::driver::Status::Ok(); }).ok());
+  int64_t affected = -1;
+  auto status = bind.ExecutePreparedRows(connection.get(), "adbc_rollback_signal", "id",
+                                         resolver, true, 1, &affected);
+  ASSERT_FALSE(status.ok());
+  AdbcError error = ADBC_ERROR_INIT;
+  EXPECT_EQ(status.ToAdbc(&error), ADBC_STATUS_IO);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_THAT(error.message,
+              ::testing::HasSubstr("injected rollback-signal producer failure"));
+  EXPECT_TRUE(bind.cleanup_failed);
+  EXPECT_EQ(affected, 0);
+  EXPECT_EQ(PQstatus(connection.get()), CONNECTION_BAD);
+  if (error.release) error.release(&error);
+}
+
+TEST(ParameterizedDecimalInsertTest, WholeStreamRollbackAndCallerTransactionOwnership) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (!uri) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK);
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(
+      adbcpq::DiscoverPostgresTypes(
+          connection.get(), adbc::driver::pgwire::BackendProfile::PostgreSQL(), &resolver)
+          .ok());
+  adbcpq::PqResultHelper setup(
+      connection.get(),
+      "CREATE TEMP TABLE adbc_decimal_prepared(amount NUMERIC(10,2)); "
+      "INSERT INTO adbc_decimal_prepared VALUES(9.99)");
+  ASSERT_TRUE(setup.Execute().ok());
+  adbcpq::PqResultHelper catalog(
+      connection.get(),
+      "SELECT attname,atttypid,atttypmod FROM pg_catalog.pg_attribute "
+      "WHERE attrelid='adbc_decimal_prepared'::regclass AND attnum>0 AND NOT "
+      "attisdropped ORDER BY attnum");
+  ASSERT_TRUE(catalog.Execute().ok());
+  adbcpq::PostgresType target;
+  ASSERT_TRUE(catalog.ResolveTableSchema(*resolver, &target).ok());
+  auto execute = [&](bool owned, size_t batch_rows,
+                     const std::vector<std::optional<std::string>>& first,
+                     const std::vector<std::optional<std::string>>& second,
+                     int64_t* affected) -> adbc::driver::Status {
+    nanoarrow::UniqueSchema schema;
+    ArrowError error{};
+    if (adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_STRING, 0, 0) ||
+        schema->n_children != 1)
+      return adbc::driver::Status::Internal("decimal test schema");
+    std::vector<ArrowArray> batches(2);
+    if (adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[0], first, &error) ||
+        adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[1], second, &error)) {
+      for (auto& batch : batches)
+        if (batch.release) batch.release(&batch);
+      return adbc::driver::Status::Internal("decimal test batch");
+    }
+    nanoarrow::UniqueArrayStream stream;
+    adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+    adbcpq::BindStream bind;
+    bind.SetBind(stream.get());
+    auto status = bind.Begin([] { return adbc::driver::Status::Ok(); });
+    if (!status.ok()) return status;
+    return bind.ExecutePreparedRows(connection.get(), "adbc_decimal_prepared", "amount",
+                                    *resolver, owned, batch_rows, affected, &target);
+  };
+  for (size_t batch_rows : {size_t{1}, size_t{16}}) {
+    const std::vector<std::optional<std::string>> first(batch_rows, "1.2500");
+    int64_t affected = -1;
+    const auto failure = execute(true, batch_rows, first, {"1.2345"}, &affected);
+    EXPECT_FALSE(failure.ok());
+    EXPECT_EQ(affected, 0);
+    EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_IDLE);
+    adbcpq::PqResultHelper verify(
+        connection.get(),
+        "SELECT count(*)::text,min(amount)::text FROM adbc_decimal_prepared");
+    ASSERT_TRUE(verify.Execute().ok());
+    EXPECT_EQ(verify.Row(0)[0].value(), "1");
+    EXPECT_EQ(verify.Row(0)[1].value(), "9.99");
+  }
+  adbcpq::PqResultHelper begin(connection.get(),
+                               "BEGIN; INSERT INTO adbc_decimal_prepared VALUES(7.77)");
+  ASSERT_TRUE(begin.Execute().ok());
+  int64_t affected = -1;
+  EXPECT_FALSE(execute(false, 1, {"1.2500"}, {"1.2345"}, &affected).ok());
+  EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_INTRANS);
+  adbcpq::PqResultHelper pending(connection.get(),
+                                 "SELECT count(*)::text FROM adbc_decimal_prepared");
+  ASSERT_TRUE(pending.Execute().ok());
+  EXPECT_EQ(pending.Row(0)[0].value(),
+            "3");  // Caller work and earlier INSERT stay caller-owned.
+  adbcpq::PqResultHelper rollback(connection.get(), "ROLLBACK");
+  ASSERT_TRUE(rollback.Execute().ok());
+  adbcpq::PqResultHelper restored(connection.get(),
+                                  "SELECT amount::text FROM adbc_decimal_prepared");
+  ASSERT_TRUE(restored.Execute().ok());
+  ASSERT_EQ(restored.NumRows(), 1);
+  EXPECT_EQ(restored.Row(0)[0].value(), "9.99");
 }
 
 TEST(ParameterizedInsertTest, RollsBackWholeBindAcrossSqlBatches) {

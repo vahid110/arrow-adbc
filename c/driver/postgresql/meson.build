@@ -92,6 +92,7 @@ postgres_tests = {
             'postgresql_test.cc',
             'redshift_test.cc',
             'redshift_numeric_test.cc',
+            'redshift_decimal_test.cc',
             'result_helper.cc',
             'type_discovery_test.cc',
         ],

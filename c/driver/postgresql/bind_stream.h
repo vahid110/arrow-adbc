@@ -142,10 +142,18 @@ struct BindStream {
   }
 
   Status SetParamTypes(PGconn* pg_conn, const PostgresTypeResolver& type_resolver,
-                       const bool autocommit) {
+                       const bool autocommit,
+                       const PostgresType* ingest_targets = nullptr) {
     if (PostgresType::ValidateIntervalWriteSchema(type_resolver, &bind_schema.value,
                                                   &na_error) != NANOARROW_OK) {
       return Status::NotImplemented(na_error.message);
+    }
+    if (PostgresType::ValidateDecimalWriteSchema(type_resolver, &bind_schema.value,
+                                                 &na_error) != NANOARROW_OK) {
+      return Status::InvalidArgument(na_error.message);
+    }
+    if (ingest_targets && ingest_targets->n_children() != bind_schema->n_children) {
+      return Status::InvalidArgument("Ingest target/source column count mismatch");
     }
     param_types.resize(bind_schema->n_children);
     param_values.resize(bind_schema->n_children);
@@ -183,14 +191,25 @@ struct BindStream {
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
 
+      // Only decimal conversion gains target semantics in this bounded slice.
+      // Other prepared parameters keep their existing source-derived wire type.
+      const PostgresType* writer_target = nullptr;
+      if (ingest_targets &&
+          (type.type_id() == PostgresTypeId::kNumeric ||
+           ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric)) {
+        writer_target = &ingest_targets->child(i);
+      }
       std::unique_ptr<PostgresCopyFieldWriter> writer;
       UNWRAP_NANOARROW(
           na_error, Internal,
           MakeCopyFieldWriter(bind_schema->children[i], array_view->children[i],
-                              type_resolver, nullptr, &writer,
+                              type_resolver, writer_target, &writer,
                               /*disable_decimal_fast_path=*/false, &na_error));
 
-      param_types[i] = type.oid();
+      param_types[i] =
+          writer_target && writer_target->type_id() == PostgresTypeId::kNumeric
+              ? writer_target->oid()
+              : type.oid();
       param_formats[i] = kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
     }
@@ -538,7 +557,8 @@ struct BindStream {
                              const std::string& fields,
                              const PostgresTypeResolver& type_resolver,
                              bool connection_autocommit, size_t max_batch_rows,
-                             int64_t* rows_affected) {
+                             int64_t* rows_affected,
+                             const PostgresType* ingest_targets = nullptr) {
     if (rows_affected) *rows_affected = 0;
     const size_t columns = static_cast<size_t>(bind_schema->n_children);
     constexpr size_t kMaxParameters = 32767;
@@ -560,14 +580,15 @@ struct BindStream {
     auto rollback_if_owned = [&]() {
       if (!connection_autocommit) return;
       PqResultHelper rollback(pg_conn, "ROLLBACK");
-      // Preserve the ingestion error if rollback also fails.
-      (void)rollback.Execute();
+      // Preserve the ingestion error and report uncertainty if rollback fails.
+      if (!rollback.Execute().ok()) cleanup_failed = true;
       if (rows_affected) *rows_affected = 0;
     };
 
     // The transaction is already open in autocommit mode, so timezone cleanup
     // must not independently commit it.
-    Status execution_status = SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false);
+    Status execution_status =
+        SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false, ingest_targets);
     if (execution_status.ok() && max_batch_rows == 1) {
       execution_status = Prepare(pg_conn, one_row_query);
     }

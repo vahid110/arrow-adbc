@@ -28,6 +28,7 @@
 #include <nanoarrow/nanoarrow.hpp>
 
 #include "driver/pgwire/backend.h"
+#include "redshift_decimal.h"
 
 namespace adbcpq {
 
@@ -412,6 +413,10 @@ class PostgresType {
 
   // Read-only vendor families must not fall through to a generic storage writer.
   // Also checks nested/dictionary fields before binding takes ownership or runs SQL.
+  static ArrowErrorCode ValidateDecimalWriteSchema(const PostgresTypeResolver& resolver,
+                                                   const ArrowSchema* schema,
+                                                   ArrowError* error);
+
   static ArrowErrorCode ValidateIntervalWriteSchema(const PostgresTypeResolver& resolver,
                                                     const ArrowSchema* schema,
                                                     ArrowError* error);
@@ -764,12 +769,35 @@ inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
   return NANOARROW_OK;
 }
 
+inline ArrowErrorCode PostgresType::ValidateDecimalWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  if (!schema) return NANOARROW_OK;
+  RedshiftDecimalSchema decimal;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));
+  for (int64_t i = 0; i < schema->n_children; i++) {
+    NANOARROW_RETURN_NOT_OK(
+        ValidateDecimalWriteSchema(resolver, schema->children[i], error));
+  }
+  if (schema->dictionary) {
+    NANOARROW_RETURN_NOT_OK(
+        ValidateDecimalWriteSchema(resolver, schema->dictionary, error));
+  }
+  return NANOARROW_OK;
+}
+
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+  RedshiftDecimalSchema decimal;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));
+  if (decimal.enabled) {
+    return resolver.Find(resolver.GetOID(PostgresTypeId::kNumeric), out, error);
+  }
 
   std::string_view extension_name;
   if (schema_view.extension_name.data != nullptr) {

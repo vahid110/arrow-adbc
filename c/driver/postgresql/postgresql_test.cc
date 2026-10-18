@@ -42,6 +42,7 @@
 #include "connection.h"
 #include "driver/framework/utility.h"
 #include "metadata.h"
+#include "redshift_decimal_test_fixture.h"
 #include "redshift_interval_test_fixture.h"
 #include "result_reader.h"
 #include "type_discovery.h"
@@ -1355,6 +1356,359 @@ TEST_F(PostgresStatementTest, IsolationLevels) {
 
 // PostgreSQL service plumbing for the Redshift descriptor policy. These tests
 // do not claim captured Redshift descriptors or vendor numeric value formats.
+// Explicit semantic metadata exercises the production contract on PostgreSQL;
+// this does not change or bypass the connection's backend identity.
+TEST_F(PostgresStatementTest, DecimalSemanticParametersUseNumericOidThroughBothBindApis) {
+  for (ArrowType storage :
+       {NANOARROW_TYPE_DECIMAL128, NANOARROW_TYPE_DECIMAL256, NANOARROW_TYPE_STRING}) {
+    for (bool stream_bind : {false, true}) {
+      const bool text = storage == NANOARROW_TYPE_STRING;
+      nanoarrow::UniqueSchema schema;
+      ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), storage, 38, 2), 0);
+      std::vector<std::optional<std::string>> values =
+          text ? std::vector<std::optional<std::string>>{"12.3400", "-12.3400",
+                                                         std::nullopt}
+               : std::vector<std::optional<std::string>>{"1234", "-1234", std::nullopt};
+      ASSERT_THAT(AdbcStatementSetSqlQuery(
+                      &statement, "SELECT pg_typeof($1)::text, $1::text", &error),
+                  IsOkStatus(&error));
+      if (stream_bind) {
+        std::vector<ArrowArray> batches(2);
+        ASSERT_EQ(adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[0],
+                                                     {values[0]}, nullptr),
+                  0);
+        ASSERT_EQ(adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[1],
+                                                     {values[1], values[2]}, nullptr),
+                  0);
+        nanoarrow::UniqueArrayStream stream;
+        adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+        ASSERT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                    IsOkStatus(&error));
+      } else {
+        nanoarrow::UniqueArray array;
+        ASSERT_EQ(adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), values,
+                                                     nullptr),
+                  0);
+        ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                    IsOkStatus(&error));
+      }
+      adbc_validation::StreamReader output;
+      ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &output.stream.value,
+                                            &output.rows_affected, &error),
+                  IsOkStatus(&error));
+      ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+      int row = 0;
+      while (true) {
+        ASSERT_NO_FATAL_FAILURE(output.Next());
+        if (!output.array->release) break;
+        for (int64_t i = 0; i < output.array->length; i++, row++) {
+          ASSERT_LT(row, 3);
+          const auto kind =
+              ArrowArrayViewGetStringUnsafe(output.array_view->children[0], i);
+          EXPECT_EQ(std::string_view(kind.data, kind.size_bytes), "numeric");
+          if (row == 2) {
+            EXPECT_TRUE(ArrowArrayViewIsNull(output.array_view->children[1], i));
+          } else {
+            const auto value =
+                ArrowArrayViewGetStringUnsafe(output.array_view->children[1], i);
+            EXPECT_EQ(
+                std::string_view(value.data, value.size_bytes),
+                row == 0 ? (text ? "12.3400" : "12.34") : (text ? "-12.3400" : "-12.34"));
+          }
+        }
+      }
+      EXPECT_EQ(row, 3);
+    }
+  }
+}
+
+TEST_F(PostgresStatementTest,
+       DecimalSchemaRejectionPreservesBindOwnershipAndReplaceSentinel) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(
+      owner->conn(),
+      "CREATE TEMP TABLE adbc_decimal_replace_guard(amount INTEGER); "
+      "INSERT INTO adbc_decimal_replace_guard VALUES (42)");
+  ASSERT_TRUE(setup.Execute().ok());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_decimal_replace_guard", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  for (bool stream_bind : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_DECIMAL128,
+                                                  10, 2),
+              0);
+    ASSERT_EQ(adbcpq::testing::DecimalMetadata(schema->children[0],
+                                               "ADBC:redshift:precision", "11"),
+              0);
+    ASSERT_EQ(
+        adbcpq::testing::DecimalMetadata(schema->children[0], "ADBC:redshift:scale", "2"),
+        0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(
+        adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), {"125"}, nullptr),
+        0);
+    if (stream_bind) {
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+      EXPECT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                  IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+      EXPECT_NE(stream->release, nullptr);
+    } else {
+      EXPECT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+      EXPECT_NE(array->release, nullptr);
+      EXPECT_NE(schema->release, nullptr);
+    }
+    if (error.release) error.release(&error);
+  }
+  for (ArrowType storage : {NANOARROW_TYPE_DECIMAL128, NANOARROW_TYPE_STRING}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), storage, 38, 38), 0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(
+        adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), {"0"}, nullptr), 0);
+    ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                IsOkStatus(&error));
+    int64_t affected = -1;
+    EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+                IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+    if (error.release) error.release(&error);
+  }
+  adbcpq::PqResultHelper sentinel(
+      owner->conn(),
+      "SELECT amount::text, pg_typeof(amount)::text FROM adbc_decimal_replace_guard");
+  ASSERT_TRUE(sentinel.Execute().ok());
+  ASSERT_EQ(sentinel.NumRows(), 1);
+  EXPECT_EQ(sentinel.Row(0)[0].value(), "42");
+  EXPECT_EQ(sentinel.Row(0)[1].value(), "integer");
+}
+
+TEST_F(PostgresStatementTest, DecimalCreateUsesStoredDeclarationAndIndependentSqlValues) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  struct Case {
+    int p;
+    int s;
+    const char* coefficient;
+    const char* sql;
+  };
+  const Case cases[] = {{1, 0, "9", "9"},
+                        {18, 0, "999999999999999999", "999999999999999999"},
+                        {19, 0, "-9223372036854775808", "-9223372036854775808"},
+                        {20, 0, "99999999999999999999", "99999999999999999999"},
+                        {38, 0, "99999999999999999999999999999999999999",
+                         "99999999999999999999999999999999999999"},
+                        {10, 2, "-1234", "-12.34"},
+                        {38, 37, "1", "0.0000000000000000000000000000000000001"}};
+  for (const auto& item : cases) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_DECIMAL256,
+                                                  item.p, item.s),
+              0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteBatch(
+                  schema.get(), array.get(), {item.coefficient, std::nullopt}, nullptr),
+              0);
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                       "adbc_decimal_created", &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                       ADBC_INGEST_OPTION_MODE_CREATE, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                       ADBC_OPTION_VALUE_ENABLED, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                IsOkStatus(&error));
+    int64_t affected = -1;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+                IsOkStatus(&error));
+    EXPECT_EQ(affected, 2);
+    adbcpq::PqResultHelper facts(
+        owner->conn(),
+        "SELECT format_type(atttypid, atttypmod) FROM pg_catalog.pg_attribute "
+        "WHERE attrelid='adbc_decimal_created'::regclass AND attname='amount'");
+    ASSERT_TRUE(facts.Execute().ok());
+    ASSERT_EQ(facts.NumRows(), 1);
+    EXPECT_EQ(facts.Row(0)[0].value(),
+              "numeric(" + std::to_string(item.p) + "," + std::to_string(item.s) + ")");
+    adbcpq::PqResultHelper values(
+        owner->conn(),
+        "SELECT amount::text FROM adbc_decimal_created ORDER BY amount NULLS LAST");
+    ASSERT_TRUE(values.Execute().ok());
+    ASSERT_EQ(values.NumRows(), 2);
+    EXPECT_EQ(values.Row(0)[0].value(), item.sql);
+    EXPECT_TRUE(values.Row(1)[0].is_null);
+    adbcpq::PqResultHelper drop(owner->conn(), "DROP TABLE adbc_decimal_created");
+    ASSERT_TRUE(drop.Execute().ok());
+  }
+}
+
+TEST_F(PostgresStatementTest,
+       DecimalAppendRescalesActualTargetsAndRollsBackLateCopyFailure) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(owner->conn(),
+                               "CREATE TEMP TABLE adbc_decimal_append(id INTEGER DEFAULT "
+                               "7, amount NUMERIC(10,2)); "
+                               "INSERT INTO adbc_decimal_append(amount) VALUES(9.99)");
+  ASSERT_TRUE(setup.Execute().ok());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_decimal_append", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_CREATE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(
+      adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_DECIMAL128, 18, 4),
+      0);
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(
+      adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), {"12500"}, nullptr),
+      0);
+  ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+              IsOkStatus(&error));
+  int64_t affected = -1;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+              IsOkStatus(&error));
+  EXPECT_EQ(affected, 1);
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_EQ(
+      adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_DECIMAL128, 18, 4),
+      0);
+  std::vector<ArrowArray> batches(2);
+  ASSERT_EQ(
+      adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[0], {"20000"}, nullptr),
+      0);
+  ASSERT_EQ(
+      adbcpq::testing::DecimalWriteBatch(schema.get(), &batches[1], {"12345"}, nullptr),
+      0);
+  nanoarrow::UniqueArrayStream stream;
+  adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+  ASSERT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+              IsOkStatus(&error));
+  EXPECT_NE(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+            ADBC_STATUS_OK);
+  if (error.release) error.release(&error);
+  adbcpq::PqResultHelper verify(
+      owner->conn(),
+      "SELECT amount::text, id::text FROM adbc_decimal_append ORDER BY amount");
+  ASSERT_TRUE(verify.Execute().ok());
+  ASSERT_EQ(verify.NumRows(), 2);
+  EXPECT_EQ(verify.Row(0)[0].value(), "1.25");
+  EXPECT_EQ(verify.Row(1)[0].value(), "9.99");
+  EXPECT_EQ(verify.Row(0)[1].value(), "7");
+}
+
+TEST_F(PostgresStatementTest, DecimalEmptyAndNullBatchesKeepExplicitStoredSchema) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  for (bool empty : {true, false}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_STRING, 10,
+                                                  2, true, true),
+              0);
+    nanoarrow::UniqueArray array;
+    const std::vector<std::optional<std::string>> values =
+        empty ? std::vector<std::optional<std::string>>{}
+              : std::vector<std::optional<std::string>>{std::nullopt};
+    ASSERT_EQ(
+        adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), values, nullptr),
+        0);
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                       "adbc_decimal_empty", &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                       ADBC_INGEST_OPTION_MODE_CREATE, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                       ADBC_OPTION_VALUE_ENABLED, &error),
+                IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                IsOkStatus(&error));
+    int64_t affected = -1;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+                IsOkStatus(&error));
+    EXPECT_EQ(affected, empty ? 0 : 1);
+    adbcpq::PqResultHelper facts(
+        owner->conn(),
+        "SELECT count(*)::text,count(amount)::text FROM adbc_decimal_empty");
+    ASSERT_TRUE(facts.Execute().ok());
+    EXPECT_EQ(facts.Row(0)[0].value(), empty ? "0" : "1");
+    EXPECT_EQ(facts.Row(0)[1].value(), "0");
+    adbcpq::PqResultHelper drop(owner->conn(), "DROP TABLE adbc_decimal_empty");
+    ASSERT_TRUE(drop.Execute().ok());
+  }
+}
+
+TEST_F(PostgresStatementTest, DecimalAppendAlignsReorderedSubsetFieldsByCatalogName) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(owner->conn(),
+                               "CREATE TEMP TABLE adbc_decimal_ordered(id INTEGER "
+                               "DEFAULT 7, a NUMERIC(10,2), b NUMERIC(20,3))");
+  ASSERT_TRUE(setup.Execute().ok());
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 2), 0);
+  for (int i = 0; i < 2; i++) {
+    ASSERT_EQ(ArrowSchemaSetTypeDecimal(schema->children[i], NANOARROW_TYPE_DECIMAL128,
+                                        18, i == 0 ? 3 : 4),
+              0);
+    ASSERT_EQ(ArrowSchemaSetName(schema->children[i], i == 0 ? "b" : "a"), 0);
+    ASSERT_EQ(adbcpq::testing::DecimalMetadata(schema->children[i],
+                                               "ADBC:redshift:sql_type", "DECIMAL"),
+              0);
+  }
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+  ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+  for (int i = 0; i < 2; i++) {
+    ArrowDecimal value;
+    ArrowDecimalInit(&value, 128, 18, i == 0 ? 3 : 4);
+    ArrowDecimalSetInt(&value, i == 0 ? 2345 : 12500);
+    ASSERT_EQ(ArrowArrayAppendDecimal(array->children[i], &value), 0);
+  }
+  ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+  ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_decimal_ordered", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+              IsOkStatus(&error));
+  int64_t affected = -1;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &affected, &error),
+              IsOkStatus(&error));
+  EXPECT_EQ(affected, 1);
+  adbcpq::PqResultHelper verify(
+      owner->conn(), "SELECT id::text,a::text,b::text FROM adbc_decimal_ordered");
+  ASSERT_TRUE(verify.Execute().ok());
+  ASSERT_EQ(verify.NumRows(), 1);
+  EXPECT_EQ(verify.Row(0)[0].value(), "7");
+  EXPECT_EQ(verify.Row(0)[1].value(), "1.25");
+  EXPECT_EQ(verify.Row(0)[2].value(), "2.345");
+}
+
 static std::optional<std::string> PostgresFieldMetadata(const ArrowSchema* schema,
                                                         const char* key) {
   ArrowStringView value{};

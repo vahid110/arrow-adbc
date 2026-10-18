@@ -308,6 +308,95 @@ class PostgresCopyIntervalFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+// Exact decimal contract used by Redshift and explicitly DECIMAL-marked fields.
+// The wire representation remains PostgreSQL base-10000 numeric reference data.
+class RedshiftDecimalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftDecimalFieldWriter(RedshiftDecimalSchema source,
+                             std::optional<RedshiftDecimalSchema> target,
+                             ArrowType storage)
+      : source_(std::move(source)), target_(std::move(target)), storage_(storage) {}
+
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    RedshiftDecimalValue value;
+    if (source_.text) {
+      const auto text = ArrowArrayViewGetStringUnsafe(array_view_, index);
+      NANOARROW_RETURN_NOT_OK(RedshiftDecimalValue::ParseText(
+          std::string_view(text.data, text.size_bytes), &value, error));
+      if (source_.scale) {
+        NANOARROW_RETURN_NOT_OK(value.Rescale(*source_.scale, error));
+      } else {
+        // Only remove mathematically redundant zeroes when necessary to fit the
+        // closed38-digit value contract; never infer a schema from these rows.
+        while (value.digits.size() > 38 && value.scale > 0 &&
+               value.digits.back() == '0') {
+          value.digits.pop_back();
+          --value.scale;
+        }
+      }
+    } else {
+      ArrowDecimal decimal;
+      ArrowDecimalInit(&decimal, storage_ == NANOARROW_TYPE_DECIMAL128 ? 128 : 256,
+                       *source_.precision, *source_.scale);
+      ArrowArrayViewGetDecimalUnsafe(array_view_, index, &decimal);
+      nanoarrow::UniqueBuffer digits;
+      NANOARROW_RETURN_NOT_OK(ArrowDecimalAppendDigitsToBuffer(&decimal, digits.get()));
+      value.digits.assign(reinterpret_cast<char*>(digits->data), digits->size_bytes);
+      value.negative = !value.digits.empty() && value.digits[0] == '-';
+      if (value.negative) value.digits.erase(0, 1);
+      value.scale = *source_.scale;
+      value.Normalize();
+    }
+    NANOARROW_RETURN_NOT_OK(
+        value.CheckPrecision(source_.precision.value_or(38), false, error));
+    if (target_) {
+      NANOARROW_RETURN_NOT_OK(value.Rescale(*target_->scale, error));
+      NANOARROW_RETURN_NOT_OK(value.CheckPrecision(*target_->precision, true, error));
+    }
+
+    // Work is bounded by38 coefficient/scale digits. Build groups before touching
+    // the output buffer; a rejected value cannot emit a partial parameter.
+    std::string full = value.digits;
+    if (full.size() <= static_cast<size_t>(value.scale)) {
+      full.insert(0, static_cast<size_t>(value.scale) + 1 - full.size(), '0');
+    }
+    const size_t integral = full.size() - value.scale;
+    const size_t left = (4 - integral % 4) % 4;
+    full.insert(0, left, '0');
+    full.append((4 - value.scale % 4) % 4, '0');
+    std::vector<uint16_t> groups;
+    for (size_t i = 0; i < full.size(); i += 4) {
+      uint16_t digit = 0;
+      for (size_t j = 0; j < 4; j++) digit = digit * 10 + full[i + j] - '0';
+      groups.push_back(digit);
+    }
+    int16_t weight = static_cast<int16_t>((integral + left) / 4 - 1);
+    size_t first = 0;
+    size_t last = groups.size();
+    while (first < last && groups[first] == 0) {
+      ++first;
+      --weight;
+    }
+    while (last > first && groups[last - 1] == 0) --last;
+    if (first == last) weight = 0;
+    const int16_t count = static_cast<int16_t>(last - first);
+    const int32_t field_size = 8 + count * 2;
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, field_size + 4));
+    WriteUnsafe<int32_t>(buffer, field_size);
+    WriteUnsafe<int16_t>(buffer, count);
+    WriteUnsafe<int16_t>(buffer, weight);
+    WriteUnsafe<uint16_t>(buffer, value.negative ? 0x4000 : 0);
+    WriteUnsafe<uint16_t>(buffer, static_cast<uint16_t>(value.scale));
+    for (size_t i = first; i < last; i++) WriteUnsafe<uint16_t>(buffer, groups[i]);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftDecimalSchema source_;
+  std::optional<RedshiftDecimalSchema> target_;
+  ArrowType storage_;
+};
+
 // Inspiration for this taken from get_str_from_var in the pg source
 // src/backend/utils/adt/numeric.c
 template <enum ArrowType T>
@@ -989,6 +1078,41 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     ArrowError* error) {
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+
+  RedshiftDecimalSchema source_decimal;
+  NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Parse(
+      schema, type_resolver.is_redshift(), &source_decimal, error));
+  const bool strict_target = target_type &&
+                             target_type->type_id() == PostgresTypeId::kNumeric &&
+                             type_resolver.is_redshift();
+  if (source_decimal.enabled || strict_target) {
+    std::optional<RedshiftDecimalSchema> target_decimal;
+    if (target_type) {
+      if (target_type->type_id() != PostgresTypeId::kNumeric) {
+        return RedshiftDecimalSchema::Invalid(error,
+                                              "decimal source requires numeric target");
+      }
+      const auto info =
+          adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+              "numeric", target_type->type_modifier());
+      if (!info.precision || !info.scale || *info.scale > 37) {
+        return RedshiftDecimalSchema::Invalid(
+            error, "unknown/unsupported stored target descriptor");
+      }
+      target_decimal = RedshiftDecimalSchema{true, false, info.precision, info.scale};
+    }
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!source_decimal.enabled) {
+      return RedshiftDecimalSchema::Invalid(
+          error, "numeric ingest requires decimal, marked text or null");
+    }
+    *out = PostgresCopyFieldWriter::Create<RedshiftDecimalFieldWriter>(
+        array_view, source_decimal, target_decimal, schema_view.type);
+    return NANOARROW_OK;
+  }
 
   const bool is_arrow_json =
       schema_view.extension_name.data != nullptr &&
