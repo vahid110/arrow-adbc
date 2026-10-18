@@ -17,6 +17,10 @@
 
 #include "metadata.h"
 
+#include <limits>
+
+#include "result_helper.h"
+
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -42,13 +46,13 @@ constexpr std::string_view kTablesQueryAll =
 
 constexpr std::string_view kColumnsQueryAll =
     "SELECT attr.attname, attr.attnum, "
-    "pg_catalog.col_description(cls.oid, attr.attnum), typ.typname "
+    "pg_catalog.col_description(cls.oid, attr.attnum), typ.typname, attr.atttypmod "
     "FROM pg_catalog.pg_attribute AS attr "
     "INNER JOIN pg_catalog.pg_class AS cls ON attr.attrelid = cls.oid "
     "INNER JOIN pg_catalog.pg_namespace AS nsp ON nsp.oid = cls.relnamespace "
     "INNER JOIN pg_catalog.pg_type AS typ ON attr.atttypid = typ.oid "
     "WHERE attr.attnum > 0 AND NOT attr.attisdropped "
-    "AND nsp.nspname LIKE $1 AND cls.relname LIKE $2";
+    "AND nsp.nspname = $1 AND cls.relname = $2";
 
 constexpr std::string_view kConstraintsQueryAll =
     "WITH fk_unnest AS ( "
@@ -87,6 +91,43 @@ constexpr std::string_view kConstraintsQueryAll =
 
 }  // namespace
 
+adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetadata(
+    const PqResultRow& row, const adbc::driver::pgwire::BackendProfile& profile) {
+  using adbc::driver::Status;
+  using Column = adbc::driver::GetObjectsHelper::Column;
+  if (!row.IsValid() || row.NumColumns() != 5 || row[0].is_null || row[1].is_null) {
+    return Status(ADBC_STATUS_INVALID_DATA,
+                  "Expected name/ordinal/remark/type/modifier catalog column");
+  }
+  Column column;
+  column.column_name = std::string_view(row[0].data, row[0].len);
+  int64_t ordinal;
+  UNWRAP_RESULT(ordinal, row[1].ParseInteger());
+  if (ordinal <= 0 || ordinal > std::numeric_limits<int32_t>::max()) {
+    return Status(ADBC_STATUS_INVALID_DATA,
+                  "Catalog column ordinal is outside positive int32 range");
+  }
+  column.ordinal_position = static_cast<int32_t>(ordinal);
+  if (!row[2].is_null) column.remarks = std::string_view(row[2].data, row[2].len);
+  std::optional<int32_t> raw;
+  UNWRAP_RESULT(raw, row[4].ParseTypeModifier());
+  if (!row[3].is_null) {
+    column.xdbc = adbc::driver::GetObjectsHelper::ColumnXdbc();
+    auto& xdbc = *column.xdbc;
+    xdbc.xdbc_type_name = std::string_view(row[3].data, row[3].len);
+    const auto metadata = profile.DescribeTypeModifier(*xdbc.xdbc_type_name, raw);
+    if (metadata.precision && metadata.scale) {
+      xdbc.xdbc_column_size = metadata.precision;
+      xdbc.xdbc_decimal_digits = static_cast<int16_t>(*metadata.scale);
+      xdbc.xdbc_num_prec_radix = 10;
+    } else if (metadata.byte_width) {
+      xdbc.xdbc_column_size = metadata.byte_width;
+      xdbc.xdbc_char_octet_length = metadata.byte_width;
+    }
+  }
+  return column;
+}
+
 std::string MetadataQuerySet::Catalogs(bool filtered) const {
   return std::string(kCatalogQueryAll) + (filtered ? " WHERE datname = $1" : "");
 }
@@ -100,7 +141,8 @@ std::string MetadataQuerySet::Tables(bool filtered) const {
 }
 
 std::string MetadataQuerySet::Columns(bool filtered) const {
-  return std::string(kColumnsQueryAll) + (filtered ? " AND attr.attname LIKE $3" : "");
+  return std::string(kColumnsQueryAll) + (filtered ? " AND attr.attname LIKE $3" : "") +
+         " ORDER BY attr.attnum";
 }
 
 std::string MetadataQuerySet::Constraints() const {
@@ -108,10 +150,11 @@ std::string MetadataQuerySet::Constraints() const {
 }
 
 std::string MetadataQuerySet::TableSchema() const {
-  return "SELECT attname, atttypid FROM pg_catalog.pg_class AS cls "
+  return "SELECT attname, atttypid, atttypmod FROM pg_catalog.pg_class AS cls "
          "INNER JOIN pg_catalog.pg_attribute AS attr ON cls.oid = attr.attrelid "
          "INNER JOIN pg_catalog.pg_type AS typ ON attr.atttypid = typ.oid "
-         "WHERE attr.attnum >= 0 AND cls.oid = $1::regclass::oid "
+         "WHERE attr.attnum > 0 AND NOT attr.attisdropped AND cls.oid = "
+         "$1::regclass::oid "
          "ORDER BY attr.attnum";
 }
 

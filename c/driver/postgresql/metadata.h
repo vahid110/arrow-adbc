@@ -21,9 +21,16 @@
 #include <string_view>
 #include <vector>
 
+#include "driver/framework/objects.h"
 #include "driver/pgwire/backend.h"
 
 namespace adbcpq {
+
+class PqResultRow;
+
+// Production GetObjects column parser, also used by no-network catalog fixtures.
+adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetadata(
+    const PqResultRow& row, const adbc::driver::pgwire::BackendProfile& profile);
 
 class MetadataQuerySet {
  public:
@@ -36,6 +43,10 @@ class MetadataQuerySet {
   std::string Columns(bool filtered) const;
   std::string Constraints() const;
   std::string TableSchema() const;
+
+  const adbc::driver::pgwire::BackendProfile& backend_profile() const {
+    return backend_profile_;
+  }
 
   bool LoadsConstraints() const {
     return backend_profile_.capabilities.metadata_constraints;

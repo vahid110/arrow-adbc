@@ -47,9 +47,12 @@ separate read, bind, create, append and metadata; the passed batch is not all-ty
 qualification. Task010a source audit/docs is merged (PR #21). Task010b implements
 both interval families' native read/schema/family metadata with strict offline
 reference fixtures, codec-produced C/Python C Data checks and unsupported-write
-guards (review/CI pending). Actual libpq-path qualification and interval writes/
-qualifier metadata remain open, followed by scalar/modifier gaps, SUPER, HLL and
-spatial work, and separately authorized installed-artifact qualification.
+guards (PR #22 merged; offline CI passed). Task010c1 adds per-field modifiers and
+bounded numeric/character schema/catalog metadata, with parameter identity and
+unknowns retained (review/CI pending); numeric value codecs and writes stay unchanged.
+Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
+scalar/decimal value/write gaps, SUPER, HLL and spatial work remain open before
+separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer
 remain paused. No release-ready claim is made.

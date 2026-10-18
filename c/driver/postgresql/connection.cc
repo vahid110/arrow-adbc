@@ -193,22 +193,10 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
       return std::nullopt;
     }
 
-    Column col;
-    col.column_name = next_column_[0].value();
-    int64_t ordinal_position;
-    UNWRAP_RESULT(ordinal_position, next_column_[1].ParseInteger());
-    col.ordinal_position = static_cast<int32_t>(ordinal_position);
-    if (!next_column_[2].is_null) {
-      col.remarks = next_column_[2].value();
-    }
-    if (!next_column_[3].is_null) {
-      if (!col.xdbc) {
-        col.xdbc = adbc::driver::GetObjectsHelper::ColumnXdbc();
-      }
-      col.xdbc->xdbc_type_name = next_column_[3].value();
-    }
-
-    return col;
+    Column column;
+    UNWRAP_RESULT(column,
+                  ResolveColumnMetadata(next_column_, queries_.backend_profile()));
+    return column;
   }
 
   Result<std::optional<Constraint>> NextConstraint() override {
@@ -945,8 +933,6 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
                                                   struct AdbcError* error) {
   RAISE_ADBC(EnsureTransaction(error));
 
-  AdbcStatusCode final_status = ADBC_STATUS_OK;
-
   char* quoted = PQescapeIdentifier(conn_, table_name, strlen(table_name));
   std::string table_name_str(quoted);
   PQfreemem(quoted);
@@ -966,34 +952,15 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
 
   RAISE_STATUS(error, result_helper.Execute(params));
 
-  auto uschema = nanoarrow::UniqueSchema();
+  PostgresType table_type;
+  RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table_type));
+  nanoarrow::UniqueSchema uschema;
   ArrowSchemaInit(uschema.get());
-  CHECK_NA(INTERNAL, ArrowSchemaSetTypeStruct(uschema.get(), result_helper.NumRows()),
+  CHECK_NA(INTERNAL, table_type.SetSchema(uschema.get(), std::string(VendorName())),
            error);
-
-  int row_counter = 0;
-  for (auto row : result_helper) {
-    const char* colname = row[0].data;
-    const Oid pg_oid =
-        static_cast<uint32_t>(std::strtol(row[1].data, /*str_end=*/nullptr, /*base=*/10));
-
-    PostgresType pg_type;
-    if (type_resolver_->FindWithDefault(pg_oid, &pg_type) != NANOARROW_OK) {
-      InternalAdbcSetError(error, "%s%d%s%s%s%" PRIu32,
-                           "Error resolving type code for column #", row_counter + 1,
-                           " (\"", colname, "\")  with oid ", pg_oid);
-      final_status = ADBC_STATUS_NOT_IMPLEMENTED;
-      break;
-    }
-    CHECK_NA(INTERNAL,
-             pg_type.WithFieldName(colname).SetSchema(uschema->children[row_counter],
-                                                      std::string(VendorName())),
-             error);
-    row_counter++;
-  }
+  CHECK_NA(INTERNAL, ArrowSchemaSetName(uschema.get(), nullptr), error);
   uschema.move(schema);
-
-  return final_status;
+  return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode PostgresConnection::GetTableTypes(struct AdbcConnection* connection,

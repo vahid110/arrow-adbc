@@ -259,18 +259,17 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     }
   }
 
-  // Build the schema for which we are about to build results
+  // Use the same per-field descriptors as ExecuteSchema/COPY, including PQfmod.
+  // The resolved root is local: two same-OID fields retain independent modifiers.
+  PostgresType output_type;
+  UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type));
   ArrowSchemaInit(schema_.get());
-  UNWRAP_NANOARROW(na_error_, Internal,
-                   ArrowSchemaSetTypeStruct(schema_.get(), helper_.NumColumns()));
+  UNWRAP_ERRNO(Internal, output_type.SetSchema(schema_.get(), vendor_name_));
+  // Preserve the non-COPY reader's existing unnamed root schema policy.
+  UNWRAP_ERRNO(Internal, ArrowSchemaSetName(schema_.get(), nullptr));
 
   for (int i = 0; i < helper_.NumColumns(); i++) {
-    PostgresType child_type;
-    UNWRAP_ERRNO(Internal,
-                 type_resolver_->FindWithDefault(helper_.FieldType(i), &child_type));
-
-    child_type = child_type.WithFieldName(helper_.FieldName(i));
-    UNWRAP_ERRNO(Internal, child_type.SetSchema(schema_->children[i], vendor_name_));
+    const PostgresType& child_type = output_type.child(i);
 
     std::unique_ptr<PostgresCopyFieldReader> child_reader;
     UNWRAP_NANOARROW(

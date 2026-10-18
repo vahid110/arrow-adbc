@@ -54,10 +54,11 @@ class ArrowArray(ctypes.Structure):
 
 
 class IntervalCDataTest(unittest.TestCase):
-    def batch(self, empty=False):
+    def batch(self, empty=False, modifier=False):
         schema = ArrowSchema()
         array = ArrowArray()
-        code = self.produce(int(empty), ctypes.byref(array), ctypes.byref(schema))
+        produce = self.modifier_produce if modifier else self.produce
+        code = produce(int(empty), ctypes.byref(array), ctypes.byref(schema))
         self.assertEqual(code, 0)
         try:
             return pa.RecordBatch._import_from_c(
@@ -111,6 +112,36 @@ class IntervalCDataTest(unittest.TestCase):
             b"intervald2s",
         )
 
+    def test_descriptor_metadata_survives_c_data_import_and_null_rows(self):
+        for empty in (False, True):
+            batch = self.batch(empty=empty, modifier=True)
+            self.assertEqual(batch.num_rows, 0 if empty else 1)
+            self.assertEqual(
+                batch.schema.names,
+                ["n10", "n38", "v20", "vwide", "fixed", "months", "unknown"],
+            )
+
+            def metadata(column, key):
+                return batch.schema.field(column).metadata.get(key)
+
+            self.assertEqual(metadata(0, b"ADBC:redshift:sql_type"), b"DECIMAL")
+            self.assertEqual(metadata(0, b"ADBC:redshift:precision"), b"10")
+            self.assertEqual(metadata(0, b"ADBC:redshift:scale"), b"2")
+            self.assertEqual(metadata(1, b"ADBC:redshift:precision"), b"38")
+            self.assertEqual(metadata(1, b"ADBC:redshift:scale"), b"37")
+            self.assertEqual(metadata(2, b"ADBC:redshift:byte_width"), b"20")
+            self.assertEqual(metadata(3, b"ADBC:redshift:byte_width"), b"70000")
+            self.assertEqual(metadata(4, b"ADBC:redshift:sql_type"), b"CHAR")
+            self.assertEqual(metadata(4, b"ADBC:redshift:byte_width"), b"10")
+            self.assertEqual(
+                metadata(5, b"ADBC:redshift:interval_family"), b"intervaly2m"
+            )
+            self.assertEqual(metadata(5, b"ADBC:redshift:type_modifier"), b"12345")
+            self.assertIsNone(metadata(5, b"ADBC:redshift:scale"))
+            self.assertIsNone(metadata(6, b"ADBC:redshift:byte_width"))
+            for column in batch.columns:
+                self.assertEqual(column.null_count, 0 if empty else 1)
+
 
 if __name__ == "__main__":
     library = ctypes.CDLL(sys.argv.pop(1))
@@ -121,4 +152,9 @@ if __name__ == "__main__":
         ctypes.POINTER(ArrowSchema),
     ]
     IntervalCDataTest.produce.restype = ctypes.c_int
+    IntervalCDataTest.modifier_produce = staticmethod(
+        library.AdbcRedshiftModifierFixture
+    )
+    IntervalCDataTest.modifier_produce.argtypes = IntervalCDataTest.produce.argtypes
+    IntervalCDataTest.modifier_produce.restype = ctypes.c_int
     unittest.main(verbosity=2)

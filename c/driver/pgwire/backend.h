@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace adbc::driver::pgwire {
@@ -78,6 +79,13 @@ struct TableTypeMapping {
   std::string_view relkind;
 };
 
+struct TypeModifierMetadata {
+  std::string_view sql_type;
+  std::optional<int32_t> precision;
+  std::optional<int32_t> scale;
+  std::optional<int32_t> byte_width;
+};
+
 enum class CatalogIntervalFamily { kNone, kYearMonth, kDaySecond };
 
 struct TypeReceiveAlias {
@@ -118,6 +126,35 @@ struct BackendProfile {
       if (table_types[i].name == type_name) return &table_types[i];
     }
     return nullptr;
+  }
+
+  // Reference descriptor arithmetic: AWS JDBC TypeInfoCache at
+  // 773fa16aabbd589e9e2c93684c7ca2543e3ce31a, getPrecision/getScale.
+  // Both query and catalog descriptors may describe derived expressions/views.
+  // Preserve the read envelope, not CREATE TABLE limits. Unsupported encodings
+  // keep only their raw descriptor, never invented defaults. Native boundary
+  // qualification is pending (AWS numeric result-scale documentation conflicts).
+  TypeModifierMetadata DescribeTypeModifier(std::string_view typname,
+                                            std::optional<int32_t> raw) const {
+    TypeModifierMetadata out;
+    if (kind != BackendKind::kRedshift) return out;
+    if (typname == "numeric" || typname == "decimal") {
+      out.sql_type = "DECIMAL";
+      if (!raw || *raw < 4) return out;
+      const uint32_t encoded = static_cast<uint32_t>(*raw - 4);
+      const int32_t precision = static_cast<int32_t>(encoded >> 16);
+      const int32_t scale = static_cast<int32_t>(encoded & 0xffff);
+      if (precision >= 1 && precision <= 38 && scale <= precision && scale <= 38) {
+        out.precision = precision;
+        out.scale = scale;
+      }
+    } else if (typname == "bpchar" || typname == "varchar") {
+      out.sql_type = typname == "bpchar" ? "CHAR" : "VARCHAR";
+      if (!raw || *raw < 5) return out;
+      const int32_t width = *raw - 4;
+      if (width <= 16000000) out.byte_width = width;
+    }
+    return out;
   }
 
   // Redshift's two catalog families have distinct receive layouts. PostgreSQL

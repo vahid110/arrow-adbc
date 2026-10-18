@@ -22,9 +22,12 @@
 
 #include "result_helper.h"
 
+#include <limits>
+
 #include <charconv>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "driver/framework/status.h"
@@ -153,7 +156,8 @@ Status PqResultHelper::ResolveParamTypes(PostgresTypeResolver& type_resolver,
     }
 
     std::string param_name = "$" + std::to_string(i + 1);
-    root_type.AppendChild(param_name.c_str(), pg_type);
+    root_type.AppendChild(param_name, pg_type.WithFieldDescriptor(
+                                          std::nullopt, type_resolver.backend_profile()));
   }
 
   *param_types = root_type;
@@ -178,10 +182,38 @@ Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
       pg_type = PostgresType::Unnamed(pg_oid);
     }
 
+    pg_type = pg_type.WithFieldDescriptor(PQfmod(result_.get(), i),
+                                          type_resolver.backend_profile());
     root_type.AppendChild(PQfname(result_.get(), i), pg_type);
   }
 
   *result_types = root_type;
+  return Status::Ok();
+}
+
+Status PqResultHelper::ResolveTableSchema(PostgresTypeResolver& type_resolver,
+                                          PostgresType* result_types) {
+  if (NumColumns() != 3)
+    return Status(ADBC_STATUS_INVALID_DATA, "Expected name/OID/modifier table schema");
+  PostgresType root(PostgresTypeId::kRecord);
+  for (const auto row : *this) {
+    if (row[0].is_null || row[1].is_null) {
+      return Status(ADBC_STATUS_INVALID_DATA, "Missing table column name or OID");
+    }
+    int64_t oid;
+    UNWRAP_RESULT(oid, row[1].ParseInteger());
+    if (oid < 0 || oid > std::numeric_limits<uint32_t>::max()) {
+      return Status(ADBC_STATUS_INVALID_DATA, "Table column OID is outside uint32 range");
+    }
+    std::optional<int32_t> modifier;
+    UNWRAP_RESULT(modifier, row[2].ParseTypeModifier());
+    PostgresType type;
+    UNWRAP_ERRNO(Internal,
+                 type_resolver.FindWithDefault(static_cast<uint32_t>(oid), &type));
+    root.AppendChild(std::string(row[0].data, row[0].len),
+                     type.WithFieldDescriptor(modifier, type_resolver.backend_profile()));
+  }
+  *result_types = std::move(root);
   return Status::Ok();
 }
 
