@@ -28,6 +28,13 @@
 namespace adbcpq {
 
 class PostgresTypeResolver;
+class PqResultHelper;
+
+// Insert an already-executed catalog result; shared by discovery and offline
+// protocol fixtures so tests exercise the actual catalog-to-OID boundary.
+adbc::driver::Status InsertPgTypeResult(
+    const PqResultHelper& result, const std::shared_ptr<PostgresTypeResolver>& resolver,
+    const adbc::driver::pgwire::BackendProfile& profile);
 
 inline std::string BuildTypeCatalogQuery(
     const adbc::driver::pgwire::BackendProfile& profile) {

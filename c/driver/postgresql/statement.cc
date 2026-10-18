@@ -582,6 +582,13 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
 
+  ArrowError interval_error{};
+  if (type_resolver_ && PostgresType::ValidateIntervalWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+
   if (bind_.release) bind_.release(&bind_);
   // Make a one-value stream
   adbc::driver::MakeArrayStream(schema, values, &bind_);
@@ -593,6 +600,19 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
   if (!stream || !stream->release) {
     InternalAdbcSetError(error, "%s", "[libpq] Must provide non-NULL stream");
     return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  // Inspect without taking ownership: reject read-only interval schemas before
+  // execution, transactions, parameter inference, or replace-ingest DDL.
+  nanoarrow::UniqueSchema schema;
+  ArrowError interval_error{};
+  CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                  ArrowArrayStreamGetSchema(stream, schema.get(), &interval_error),
+                  &interval_error, error);
+  if (type_resolver_ &&
+      PostgresType::ValidateIntervalWriteSchema(*type_resolver_, schema.get(),
+                                                &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_NOT_IMPLEMENTED;
   }
   // Move stream
   if (bind_.release) bind_.release(&bind_);

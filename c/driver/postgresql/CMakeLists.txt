@@ -128,6 +128,29 @@ else()
 endif()
 
 if(ADBC_BUILD_TESTS)
+  # This small test-only producer exports C Data from the actual catalog/schema/
+  # field codec. It is excluded from normal installs and every driver artifact.
+  add_library(adbc_redshift_interval_test_fixture SHARED
+              redshift_interval_test_fixture.cc type_discovery.cc result_helper.cc
+              error.cc)
+  target_compile_features(adbc_redshift_interval_test_fixture PRIVATE cxx_std_20)
+  target_link_libraries(adbc_redshift_interval_test_fixture
+                        PRIVATE adbc_driver_framework ${LIBPQ_LINK_LIBRARIES})
+  target_include_directories(adbc_redshift_interval_test_fixture SYSTEM
+                             PRIVATE ${REPOSITORY_ROOT}/c/
+                                     ${REPOSITORY_ROOT}/c/include/
+                                     ${REPOSITORY_ROOT}/c/driver
+                                     ${LIBPQ_INCLUDE_DIRS}
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+  )
+  install(TARGETS adbc_redshift_interval_test_fixture
+          LIBRARY DESTINATION lib
+                  COMPONENT redshift-interval-test
+                  EXCLUDE_FROM_ALL
+          RUNTIME DESTINATION bin
+                  COMPONENT redshift-interval-test
+                  EXCLUDE_FROM_ALL)
+
   add_test_case(driver_redshift_test
                 PREFIX
                 adbc
@@ -174,9 +197,11 @@ if(ADBC_BUILD_TESTS)
                 metadata.cc
                 metadata_test.cc
                 postgres_type_test.cc
+                redshift_interval_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc
+                type_discovery.cc
                 type_discovery_test.cc
                 EXTRA_LINK_LIBS
                 adbc_driver_common

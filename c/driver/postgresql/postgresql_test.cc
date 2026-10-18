@@ -39,6 +39,8 @@
 #include "common/options.h"
 #include "common/utils.h"
 #include "connection.h"
+#include "driver/framework/utility.h"
+#include "redshift_interval_test_fixture.h"
 #include "validation/adbc_validation.h"
 #include "validation/adbc_validation_util.h"
 
@@ -1812,6 +1814,65 @@ TEST_F(PostgresStatementTest, SqlIngestReplaceRejectsUnsupportedTypeBeforeDrop) 
       AdbcStatementSetSqlQuery(
           &statement, "SELECT id FROM pg_temp.adbc_unsupported_replace_guard", &error),
       IsOkStatus(&error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_NO_FATAL_FAILURE(
+      adbc_validation::CompareArray<int64_t>(reader.array_view->children[0], {42}));
+}
+
+TEST_F(PostgresStatementTest, RedshiftIntervalReadbackRejectsBindBeforeReplaceDrop) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TEMP TABLE adbc_interval_readonly (id BIGINT)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "INSERT INTO adbc_interval_readonly VALUES (42)", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsOkStatus(&error));
+
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_interval_readonly", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  for (bool as_stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ArrowError na_error{};
+    ASSERT_EQ(adbcpq::testing::IntervalFixture(0, array.get(), schema.get(), &na_error),
+              0);
+    if (as_stream) {
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+      ASSERT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                  IsStatus(ADBC_STATUS_NOT_IMPLEMENTED, &error));
+      EXPECT_NE(stream->release, nullptr);
+    } else {
+      ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsStatus(ADBC_STATUS_NOT_IMPLEMENTED, &error));
+      EXPECT_NE(schema->release, nullptr);
+      EXPECT_NE(array->release, nullptr);
+    }
+  }
+
+  // Both bind overloads reject before execution takes ownership or replacement DDL.
+  // PostgreSQL plumbing verifies the original target row survives.
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT id FROM pg_temp.adbc_interval_readonly", &error),
+              IsOkStatus(&error));
   adbc_validation::StreamReader reader;
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
                                         &reader.rows_affected, &error),

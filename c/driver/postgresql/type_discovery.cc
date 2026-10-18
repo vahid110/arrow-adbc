@@ -78,6 +78,8 @@ Status InsertPgAttributeResult(const PqResultHelper& result,
   return Status::Ok();
 }
 
+}  // namespace
+
 Status InsertPgTypeResult(const PqResultHelper& result,
                           const std::shared_ptr<PostgresTypeResolver>& resolver,
                           const adbc::driver::pgwire::BackendProfile& profile) {
@@ -89,7 +91,7 @@ Status InsertPgTypeResult(const PqResultHelper& result,
 
   int num_rows = result.NumRows();
   int num_cols = result.NumColumns();
-  PostgresTypeResolver::Item type_item;
+  PostgresTypeResolver::Item type_item{};
 
   for (int row = 0; row < num_rows; row++) {
     PqResultRow item = result.Row(row);
@@ -133,12 +135,10 @@ Status InsertPgTypeResult(const PqResultHelper& result,
   return Status::Ok();
 }
 
-}  // namespace
-
 Status DiscoverPostgresTypes(PGconn* conn,
                              const adbc::driver::pgwire::BackendProfile& profile,
                              std::shared_ptr<PostgresTypeResolver>* resolver_out) {
-  auto resolver = std::make_shared<PostgresTypeResolver>();
+  auto resolver = std::make_shared<PostgresTypeResolver>(profile);
 
   PqResultHelper columns(conn, std::string(kColumnsQuery));
   UNWRAP_STATUS(columns.Execute());

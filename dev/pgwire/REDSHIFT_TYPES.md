@@ -33,9 +33,11 @@ VARYING spellings documented in [character types](https://docs.aws.amazon.com/re
 
 `C`: code present; `O-PG`: existing PostgreSQL codec/schema offline assertions
 passed in [CI 38899143218](https://github.com/vahid110/arrow-adbc/actions/runs/38899143218)
-(the audited codec/discovery/reader/binder sources are unchanged since that head).
+(baseline PostgreSQL evidence; Task010b changes are separately identified below).
 `T`: opt-in Redshift test declaration, not a qualification receipt.
 `L`: narrowly live proven by [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470).
+`F`: Task010b offline generated protocol fixtures plus codec-produced C Data import checks
+added to C/Python CI; this is not captured traffic or a live libpq qualification.
 `NQ`: Redshift behavior not qualified; `N`: no semantic implementation.
 `opaque` means unsupported external bytes, **not full type support**.
 C/O-PG/T without L remains NQ; no row is a claim of full-range support.
@@ -57,8 +59,8 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C,O-PG,T | C,O-PG | C / C | C-name; precision N | timestamp(us), no timezone |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C,O-PG | C,O-PG | C / C | C-name; precision N | timestamp(us, UTC), server-retained instant |
-| INTERVAL YEAR TO MONTH | C-opaque,NQ | N family mapping | N / N | C-name only | month_day_nano_interval(months,0,0) |
-| INTERVAL DAY TO SECOND | C-opaque,NQ | N family mapping | N / N | C-name only | duration(us) + interval family/qualifier |
+| INTERVAL YEAR TO MONTH | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; qualifier N | month_day_nano_interval(months,0,0) |
+| INTERVAL DAY TO SECOND | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; precision N | duration(us) + interval family |
 | BOOLEAN / BOOL | C,O-PG,T | C,O-PG | C / C | C-name | bool |
 | HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
@@ -86,8 +88,8 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   `MakeCopyFieldReader`. Backend `kText` means non-COPY execution, not text wire
   fields. [SetSchema](../../c/driver/postgresql/postgres_type.h#L216) maps numeric
   to string with `arrow.opaque`, TIMETZ to opaque binary, and generic PostgreSQL
-  interval to month/day/nanosecond. This does not implement either Redshift interval
-  family. Unknown bytes can be useful diagnostics without proving a native codec.
+  interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
+  interval IDs and strict family readers; neither uses the PostgreSQL interval codec. Unknown bytes can be useful diagnostics without proving a native codec.
 - Modifiers: [ResolveOutputTypes](../../c/driver/postgresql/result_helper.cc#L163),
   [GetTableSchema](../../c/driver/postgresql/connection.cc#L941) and
   [TableSchema SQL](../../c/driver/postgresql/metadata.cc#L110) use OID/name but no
@@ -116,18 +118,22 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   explicitly `JSON_SERIALIZE`, not native SELECT. [reader tests](../../c/driver/postgresql/copy/postgres_copy_reader_test.cc#L536),
   [writer tests](../../c/driver/postgresql/copy/postgres_copy_writer_test.cc#L451)
   and [schema tests](../../c/driver/postgresql/postgres_type_test.cc#L127) prove
-  PostgreSQL fixtures, not all Redshift types. No dedicated family tests exist for
-  the two Redshift intervals, TIMETZ, native SUPER, HLLSKETCH or spatial semantics.
+  PostgreSQL fixtures, not all Redshift types. Task010b adds
+  [interval catalog/schema/codec tests](../../c/driver/postgresql/redshift_interval_test.cc),
+  [literal offline receive fixtures](../../c/driver/postgresql/redshift_interval_test_fixture.h)
+  and [PyArrow C Data import](../../ci/scripts/pgwire_interval_c_data_test.py).
+  TIMETZ, native SUPER, HLLSKETCH and spatial family coverage remains pending.
 
 The [official Python connector source](https://github.com/aws/amazon-redshift-python-driver/blob/248ffd5896c7a46bba115452dc10b8389d3ede54/redshift_connector/utils/type_utils.py)
 (at pinned commit `248ffd5896c7a46bba115452dc10b8389d3ede54`) distinguishes
 `intervaly2m` signed 4-byte months and `intervald2s` signed 8-byte microseconds; the
-current generic reader expects 16 bytes. Its numeric binary codec takes scaled 8/16
+generic PostgreSQL reader expects 16 bytes; Task010b keeps it separate. Its numeric binary codec takes scaled 8/16
 bytes, while this driver parses PostgreSQL numeric digits. **Protocol evidence
 requirement, not proof of a current decimal bug**: the connector
 [negotiates client_protocol_version](https://github.com/aws/amazon-redshift-python-driver/blob/248ffd5896c7a46bba115452dc10b8389d3ede54/redshift_connector/core.py#L811).
-Each libpq path needs its own qualified descriptor/format/fixture evidence. No wire
-bytes or OIDs are invented here, and no upstream implementation is copied.
+Each libpq path needs its own qualified descriptor/format/fixture evidence. The generated literal fixture bytes follow only the pinned reference contract, use
+arbitrary fixture catalog OIDs, and are not captured libpq evidence. No upstream
+implementation is copied.
 
 ## Recommended lossless contract and acceptance
 
@@ -238,18 +244,22 @@ must be reviewed before implementation; an unresolved representation blocks rele
 
 ## Bounded sequence (coordinator briefs define each implementation task)
 
-- **010b next:** the two interval families' discovery/native read/schema/metadata
-  only. Use backend-owned family classification with dynamic catalog OIDs; separate
-  proposed 4/8-byte fixture formats from the pinned AWS reference and Arrow
-  month_day_nano_interval(months,0,0)/duration(us); actual installed C/Python
-  import checks are required, libpq-path qualification remains pending and
-  unsupported field widths must reject. Carry canonical
-  family identity consistently in result/empty/ExecuteSchema/GetTableSchema;
-  recover qualifier/precision only from validated metadata, otherwise report unknown.
-  Fixtures must cite the supported protocol, not assume matching receive names.
-  Add PostgreSQL non-regression, null/sign/boundary/malformed/mixed-column tests and
-  installed C/Python consumption in CI. Bind/create/append stay explicitly unsupported
-  for these families until their bounded successor; this does not complete Task010.
+- **010b implemented, offline qualification:** backend-owned catalog-name
+  classification and runtime-discovered OIDs for `intervaly2m` / `intervald2s`;
+  strict 4-byte signed months -> month_day_nano_interval(months,0,0) and 8-byte
+  signed microseconds -> duration(us). C++ and installed PyArrow checks consume
+  actual codec-produced arrays, including null/empty/mixed results, signs, extrema,
+  unaligned input and malformed widths. Shared `SetSchema` carries
+  `ADBC:redshift:interval_family` plus canonical type name across query/metadata
+  schema paths. Qualifiers/fractional precision remain unknown because current
+  descriptors do not expose them. No extension or qualifier metadata is invented.
+  Both bind APIs reject family-marked schemas before ownership transfer/SQL/DDL;
+  Redshift also rejects interval/duration storage with stripped metadata. Unknown
+  family-marker values reject. Unmarked PostgreSQL interval behavior is preserved.
+  Bind/create/append remain unsupported. The test-only C Data producer is excluded
+  from driver artifacts and normal installs. Native libpq-path qualification is
+  still pending a separately admitted installed-artifact batch, with its own finite
+  authority; this slice does not complete Task010.
 - **010c:** type-modifier plumbing and scalar/decimal/temporal write/read gaps,
   including native-format evidence, exact DDL, target-aware append and loss checks.
 - **010d:** native SUPER plus supported-size binding/ingest, with the extension/

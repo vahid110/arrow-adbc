@@ -27,6 +27,7 @@ on:
       - "ci/scripts/python_wheel_fix_tag.py"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
+      - "ci/scripts/pgwire_interval_c_data_test.py"
       - "python/adbc_driver_manager/**"
       - "python/adbc_driver_redshift/**"
       - "c/driver/postgresql/**"
@@ -46,6 +47,7 @@ on:
       - "ci/scripts/python_wheel_fix_tag.py"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
+      - "ci/scripts/pgwire_interval_c_data_test.py"
       - "python/adbc_driver_manager/**"
       - "python/adbc_driver_redshift/**"
       - "c/driver/postgresql/**"
@@ -110,12 +112,18 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_SHARED=ON \
             -DADBC_BUILD_STATIC=OFF \
-            -DADBC_BUILD_TESTS=OFF \
+            -DADBC_BUILD_TESTS=ON \
             -DADBC_DRIVER_POSTGRESQL=ON \
-            -DADBC_DRIVER_MANAGER=OFF \
+            -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF
-          cmake --build build/pgwire-python --target adbc_driver_redshift_shared --parallel 4
+          cmake --build build/pgwire-python --target adbc_driver_redshift_shared \
+            adbc_redshift_interval_test_fixture --parallel 4
+          cmake --install build/pgwire-python --prefix "$RUNNER_TEMP/interval-test" \
+            --component redshift-interval-test
+          fixture="$(find "$RUNNER_TEMP/interval-test" -name 'libadbc_redshift_interval_test_fixture.so')"
+          test -n "$fixture"
+          echo "ADBC_REDSHIFT_INTERVAL_FIXTURE=$fixture" >> "$GITHUB_ENV"
           library="$(find "$PWD/build/pgwire-python" -name 'libadbc_driver_redshift.so' | head -n1)"
           test -n "$library"
           nm --dynamic --defined-only "$library" | grep -q ' T AdbcDriverRedshiftInit$'
@@ -161,6 +169,9 @@ jobs:
           assert path.startswith(sys.prefix), path
           assert path.endswith("adbc_driver_redshift/libadbc_driver_redshift.so"), path
           EOF
+
+      - name: Import codec-produced interval C Data with installed PyArrow (offline fixtures)
+        run: python -B ci/scripts/pgwire_interval_c_data_test.py "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
 
       - name: Installed wheel qualification (local PostgreSQL plumbing, NOT Redshift)
         run: |
