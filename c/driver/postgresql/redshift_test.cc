@@ -384,6 +384,56 @@ TEST_F(RedshiftSmokeTest, DetectsVendorAndExecutesTextResultQuery) {
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
 
+// Assert the descriptor-driven read contract without assuming every server
+// expression supplies a supported modifier. These opt-in tests remain unqualified.
+void AssertRedshiftNumericSchema(const ArrowSchema* schema, int precision, int scale) {
+  ArrowStringView family{}, p{}, s{};
+  ASSERT_EQ(ArrowMetadataGetValue(schema->metadata,
+                                  ArrowCharView("ADBC:redshift:sql_type"), &family),
+            0);
+  ASSERT_NE(family.data, nullptr);
+  EXPECT_EQ(std::string_view(family.data, family.size_bytes), "DECIMAL");
+  ASSERT_EQ(ArrowMetadataGetValue(schema->metadata,
+                                  ArrowCharView("ADBC:redshift:precision"), &p),
+            0);
+  ASSERT_EQ(
+      ArrowMetadataGetValue(schema->metadata, ArrowCharView("ADBC:redshift:scale"), &s),
+      0);
+  ASSERT_EQ(p.data != nullptr, s.data != nullptr);
+  ArrowSchemaView field;
+  ASSERT_EQ(ArrowSchemaViewInit(&field, schema, nullptr), 0);
+  if (p.data) {
+    EXPECT_EQ(std::string_view(p.data, p.size_bytes), std::to_string(precision));
+    EXPECT_EQ(std::string_view(s.data, s.size_bytes), std::to_string(scale));
+    EXPECT_EQ(field.type, NANOARROW_TYPE_DECIMAL128);
+    EXPECT_EQ(field.decimal_precision, precision);
+    EXPECT_EQ(field.decimal_scale, scale);
+  } else {
+    EXPECT_EQ(field.type, NANOARROW_TYPE_STRING);
+  }
+}
+
+void AssertRedshiftNumericValue(const ArrowSchema* schema, ArrowArrayView* view,
+                                int precision, int scale, const char* coefficient,
+                                const char* text) {
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericSchema(schema, precision, scale));
+  ArrowSchemaView field;
+  ASSERT_EQ(ArrowSchemaViewInit(&field, schema, nullptr), 0);
+  if (field.type == NANOARROW_TYPE_STRING) {
+    const auto actual = ArrowArrayViewGetStringUnsafe(view, 0);
+    EXPECT_EQ(std::string_view(actual.data, actual.size_bytes), text);
+  } else {
+    ASSERT_EQ(field.type, NANOARROW_TYPE_DECIMAL128);
+    ArrowDecimal value;
+    ArrowDecimalInit(&value, 128, precision, scale);
+    ArrowArrayViewGetDecimalUnsafe(view, 0, &value);
+    nanoarrow::UniqueBuffer digits;
+    ASSERT_EQ(ArrowDecimalAppendDigitsToBuffer(&value, digits.get()), 0);
+    EXPECT_EQ(std::string_view(reinterpret_cast<char*>(digits->data), digits->size_bytes),
+              coefficient);
+  }
+}
+
 TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   struct AdbcStatement statement = {};
   ASSERT_THAT(AdbcStatementNew(&connection_, &statement, &error_), IsOkStatus(&error_));
@@ -410,7 +460,7 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_EQ(reader.fields[3].type, NANOARROW_TYPE_INT64);
   EXPECT_EQ(reader.fields[4].type, NANOARROW_TYPE_FLOAT);
   EXPECT_EQ(reader.fields[5].type, NANOARROW_TYPE_DOUBLE);
-  EXPECT_EQ(reader.fields[6].type, NANOARROW_TYPE_STRING);
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericSchema(reader.schema->children[6], 10, 2));
   EXPECT_EQ(reader.fields[7].type, NANOARROW_TYPE_DATE32);
   EXPECT_EQ(reader.fields[8].type, NANOARROW_TYPE_TIME64);
   EXPECT_EQ(reader.fields[9].type, NANOARROW_TYPE_TIMESTAMP);
@@ -424,6 +474,9 @@ TEST_F(RedshiftSmokeTest, MapsCoreScalarTypes) {
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[1], 0), -7);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[2], 0), 42);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0), 9000000000);
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericValue(reader.schema->children[6],
+                                                     reader.array_view->children[6], 10,
+                                                     2, "1234", "12.34"));
   const ArrowBufferView bytes =
       ArrowArrayViewGetBytesUnsafe(reader.array_view->children[11], 0);
   EXPECT_EQ(
@@ -496,8 +549,8 @@ TEST_F(RedshiftSmokeTest, PreservesNumericBoundaries) {
   EXPECT_EQ(reader.fields[1].type, NANOARROW_TYPE_INT32);
   EXPECT_EQ(reader.fields[2].type, NANOARROW_TYPE_INT64);
   EXPECT_EQ(reader.fields[3].type, NANOARROW_TYPE_INT64);
-  EXPECT_EQ(reader.fields[4].type, NANOARROW_TYPE_STRING);
-  EXPECT_EQ(reader.fields[5].type, NANOARROW_TYPE_STRING);
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericSchema(reader.schema->children[4], 38, 0));
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericSchema(reader.schema->children[5], 38, 0));
   ASSERT_NO_FATAL_FAILURE(reader.Next());
   ASSERT_EQ(reader.array->length, 1);
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[0], 0),
@@ -508,14 +561,14 @@ TEST_F(RedshiftSmokeTest, PreservesNumericBoundaries) {
             (std::numeric_limits<int64_t>::min)());
   EXPECT_EQ(ArrowArrayViewGetIntUnsafe(reader.array_view->children[3], 0),
             (std::numeric_limits<int64_t>::max)());
-  const ArrowStringView positive =
-      ArrowArrayViewGetStringUnsafe(reader.array_view->children[4], 0);
-  const ArrowStringView negative =
-      ArrowArrayViewGetStringUnsafe(reader.array_view->children[5], 0);
-  EXPECT_EQ(std::string_view(positive.data, positive.size_bytes),
-            "99999999999999999999999999999999999999");
-  EXPECT_EQ(std::string_view(negative.data, negative.size_bytes),
-            "-99999999999999999999999999999999999999");
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericValue(
+      reader.schema->children[4], reader.array_view->children[4], 38, 0,
+      "99999999999999999999999999999999999999",
+      "99999999999999999999999999999999999999"));
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericValue(
+      reader.schema->children[5], reader.array_view->children[5], 38, 0,
+      "-99999999999999999999999999999999999999",
+      "-99999999999999999999999999999999999999"));
 
   EXPECT_THAT(AdbcStatementRelease(&statement, &error_), IsOkStatus(&error_));
 }
@@ -682,7 +735,7 @@ TEST_F(RedshiftSmokeTest, MetadataAndTableSchema) {
   EXPECT_STREQ(schema->children[1]->name, "label");
   EXPECT_STREQ(schema->children[1]->format, "u");
   EXPECT_STREQ(schema->children[2]->name, "amount");
-  EXPECT_STREQ(schema->children[2]->format, "u");
+  ASSERT_NO_FATAL_FAILURE(AssertRedshiftNumericSchema(schema->children[2], 10, 2));
   EXPECT_STREQ(schema->children[3]->name, "active");
   EXPECT_STREQ(schema->children[3]->format, "b");
 

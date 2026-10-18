@@ -78,7 +78,7 @@ TEST(TypeModifierTest, RealDescriptionKeepsSameOidFieldsIndependentAndCacheUncha
   nanoarrow::UniqueSchema schema;
   ArrowSchemaInit(schema.get());
   ASSERT_EQ(root.SetSchema(schema.get(), "Redshift"), 0);
-  EXPECT_STREQ(schema->children[0]->format, "u");  // Numeric codec is unchanged.
+  EXPECT_STREQ(schema->children[0]->format, "d:10,2");
   EXPECT_EQ(FieldMetadata(schema->children[0], "ADBC:redshift:sql_type"), "DECIMAL");
   EXPECT_EQ(FieldMetadata(schema->children[0], "ADBC:redshift:precision"), "10");
   EXPECT_EQ(FieldMetadata(schema->children[0], "ADBC:redshift:scale"), "2");

@@ -49,7 +49,9 @@ both interval families' native read/schema/family metadata with strict offline
 reference fixtures, codec-produced C/Python C Data checks and unsupported-write
 guards (PR #22 merged; offline CI passed). Task010c1 adds per-field modifiers and
 bounded numeric/character schema/catalog metadata, with parameter identity and
-unknowns retained (review/CI pending); numeric value codecs and writes stay unchanged.
+unknowns retained (PR23 merged; offline CI passed). Task010c2 adds known-p/s
+decimal128 reads and strict exact-text unknowns with reference codec/C Data tests
+(review/CI pending); writes stay unchanged.
 Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
 scalar/decimal value/write gaps, SUPER, HLL and spatial work remain open before
 separately authorized installed-artifact qualification.
@@ -84,7 +86,7 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#19); installed client batch and independent teardown completed in run 39138655470 |
 | 008d | Versioned exact-claim IAM contract, explicit nonce admission scopes, immutable host reservation and static consumer diagnostics. | Merged (PR #20); corrected operation qualified and fully torn down; retained one-use evidence, no retry authority |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Complete within run 39138655470 scope; int64/query/params/IAM and full teardown, not all types or APIs |
-| 010a | Full21-type source audit, separate operation evidence and first-release representation/acceptance contract. | Docs/audit only; review/CI pending; [type contract](REDSHIFT_TYPES.md) |
+| 010a | Full21-type source audit, separate operation evidence and first-release representation/acceptance contract. | Merged (PR21); docs/audit only; [type contract](REDSHIFT_TYPES.md) |
 | 010 | Complete all 21 Redshift table types before release: bounded interval, scalar/modifier, SUPER, HLL/spatial implementation and installed-artifact qualification phases. | Acceptance: every operation is proven or explicitly bounded/rejected, native reads require no user rewrites, unresolved representations closed; separate finite live authority required |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 

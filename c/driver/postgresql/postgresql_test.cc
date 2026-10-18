@@ -1375,7 +1375,9 @@ TEST_F(PostgresStatementTest, RedshiftModifiersOnActualNonCopyBoundAndEmptyReade
     const bool bound = mode == 2;
     const std::string query =
         "SELECT 1.25::numeric(10,2) AS n10, 2.1::numeric(18,9) AS n18, "
-        "'a'::varchar(20) AS label WHERE " +
+        "'a'::varchar(20) AS label, "
+        "0.12345678901234567890123456789012345678::numeric AS unknown, "
+        "NULL::numeric(38,38) AS missing WHERE " +
         std::string(bound ? "$1=1" : (mode == 0 ? "true" : "false"));
     adbcpq::PqResultArrayReader reader(owner->conn(), resolver, query);
     reader.SetVendorName("Redshift");
@@ -1415,14 +1417,28 @@ TEST_F(PostgresStatementTest, RedshiftModifiersOnActualNonCopyBoundAndEmptyReade
     EXPECT_EQ(
         PostgresFieldMetadata(output.schema->children[2], "ADBC:redshift:byte_width"),
         "20");
+    EXPECT_STREQ(output.schema->children[0]->format, "d:10,2");
+    EXPECT_STREQ(output.schema->children[3]->format, "u");
+    EXPECT_EQ(PostgresFieldMetadata(output.schema->children[3], "ADBC:redshift:sql_type"),
+              "DECIMAL");
+    EXPECT_FALSE(
+        PostgresFieldMetadata(output.schema->children[3], "ADBC:redshift:precision"));
+    EXPECT_STREQ(output.schema->children[4]->format, "d:38,38");
     int64_t rows = 0;
     while (true) {
       ASSERT_NO_FATAL_FAILURE(output.Next());
       if (!output.array->release) break;
       rows += output.array->length;
       if (output.array->length) {
+        ArrowDecimal value;
+        ArrowDecimalInit(&value, 128, 10, 2);
+        ArrowArrayViewGetDecimalUnsafe(output.array_view->children[0], 0, &value);
+        EXPECT_EQ(value.words[value.low_word_index], 125);
+        EXPECT_EQ(value.words[value.high_word_index], 0);
         ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
-            output.array_view->children[0], {"1.25"}));
+            output.array_view->children[3],
+            {"0.12345678901234567890123456789012345678"}));
+        EXPECT_TRUE(ArrowArrayViewIsNull(output.array_view->children[4], 0));
       }
       nanoarrow::UniqueSchema current;
       ASSERT_EQ(output.stream->get_schema(&output.stream.value, current.get()), 0);

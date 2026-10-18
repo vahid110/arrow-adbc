@@ -199,6 +199,7 @@ if(ADBC_BUILD_TESTS)
                 postgres_type_test.cc
                 redshift_interval_test.cc
                 type_modifier_test.cc
+                redshift_numeric_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc

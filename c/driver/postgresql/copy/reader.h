@@ -317,6 +317,106 @@ class PostgresCopyIntervalFieldReader : public PostgresCopyFieldReader {
   }
 };
 
+// Strict finite base-10000 numeric reference reader for the existing libpq
+// binary path. This is not the AWS Python connector's negotiated scaled-integer
+// protocol. Actual Redshift/libpq qualification remains pending.
+class RedshiftNumericFieldReader : public PostgresCopyFieldReader {
+ public:
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
+                      ArrowError* error) override {
+    if (field_size_bytes == -1) return ArrowArrayAppendNull(array, 1);
+    if (field_size_bytes < 8 || data->size_bytes < field_size_bytes) {
+      return Invalid(error, "invalid field length");
+    }
+    // Never borrow bytes from a following field. Do not advance the caller or
+    // append output until the entire field has passed validation.
+    ArrowBufferView field = *data;
+    field.size_bytes = field_size_bytes;
+    const int32_t ndigits = ReadUnsafe<int16_t>(&field);
+    const int32_t weight = ReadUnsafe<int16_t>(&field);
+    const uint16_t sign = ReadUnsafe<uint16_t>(&field);
+    const int32_t dscale = ReadUnsafe<uint16_t>(&field);
+    if (ndigits < 0 || field_size_bytes != 8 + 2 * ndigits) {
+      return Invalid(error, "invalid digit count or trailing bytes");
+    }
+    // The reference numeric wire format has a 14-bit display scale. Redshift
+    // decimal support is finite; nonfinite/special sign codes reject explicitly.
+    if ((sign != 0 && sign != 0x4000) || dscale > 0x3fff) {
+      return Invalid(error, "unsupported sign or display scale");
+    }
+    std::string digits;
+    digits.reserve(static_cast<size_t>(ndigits) * 4);
+    for (int32_t i = 0; i < ndigits; i++) {
+      const uint16_t digit = ReadUnsafe<uint16_t>(&field);
+      if (digit > 9999) return Invalid(error, "invalid base-10000 digit");
+      for (int divisor : {1000, 100, 10, 1}) {
+        digits.push_back(static_cast<char>('0' + (digit / divisor) % 10));
+      }
+    }
+    const auto first = digits.find_first_not_of('0');
+    if (first == std::string::npos) {
+      digits = "0";
+    } else {
+      digits.erase(0, first);
+    }
+    // int16 header bounds limit arithmetic and allocations: at most 131072
+    // integral digits plus 16383 fractional digits, independently of the input.
+    const int32_t exponent = 4 * (weight - ndigits + 1);
+    if (!CanRescale(digits, exponent + dscale)) {
+      return Invalid(error, "nonzero digits hidden by display scale");
+    }
+    const bool decimal = schema_view_.type == NANOARROW_TYPE_DECIMAL128;
+    const int32_t scale = decimal ? schema_view_.decimal_scale : dscale;
+    const int32_t shift = exponent + scale;
+    if (!CanRescale(digits, shift)) {
+      return Invalid(error, "nonzero fractional loss at target scale");
+    }
+    const bool zero = digits == "0";
+    const int64_t size = zero ? 1 : static_cast<int64_t>(digits.size()) + shift;
+    if (decimal && size > schema_view_.decimal_precision) {
+      return Invalid(error, "coefficient exceeds declared precision");
+    }
+    if (!zero) {
+      if (shift < 0) digits.resize(static_cast<size_t>(size));
+      if (shift > 0) digits.append(static_cast<size_t>(shift), '0');
+    }
+    if (decimal) {
+      // A nonempty coefficient of at most 38 digits is strictly within signed
+      // 128-bit range. ArrowDecimalSetDigits alone does not check either bound.
+      if (sign == 0x4000 && !zero) digits.insert(0, 1, '-');
+      ArrowDecimal value;
+      ArrowDecimalInit(&value, 128, schema_view_.decimal_precision, scale);
+      NANOARROW_RETURN_NOT_OK(
+          ArrowDecimalSetDigits(&value, ArrowCharView(digits.c_str())));
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendDecimal(array, &value));
+    } else {
+      if (digits.size() <= static_cast<size_t>(scale)) {
+        digits.insert(0, static_cast<size_t>(scale) + 1 - digits.size(), '0');
+      }
+      if (scale) digits.insert(digits.size() - scale, 1, '.');
+      if (sign == 0x4000 && !zero) digits.insert(0, 1, '-');
+      NANOARROW_RETURN_NOT_OK(
+          ArrowArrayAppendString(array, ArrowCharView(digits.c_str())));
+    }
+    data->data.as_uint8 += field_size_bytes;
+    data->size_bytes -= field_size_bytes;
+    return NANOARROW_OK;
+  }
+
+ private:
+  static bool CanRescale(const std::string& digits, int32_t shift) {
+    if (shift >= 0 || digits == "0") return true;
+    const size_t remove = static_cast<size_t>(-shift);
+    return remove < digits.size() &&
+           digits.find_last_not_of('0') < digits.size() - remove;
+  }
+
+  static ArrowErrorCode Invalid(ArrowError* error, const char* reason) {
+    ArrowErrorSet(error, "Invalid Redshift numeric reference field: %s", reason);
+    return EINVAL;
+  }
+};
+
 // // Converts COPY resulting from the Postgres NUMERIC type into a string.
 // Rewritten based on the Postgres implementation of NUMERIC cast to string in
 // src/backend/utils/adt/numeric.c : get_str_from_var() (Note that in the initial source,
@@ -1006,7 +1106,11 @@ static inline ArrowErrorCode MakeCopyFieldReader(
           *out = std::make_unique<PostgresCopyBinaryFieldReader>();
           return NANOARROW_OK;
         case PostgresTypeId::kNumeric:
-          *out = std::make_unique<PostgresCopyNumericFieldReader>();
+          if (pg_type.is_redshift_numeric()) {
+            *out = std::make_unique<RedshiftNumericFieldReader>();
+          } else {
+            *out = std::make_unique<PostgresCopyNumericFieldReader>();
+          }
           return NANOARROW_OK;
         case PostgresTypeId::kJsonb:
           *out = std::make_unique<PostgresCopyJsonbFieldReader>();
@@ -1014,6 +1118,15 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
       }
+
+    case NANOARROW_TYPE_DECIMAL128:
+      if (pg_type.is_redshift_numeric() &&
+          pg_type.numeric_precision() == schema_view.decimal_precision &&
+          pg_type.numeric_scale() == schema_view.decimal_scale) {
+        *out = std::make_unique<RedshiftNumericFieldReader>();
+        return NANOARROW_OK;
+      }
+      return ErrorCantConvert(error, pg_type, schema_view);
 
     case NANOARROW_TYPE_BINARY:
       // No need to check pg_type here: we can return the bytes of any

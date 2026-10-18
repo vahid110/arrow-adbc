@@ -17,6 +17,7 @@
 
 // Test-only C Data producer, never linked into or installed with a driver artifact.
 #include "redshift_interval_test_fixture.h"
+#include "redshift_numeric_test_fixture.h"
 #include "type_modifier_test_fixture.h"
 
 #if defined(_WIN32)
@@ -37,4 +38,11 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftModifierFixture(int empty,
                                                                    ArrowSchema* schema) {
   ArrowError error{};
   return adbcpq::testing::ModifierFixture(empty, array, schema, &error);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftDecimalFixture(int batch,
+                                                                  ArrowArray* array,
+                                                                  ArrowSchema* schema) {
+  ArrowError error{};
+  return adbcpq::testing::DecimalFixture(batch, array, schema, &error);
 }

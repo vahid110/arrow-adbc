@@ -45,8 +45,10 @@ Current state only; history is in git and PR descriptions.
   interval read/schema/family metadata, strict reference-format codecs, C/Python
   C Data tests and unsupported-write guards (PR #22 merged; offline CI passed).
   Task010c1 adds per-field raw modifiers and bounded numeric/character metadata
-  across query/schema/catalog/parameter paths; review/CI pending. Numeric value
-  decoding and writes are unchanged. Synthetic descriptors and local PostgreSQL
+  across query/schema/catalog/parameter paths (PR23 merged; offline CI passed).
+  Task010c2 adds descriptor-driven decimal128 reads or exact UTF-8 for unknown
+  modifiers, with strict finite base-10000 reference decoding and codec-produced
+  C Data/PyArrow tests; review/CI pending. Writes are unchanged. Synthetic descriptors and local PostgreSQL
   plumbing do not qualify the actual Redshift/libpq path.
   Interval writes/qualifiers, scalar/modifier, SUPER, HLL and spatial work remains
   required before Task009. No paid operation is performed or authorized here.
