@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -86,5 +87,59 @@ inline ArrowErrorCode DecimalWriteBatch(
     NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(array));
   }
   return ArrowArrayFinishBuildingDefault(array, error);
+}
+}  // namespace adbcpq::testing
+
+namespace adbcpq::testing {
+
+// The dictionary value, not the index field, carries the semantic marker.
+inline ArrowErrorCode DecimalDictionarySchema(ArrowSchema* schema,
+                                              ArrowType storage = NANOARROW_TYPE_STRING,
+                                              bool marked = true) {
+  ArrowSchemaInit(schema);
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(schema, 1));
+  ArrowSchema* field = schema->children[0];
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(field, NANOARROW_TYPE_INT32));
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(field, "amount"));
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaAllocateDictionary(field));
+  ArrowSchemaInit(field->dictionary);
+  if (storage == NANOARROW_TYPE_DECIMAL128 || storage == NANOARROW_TYPE_DECIMAL256) {
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDecimal(field->dictionary, storage, 10, 2));
+  } else {
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(field->dictionary, storage));
+  }
+  if (marked) {
+    NANOARROW_RETURN_NOT_OK(
+        DecimalMetadata(field->dictionary, "ADBC:redshift:sql_type", "DECIMAL"));
+  }
+  return NANOARROW_OK;
+}
+
+inline ArrowErrorCode DecimalDictionaryBatch(ArrowSchema* schema, ArrowArray* array,
+                                             ArrowStringView value, ArrowError* error) {
+  NANOARROW_RETURN_NOT_OK(ArrowArrayInitFromSchema(array, schema, error));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(array));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayAppendString(array->children[0]->dictionary, value));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(array->children[0], 0));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(array));
+  return ArrowArrayFinishBuildingDefault(array, error);
+}
+
+// Keep the original producer's private_data and release callback intact while
+// recording exact ownership. Safe even when a regression unexpectedly accepts a bind.
+template <typename T>
+inline void DecimalCountReleases(T* value, std::shared_ptr<int> count) {
+  struct Probe {
+    T original;
+    std::shared_ptr<int> count;
+  };
+  auto* probe = new Probe{*value, count};
+  value->private_data = probe;
+  value->release = [](T* value) {
+    std::unique_ptr<Probe> probe(static_cast<Probe*>(value->private_data));
+    probe->original.release(&probe->original);
+    ++*probe->count;
+    value->release = nullptr;
+  };
 }
 }  // namespace adbcpq::testing

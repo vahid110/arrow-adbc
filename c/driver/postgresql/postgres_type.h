@@ -411,8 +411,7 @@ class PostgresType {
     return NANOARROW_OK;
   }
 
-  // Read-only vendor families must not fall through to a generic storage writer.
-  // Also checks nested/dictionary fields before binding takes ownership or runs SQL.
+  // Validate decimal semantics before binding takes ownership or selects a writer.
   static ArrowErrorCode ValidateDecimalWriteSchema(const PostgresTypeResolver& resolver,
                                                    const ArrowSchema* schema,
                                                    ArrowError* error);
@@ -771,25 +770,29 @@ inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
 
 inline ArrowErrorCode PostgresType::ValidateDecimalWriteSchema(
     const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
-  if (!schema) return NANOARROW_OK;
-  RedshiftDecimalSchema decimal;
-  NANOARROW_RETURN_NOT_OK(
-      RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));
-  for (int64_t i = 0; i < schema->n_children; i++) {
+  auto validate = [&](auto&& self, const ArrowSchema* node,
+                      bool dictionary_value) -> ArrowErrorCode {
+    if (!node) return NANOARROW_OK;
+    RedshiftDecimalSchema decimal;
     NANOARROW_RETURN_NOT_OK(
-        ValidateDecimalWriteSchema(resolver, schema->children[i], error));
-  }
-  if (schema->dictionary) {
-    NANOARROW_RETURN_NOT_OK(
-        ValidateDecimalWriteSchema(resolver, schema->dictionary, error));
-  }
-  return NANOARROW_OK;
+        RedshiftDecimalSchema::Parse(node, resolver.is_redshift(), &decimal, error));
+    if (dictionary_value && decimal.enabled) {
+      return RedshiftDecimalSchema::Invalid(error,
+                                            "dictionary decimal writes unsupported");
+    }
+    for (int64_t i = 0; i < node->n_children; i++) {
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary_value));
+    }
+    return self(self, node->dictionary, true);
+  };
+  return validate(validate, schema, false);
 }
 
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(ValidateDecimalWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
   RedshiftDecimalSchema decimal;

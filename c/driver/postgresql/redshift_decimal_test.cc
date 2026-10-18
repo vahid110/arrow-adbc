@@ -215,5 +215,34 @@ TEST(RedshiftDecimalWriteTest, SchemaMetadataAndDeclarationRejectContradictions)
   ASSERT_EQ(RedshiftDecimalSchema::Parse(schema->children[0], false, &parsed, &error), 0);
   EXPECT_FALSE(parsed.enabled);
 }
+TEST(RedshiftDecimalWriteTest, DictionarySemanticsRejectAtSchemaTypeAndWriterBoundaries) {
+  for (bool redshift : {false, true}) {
+    const auto profile =
+        redshift ? BackendProfile::Redshift() : BackendProfile::PostgreSQL();
+    std::shared_ptr<PostgresTypeResolver> resolver;
+    ASSERT_EQ(testing::ModifierResolver(profile, &resolver), 0);
+    for (ArrowType storage :
+         {NANOARROW_TYPE_STRING, NANOARROW_TYPE_DECIMAL128, NANOARROW_TYPE_DECIMAL256}) {
+      for (bool marked : {false, true}) {
+        if (!redshift && !marked) continue;
+        if (storage == NANOARROW_TYPE_STRING && !marked) continue;
+        nanoarrow::UniqueSchema schema;
+        ASSERT_EQ(testing::DecimalDictionarySchema(schema.get(), storage, marked), 0);
+        ArrowError error{};
+        EXPECT_NE(
+            PostgresType::ValidateDecimalWriteSchema(*resolver, schema.get(), &error), 0);
+        PostgresType mapped;
+        EXPECT_NE(
+            PostgresType::FromSchema(*resolver, schema->children[0], &mapped, &error), 0);
+        std::unique_ptr<PostgresCopyFieldWriter> writer;
+        EXPECT_NE(MakeCopyFieldWriter(schema->children[0], nullptr, *resolver, nullptr,
+                                      &writer, false, &error),
+                  0);
+        EXPECT_FALSE(writer);
+      }
+    }
+  }
+}
+
 }  // namespace
 }  // namespace adbcpq

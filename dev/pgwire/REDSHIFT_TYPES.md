@@ -201,6 +201,9 @@ digits, with no exponent, whitespace or nonfinite values. Unknown-p/s values
 must fit38 coefficient digits (redundant fractional zeroes may be removed to fit).
 Supplied precision/scale must be paired, legal and consistent with physical Arrow
 storage and any supported raw modifier. Unknown p/s never supplies CREATE defaults.
+Dictionary-contained DECIMAL identity/storage is unsupported and rejects before
+Bind ownership, type mapping or writer selection; it cannot use a raw-byte writer.
+Ordinary unmarked PostgreSQL string dictionaries retain their text behavior.
 
 CREATE/REPLACE/CREATE_APPEND validates and renders `DECIMAL(p,s)` before destructive
 SQL: p1..38, s0..min(p,37). APPEND aligns actual name/OID/modifier catalog fields,

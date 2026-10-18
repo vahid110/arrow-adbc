@@ -1529,6 +1529,121 @@ TEST_F(PostgresStatementTest,
   EXPECT_EQ(sentinel.Row(0)[1].value(), "integer");
 }
 
+TEST_F(PostgresStatementTest,
+       DecimalDictionaryRejectsBothBindApisBeforeOwnershipOrReplace) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(
+      owner->conn(),
+      "CREATE TEMP TABLE adbc_decimal_dictionary_guard(amount INTEGER); "
+      "INSERT INTO adbc_decimal_dictionary_guard VALUES(42)");
+  ASSERT_TRUE(setup.Execute().ok());
+  // Valid UTF-8 control bytes are not decimal text. The generic raw dictionary
+  // serializer would interpret these as numeric binary9 instead of rejecting.
+  const char crafted[] = {0, 1, 0, 0, 0, 0, 0, 0, 0, 9};
+  for (bool stream_bind : {false, true}) {
+    for (bool replace : {false, true}) {
+      ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+      if (replace) {
+        ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                           "adbc_decimal_dictionary_guard", &error),
+                    IsOkStatus(&error));
+        ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                           ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+                    IsOkStatus(&error));
+        ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                           ADBC_OPTION_VALUE_ENABLED, &error),
+                    IsOkStatus(&error));
+      } else {
+        ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT $1", &error),
+                    IsOkStatus(&error));
+      }
+      nanoarrow::UniqueSchema schema;
+      ASSERT_EQ(adbcpq::testing::DecimalDictionarySchema(schema.get()), 0);
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(adbcpq::testing::DecimalDictionaryBatch(
+                    schema.get(), array.get(), ArrowStringView{crafted, sizeof(crafted)},
+                    nullptr),
+                0);
+      auto array_releases = std::make_shared<int>(0);
+      auto schema_releases = std::make_shared<int>(0);
+      adbcpq::testing::DecimalCountReleases(array.get(), array_releases);
+      adbcpq::testing::DecimalCountReleases(schema.get(), schema_releases);
+      if (stream_bind) {
+        nanoarrow::UniqueArrayStream stream;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+        const auto release = stream->release;
+        EXPECT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                    IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+        EXPECT_EQ(stream->release, release);
+        EXPECT_EQ(*array_releases, 0);
+        EXPECT_EQ(*schema_releases, 0);
+        if (stream->release) stream->release(stream.get());
+      } else {
+        const auto array_release = array->release;
+        const auto schema_release = schema->release;
+        EXPECT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                    IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+        EXPECT_EQ(array->release, array_release);
+        EXPECT_EQ(schema->release, schema_release);
+        EXPECT_EQ(*array_releases, 0);
+        EXPECT_EQ(*schema_releases, 0);
+        if (array->release) array->release(array.get());
+        if (schema->release) schema->release(schema.get());
+      }
+      if (error.release) error.release(&error);
+      ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+      EXPECT_EQ(*array_releases, 1);
+      EXPECT_EQ(*schema_releases, 1);
+      adbcpq::PqResultHelper sentinel(owner->conn(),
+                                      "SELECT amount::text,pg_typeof(amount)::text FROM "
+                                      "adbc_decimal_dictionary_guard");
+      ASSERT_TRUE(sentinel.Execute().ok());
+      ASSERT_EQ(sentinel.NumRows(), 1);
+      EXPECT_EQ(sentinel.Row(0)[0].value(), "42");
+      EXPECT_EQ(sentinel.Row(0)[1].value(), "integer");
+    }
+  }
+}
+
+TEST_F(PostgresStatementTest, UnmarkedPostgresStringDictionaryKeepsItsTextWriter) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  for (bool stream_bind : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalDictionarySchema(schema.get(),
+                                                       NANOARROW_TYPE_STRING, false),
+              0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::DecimalDictionaryBatch(schema.get(), array.get(),
+                                                      ArrowCharView("1.25"), nullptr),
+              0);
+    ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
+                                         "SELECT pg_typeof($1)::text,$1::text", &error),
+                IsOkStatus(&error));
+    if (stream_bind) {
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+      ASSERT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                  IsOkStatus(&error));
+    } else {
+      ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsOkStatus(&error));
+    }
+    adbc_validation::StreamReader output;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &output.stream.value,
+                                          &output.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(output.Next());
+    ASSERT_EQ(output.array->length, 1);
+    for (int col = 0; col < 2; col++) {
+      const auto value =
+          ArrowArrayViewGetStringUnsafe(output.array_view->children[col], 0);
+      EXPECT_EQ(std::string_view(value.data, value.size_bytes), col ? "1.25" : "text");
+    }
+  }
+}
+
 TEST_F(PostgresStatementTest, DecimalCreateUsesStoredDeclarationAndIndependentSqlValues) {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(

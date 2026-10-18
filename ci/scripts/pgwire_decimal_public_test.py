@@ -182,6 +182,42 @@ class DecimalPublicPythonTest(unittest.TestCase):
                 [{"amount": "42", "type": "integer"}],
             )
 
+    def test_decimal_dictionary_rejects_and_unmarked_pg_stays_text(
+        self,
+    ):
+        values = pa.array(["1.25"]).dictionary_encode()
+        for marked in (False, True):
+            schema = pa.schema(
+                [pa.field("amount", values.type, metadata=IDENTITY if marked else None)]
+            )
+            data = pa.RecordBatch.from_arrays([values], schema=schema)
+            for stream_bind in (False, True):
+                with adm.AdbcStatement(self.connection) as stmt:
+                    stmt.set_sql_query(
+                        "SELECT pg_typeof($1)::text AS kind,$1::text AS value"
+                    )
+                    source = pa.RecordBatchReader.from_batches(schema, [data])
+
+                    def bind():
+                        if stream_bind:
+                            stmt.bind_stream(source)
+                        else:
+                            stmt.bind(data)
+
+                    if marked:
+                        with self.assertRaises(adm.Error):
+                            bind()
+                    else:
+                        bind()
+                        handle, _ = stmt.execute_query()
+                        with pa.RecordBatchReader._import_from_c(
+                            handle.address
+                        ) as reader:
+                            self.assertEqual(
+                                reader.read_all().to_pylist(),
+                                [{"kind": "text", "value": "1.25"}],
+                            )
+
     def test_unknown_decimal_text_appends_but_never_defaults_create(self):
         metadata = {
             **IDENTITY,

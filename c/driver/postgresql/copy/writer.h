@@ -1076,6 +1076,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     const PostgresTypeResolver& type_resolver, const PostgresType* target_type,
     std::unique_ptr<PostgresCopyFieldWriter>* out, bool disable_decimal_fast_path,
     ArrowError* error) {
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateDecimalWriteSchema(type_resolver, schema, error));
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
