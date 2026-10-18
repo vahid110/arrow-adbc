@@ -38,8 +38,19 @@ Within `/adbc/qualification/20261016/operations/<nonce>/`, the host first requir
 one complete, empty, value-free `DescribeParameters` response for the exact prefix;
 any parameter, missing list or pagination token rejects the operation. After
 checking the versioned template, authenticated preflight, exact initial role and
-deadline, it atomically creates `host-attempt` as a Standard String, version 1,
-`Overwrite=False`, before provisioning. The reservation holds only fixed nonsecret
+deadline, it first creates an exclusive immutable nonce-named local attempt journal
+in `/Users/vahidsbr/.local/state/adbc-redshift/workflow/live-qualification-20261016/host-operation-attempts`
+under fixed host UID 502 (`vahidsbr`). Production has no CLI/environment relocation;
+only offline tests inject a directory through the constructor. The directory must
+be owned by this UID, mode 0700 and without symlink redirection. Exclusive/no-follow
+creation, file/directory/parent fsync all precede SSM. Partial writes, sync errors,
+connection failures before SSM stores anything, changed receipts, working directories
+and fresh processes cannot reuse an existing journal. Never remove/reset/read its
+bytes as authorization. Host migration requires explicit requalification; copying
+spent journals or selecting a new location grants no authority.
+
+Only then does the host atomically create `host-attempt` as a Standard String,
+version 1, `Overwrite=False`, before provisioning. The reservation holds only fixed nonsecret
 source/run/nonce/template-hash/original-deadline metadata. An attempted write or
 lost reply is spent: no retry, readback as authorization, reset or deletion. A
 second receipt path or concurrent invocation cannot reauthorize provisioning.
@@ -64,7 +75,12 @@ run, operation nonce and available admission hash, plus claim/ingress uncertaint
 It distinguishes installed entrypoint probes from each payload's NOT_STARTED,
 STARTED_UNKNOWN and PASSED state. Claim denial is `CLAIM_ACCESS_DENIED` before
 any ingress, credential or payload call. Cleanup cannot replace the first failure;
-existing receipts are preserved. No exception text or child/SDK payload is logged.
+existing receipts are preserved. Every effect refreshes its applicable deadline
+after durable receipt persistence; child remaining time is computed after its
+attempted mark. An invocation skipped by that final time gate stays NOT_STARTED;
+STARTED_UNKNOWN is conservative, not proof of actual child execution. Expired
+query/admission clocks do not block exact owned ingress cleanup. No exception text
+or child/SDK payload is logged.
 
 The compact v2 record binds the exact merged source, original PR/review/check
 receipt, live run, immutable artifact IDs, payload/inventory/C-client/CA hashes,

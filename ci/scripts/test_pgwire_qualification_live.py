@@ -727,9 +727,12 @@ class LiveTest(unittest.TestCase):
         with self.assertRaises(Rejected):
             self.execute(clock=lambda: next(tick))
         self.assertNotIn("claim", self.sdk.events)
-        tick = iter([NOW, NOW, NOW, NOW, NOW, NOW + 800])
+        elapsed = [NOW]
+        self.invoke.side_effect = lambda *args, **kwargs: elapsed.__setitem__(
+            0, NOW + 800
+        )
         with self.assertRaises(Rejected):
-            self.execute(clock=lambda: next(tick))
+            self.execute(clock=lambda: elapsed[0])
         self.assertEqual(self.sdk.events.count("credentials"), 1)
         self.assertEqual(self.sdk.ingress, [])
 
@@ -1039,6 +1042,123 @@ class PrepareFlowTest(unittest.TestCase):
             sdk.assert_not_called()
 
 
+class ConsumerPersistenceDeadlineTest(unittest.TestCase):
+    def test_slow_persistence_blocks_each_expired_effect_and_preserves_cleanup(self):
+        for stage in (
+            "CLAIM",
+            "INGRESS",
+            "C_CREDENTIALS",
+            "PYTHON_CREDENTIALS",
+            "C_PAYLOAD",
+            "PYTHON_PAYLOAD",
+        ):
+            with self.subTest(stage=stage):
+                flow = LiveTest()
+                flow.setUp()
+                try:
+                    tick = [NOW]
+                    receipt = live.ConsumerReceipt(Path(flow.temp.name) / "result.json")
+                    save = receipt.save
+                    delayed = [False]
+
+                    def persist():
+                        save()
+                        target = receipt.data["stage"] == stage
+                        if stage == "INGRESS":
+                            target &= (
+                                receipt.data["owned_ingress"] == "ATTEMPTED_UNKNOWN"
+                            )
+                        if target and not delayed[0]:
+                            delayed[0] = True
+                            tick[0] = NOW + (201 if stage == "CLAIM" else 801)
+
+                    receipt.save = persist
+                    effects = []
+                    for method, name in (
+                        ("put_parameter", "claim"),
+                        ("authorize_security_group_ingress", "ingress"),
+                        ("get_credentials", "credentials"),
+                    ):
+                        original = getattr(flow.sdk, method)
+
+                        def operation(*args, _operation=original, _name=name, **kwargs):
+                            effects.append((_name, tick[0]))
+                            return _operation(*args, **kwargs)
+
+                        setattr(flow.sdk, method, operation)
+                    flow.invoke.side_effect = lambda *args, **kwargs: effects.append(
+                        ("payload", tick[0])
+                    )
+                    with (
+                        self.assertRaises(Rejected),
+                        patch("sys.stdout", new_callable=io.StringIO) as output,
+                    ):
+                        flow.execute(clock=lambda: tick[0], receipt=receipt)
+                    self.assertTrue(delayed[0])
+                    self.assertEqual(
+                        receipt.data["first_failure"]["reason"], "DEADLINE"
+                    )
+                    self.assertFalse(
+                        [
+                            effect
+                            for effect in effects
+                            if effect[1] >= NOW + (200 if stage == "CLAIM" else 800)
+                        ]
+                    )
+                    self.assertNotIn("private payload started", output.getvalue())
+                    if stage == "CLAIM":
+                        self.assertNotIn("claim", flow.sdk.events)
+                        self.assertEqual(receipt.data["claim"], "SPENT_OR_UNKNOWN")
+                    else:
+                        self.assertEqual(flow.sdk.ingress, [])
+                        if stage != "INGRESS":
+                            self.assertIn("revoke", flow.sdk.events)
+                    if stage.endswith("PAYLOAD"):
+                        kind = "c_archive" if stage.startswith("C_") else "python_wheel"
+                        self.assertEqual(receipt.data["payloads"][kind], "NOT_STARTED")
+                        self.assertEqual(receipt.data["first_failure"]["stage"], stage)
+                finally:
+                    flow.doCleanups()
+
+    def test_payload_timeout_is_recomputed_after_durable_mark(self):
+        flow = LiveTest()
+        flow.setUp()
+        self.addCleanup(flow.doCleanups)
+        tick = [NOW]
+        receipt = live.ConsumerReceipt(Path(flow.temp.name) / "result.json")
+        save = receipt.save
+
+        def persist():
+            save()
+            if (
+                receipt.data["stage"] == "C_PAYLOAD"
+                and receipt.data["payloads"]["c_archive"] == "STARTED_UNKNOWN"
+            ):
+                tick[0] += 5
+
+        receipt.save = persist
+        fetch = flow.sdk.get_credentials
+
+        def credentials(**kwargs):
+            result = fetch(**kwargs)
+            tick[0] = NOW + 790
+            return result
+
+        flow.sdk.get_credentials = credentials
+        captured = []
+
+        def invoke(*args, **kwargs):
+            captured.append((tick[0], kwargs["seconds"]))
+            raise RuntimeError("PRIVATE stop after observed invocation")
+
+        flow.invoke.side_effect = invoke
+        with self.assertRaises(Rejected):
+            flow.execute(clock=lambda: tick[0], receipt=receipt)
+        self.assertEqual(captured, [(NOW + 795, 4)])
+        self.assertEqual(receipt.data["payloads"]["c_archive"], "STARTED_UNKNOWN")
+        self.assertIn("revoke", flow.sdk.events)
+
+
 class ProvenanceTest(unittest.TestCase):
     def test_wrong_run_workflow_source_attempt_or_artifact_rejected(self):
         github = prepare.GitHub("fake-token")
@@ -1173,6 +1293,7 @@ class HostStatementTest(unittest.TestCase):
             },
             Mock(),
             Path(self.temp.name) / "receipt.json",
+            _attempt_directory=Path(self.temp.name).resolve() / "attempts",
             clock=lambda: self.tick,
             pause=self.pause,
         )
@@ -1606,6 +1727,7 @@ class HostDeadlineTest(unittest.TestCase):
                 },
                 GitHub(),
                 Path(temp) / "receipt.json",
+                _attempt_directory=Path(temp).resolve() / "attempts",
                 clock=lambda: tick[0],
                 pause=lambda n: tick.__setitem__(0, tick[0] + n),
             )
@@ -1791,6 +1913,7 @@ class HostTest(unittest.TestCase):
                     },
                     github,
                     Path(temp) / "receipt.json",
+                    _attempt_directory=Path(temp).resolve() / "attempts",
                     clock=lambda: NOW,
                     pause=lambda _: None,
                 )
@@ -1983,6 +2106,7 @@ class HostTest(unittest.TestCase):
                 },
                 github,
                 Path(temp) / "receipt.json",
+                _attempt_directory=Path(temp).resolve() / "attempts",
                 clock=lambda: tick[0],
                 pause=lambda seconds: tick.__setitem__(0, tick[0] + seconds),
             )
@@ -2155,6 +2279,7 @@ class HostTest(unittest.TestCase):
                 },
                 github,
                 Path(temp) / "receipt.json",
+                _attempt_directory=Path(temp).resolve() / "attempts",
                 clock=lambda: NOW,
                 pause=lambda _: None,
             )
@@ -2226,6 +2351,7 @@ class HostTest(unittest.TestCase):
                 },
                 Mock(),
                 Path(temp) / "receipt.json",
+                _attempt_directory=Path(temp).resolve() / "attempts",
                 clock=lambda: NOW,
                 pause=lambda _: None,
             )

@@ -422,9 +422,17 @@ class ConsumerReceipt:
         response = getattr(error, "response", {})
         details = response.get("Error", {}) if type(response) is dict else {}
         code = details.get("Code") if type(details) is dict else None
+        expired = isinstance(error, Rejected) and str(error) in (
+            "admission deadline reached",
+            "query deadline reached",
+            "query deadline reached after credentials",
+            "insufficient query window",
+        )
         if stage == "CLAIM":
             reason = (
-                "CLAIM_ACCESS_DENIED"
+                "DEADLINE"
+                if expired
+                else "CLAIM_ACCESS_DENIED"
                 if code in ("AccessDenied", "AccessDeniedException")
                 else "CLAIM_ALREADY_SPENT"
                 if code == "ParameterAlreadyExists"
@@ -435,6 +443,8 @@ class ConsumerReceipt:
                 if reason == "CLAIM_ACCESS_DENIED"
                 else "SPENT_OR_UNKNOWN"
             )
+        elif expired:
+            reason = "DEADLINE"
         elif stage.endswith("PAYLOAD"):
             reason = "PAYLOAD_FAILED_OR_INTERRUPTED"
         elif stage == "INGRESS_CLEANUP":
@@ -529,6 +539,7 @@ def _execute(
     # path that authorizes paid work, even if a claim happens to match our bytes.
     receipt.data["claim"] = "ATTEMPTED_UNKNOWN"
     receipt.mark("CLAIM")
+    require(clock() < admission["window"]["admit_before"], "admission deadline reached")
     aws["ssm"].put_parameter(
         Name=claim_name(nonce, run),
         Value=json.dumps(
@@ -558,6 +569,10 @@ def _execute(
         attempted_ingress = True
         receipt.data["owned_ingress"] = "ATTEMPTED_UNKNOWN"
         receipt.save()
+        require(
+            clock() < admission["window"]["query_deadline"] - 180,
+            "insufficient query window",
+        )
         response = ec2.authorize_security_group_ingress(
             GroupId=group,
             IpPermissions=[
@@ -600,6 +615,10 @@ def _execute(
                 "query deadline reached",
             )
             receipt.mark("C_CREDENTIALS" if index == 0 else "PYTHON_CREDENTIALS")
+            require(
+                clock() < admission["window"]["query_deadline"] - 65,
+                "query deadline reached",
+            )
             response = iam.fetch_serverless_credentials(
                 redshift,
                 workgroup_name=NAME,
@@ -644,13 +663,15 @@ def _execute(
                     fixture,
                 ]
             )
-            print(
-                "Qualification stage: " + kind + " private payload started.", flush=True
-            )
-            remaining = min(60, admission["window"]["query_deadline"] - clock() - 1)
-            require(remaining > 0, "query deadline reached after credentials")
             receipt.data["payloads"][kind] = "STARTED_UNKNOWN"
             receipt.mark("C_PAYLOAD" if index == 0 else "PYTHON_PAYLOAD")
+            # Persistence may block. Budget the child only after the durable
+            # attempted mark; a skipped invocation is known not to have started.
+            remaining = min(60, admission["window"]["query_deadline"] - clock() - 1)
+            if remaining <= 0:
+                receipt.data["payloads"][kind] = "NOT_STARTED"
+                receipt.save()
+                raise Rejected("query deadline reached after credentials")
             invoke(argv, uri, seconds=remaining)
             receipt.data["payloads"][kind] = "PASSED"
             receipt.save()

@@ -55,8 +55,10 @@ run `38933278088` passed bootstrap/SYS visibility but exact claim authorization
 failed before driver payloads. Independent full teardown is verified; the original
 namespace uncertainty and immutable singleton admission remain evidence. Task008d
 adds a versioned retained-action claim policy, explicit operation scopes, durable
-host reservation and static consumer receipts; offline repair requires independent
-review/CI and grants no further paid authority.
+host reservation and static consumer receipts. Its initial review found pre-store
+reservation and receipt-fsync deadline gaps; the successor retains a canonical
+host journal and checks effect clocks after persistence. Offline repair requires
+independent review/CI and grants no further paid authority.
 Offline success is not live qualification: one exact merged-head batch and verified dedicated
 resource/secret/IAM teardown remain required. The human publication gate remains;
 this roadmap grants no additional spend, tag or publication authority.

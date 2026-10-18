@@ -22,7 +22,10 @@ import fnmatch
 import importlib.util
 import io
 import json
+import os
 import socket
+import stat
+import subprocess
 import sys
 import tempfile
 import types
@@ -34,7 +37,7 @@ from unittest.mock import Mock, patch
 import pgwire_qualification_live as live
 import pgwire_qualification_prepare as prepare
 import test_pgwire_qualification_live as support
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from pgwire_qualification_host import Host
 from pgwire_qualification_manifest import Rejected
 from pgwire_qualification_policy import (
@@ -244,6 +247,7 @@ class HostReservationTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.attempts = self.root.resolve() / "attempts"
         self.a = admission()
         self.sdk = AWS(self.a)
         self.sdk.ns_exists = self.sdk.wg_exists = self.sdk.sg_exists = False
@@ -286,6 +290,7 @@ class HostReservationTest(unittest.TestCase):
             },
             self.github,
             self.root / (str(self.index) + ".json"),
+            _attempt_directory=self.attempts,
             clock=lambda: self.tick,
             pause=lambda seconds: setattr(self, "tick", self.tick + seconds),
         )
@@ -354,6 +359,9 @@ class HostReservationTest(unittest.TestCase):
         original = self.sdk.put_parameter
         for mode in ("lost", "prepublication"):
             with self.subTest(mode=mode):
+                # These are independent fake operations, each retaining its
+                # own guard; no spent operation is removed to rerun a test.
+                self.attempts = self.root.resolve() / ("attempts-" + mode)
                 self.sdk.claims.clear()
                 self.sdk.events.clear()
 
@@ -393,7 +401,10 @@ class HostReservationTest(unittest.TestCase):
             ):
                 result = original(**kwargs)
                 self.assertFalse(self.run_host(loser))
-                self.assertEqual(loser.state["host_attempt"], "ATTEMPTED_UNKNOWN")
+                self.assertEqual(loser.state["host_attempt"], "NOT_ATTEMPTED")
+                self.assertEqual(
+                    loser.state["first_failure"]["reason"], "LOCAL_OPERATION_SPENT"
+                )
                 self.assertEqual(loser.state["external_teardown"], "not-started")
                 self.assert_no_provision()
                 return result
@@ -448,6 +459,167 @@ class HostReservationTest(unittest.TestCase):
             )
             self.assert_no_provision()
             self.assertNotIn("host-reservation", self.sdk.events)
+
+    def test_connection_failure_before_store_is_spent_across_receipt_cwd_and_process(
+        self,
+    ):
+        original = self.sdk.put_parameter
+
+        def put(**kwargs):
+            self.sdk.put_parameter = original
+            raise EndpointConnectionError(
+                endpoint_url="https://ssm.eu-north-1.amazonaws.com"
+            )
+
+        self.sdk.put_parameter = put
+        first = self.host()
+        self.assertFalse(self.run_host(first))
+        self.assertEqual(first.state["host_attempt"], "ATTEMPTED_UNKNOWN")
+        self.assertNotIn(host_attempt_name(NONCE), self.sdk.claims)
+        guard = self.attempts / (NONCE + ".json")
+        retained = guard.read_bytes()
+        first_receipt = first.path.read_bytes()
+        self.sdk.events.clear()
+        previous = Path.cwd()
+        try:
+            os.chdir(self.root)
+            second = self.host()
+            self.assertFalse(self.run_host(second))
+        finally:
+            os.chdir(previous)
+        self.assertEqual(
+            second.state["first_failure"],
+            {"stage": "HOST_GUARD", "reason": "LOCAL_OPERATION_SPENT"},
+        )
+        self.assert_no_provision()
+        self.assertNotIn("host-reservation", self.sdk.events)
+        self.assertEqual(guard.read_bytes(), retained)
+        self.assertEqual(first.path.read_bytes(), first_receipt)
+        code = """
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import test_pgwire_qualification_claim as test
+fixture=test.HostReservationTest();fixture.setUp()
+try:
+    fixture.attempts=Path(sys.argv[2])
+    host=fixture.host()
+    result=fixture.run_host(host)
+    print(json.dumps({'result':result,'failure':host.state['first_failure'],'events':fixture.sdk.events,'teardown':host.state['external_teardown']}))
+finally:fixture.doCleanups()
+"""
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                code,
+                str(Path(__file__).parent.resolve()),
+                str(self.attempts),
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        child = json.loads(process.stdout)
+        self.assertFalse(child["result"])
+        self.assertEqual(child["failure"]["reason"], "LOCAL_OPERATION_SPENT")
+        self.assertEqual(child["teardown"], "not-started")
+        self.assertFalse(
+            set(child["events"]) & {"host-reservation", "create-namespace", "admission"}
+        )
+        self.assertEqual(guard.read_bytes(), retained)
+
+    def test_partial_or_uncertain_local_journal_never_reauthorizes(self):
+        import pgwire_qualification_host as module
+
+        for mode in ("write", "file-fsync", "directory-fsync"):
+            self.attempts = self.root.resolve() / ("journal-" + mode)
+            self.sdk.events.clear()
+            original_dump, original_fsync = module.json.dump, module.os.fsync
+            failed = [False]
+
+            def dump(value, stream, **kwargs):
+                result = original_dump(value, stream, **kwargs)
+                if mode == "write" and isinstance(stream.name, int) and not failed[0]:
+                    failed[0] = True
+                    raise OSError("PRIVATE uncertain journal write")
+                return result
+
+            def fsync(fd):
+                status = os.fstat(fd)
+                target = (
+                    stat.S_ISDIR(status.st_mode)
+                    if mode == "directory-fsync"
+                    else stat.S_ISREG(status.st_mode)
+                    and stat.S_IMODE(status.st_mode) == 0o400
+                )
+                if mode != "write" and target and not failed[0]:
+                    failed[0] = True
+                    raise OSError("PRIVATE uncertain journal sync")
+                return original_fsync(fd)
+
+            with (
+                patch.object(module.json, "dump", side_effect=dump),
+                patch.object(module.os, "fsync", side_effect=fsync),
+            ):
+                first = self.host()
+                self.assertFalse(self.run_host(first))
+            self.assertTrue(failed[0])
+            self.assertEqual(first.state["host_guard"], "ATTEMPTED_UNKNOWN")
+            self.assertEqual(first.state["first_failure"]["stage"], "HOST_GUARD")
+            self.assertNotIn("PRIVATE", first.path.read_text())
+            self.assertTrue((self.attempts / (NONCE + ".json")).is_file())
+            second = self.host()
+            self.assertFalse(self.run_host(second))
+            self.assertEqual(
+                second.state["first_failure"]["reason"], "LOCAL_OPERATION_SPENT"
+            )
+            self.assert_no_provision()
+            self.assertNotIn("host-reservation", self.sdk.events)
+            self.assertFalse(
+                any(
+                    call.args[0].endswith("/cancel")
+                    for call in self.github.get.call_args_list
+                )
+            )
+
+    def test_guard_identity_and_late_fsync_never_reach_ssm(self):
+        import pgwire_qualification_host as module
+
+        production = self.host()
+        production._attempt_directory = None
+        with (
+            patch.object(module.os, "getuid", return_value=module.HOST_UID + 1),
+            self.assertRaisesRegex(Rejected, "unsafe host operation directory"),
+        ):
+            production.acquire_operation({"nonce": NONCE})
+        target = self.root / "target"
+        target.mkdir(mode=0o700)
+        self.attempts = self.root / "symlink"
+        self.attempts.symlink_to(target, target_is_directory=True)
+        self.assertFalse(self.run_host(self.host()))
+        self.assert_no_provision()
+        self.assertNotIn("host-reservation", self.sdk.events)
+        self.attempts = self.root.resolve() / "late-guard"
+        original = module.os.fsync
+        delayed = [False]
+
+        def fsync(fd):
+            result = original(fd)
+            if stat.S_ISDIR(os.fstat(fd).st_mode) and not delayed[0]:
+                delayed[0] = True
+                self.tick += 3601
+            return result
+
+        with patch.object(module.os, "fsync", side_effect=fsync):
+            host = self.host()
+            self.assertFalse(self.run_host(host))
+        self.assertTrue(delayed[0])
+        self.assertEqual(host.state["first_failure"]["reason"], "DEADLINE")
+        self.assertNotIn("host-reservation", self.sdk.events)
+        self.assert_no_provision()
 
     def test_late_metadata_and_reservation_reply_never_provision(self):
         original_read, original_write = (

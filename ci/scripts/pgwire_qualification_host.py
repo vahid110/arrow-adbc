@@ -28,6 +28,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import sys
 import time
 import zipfile
@@ -65,12 +66,18 @@ from pgwire_qualification_policy import (
 from pgwire_qualification_prepare import GitHub, parse_json
 
 OWNER = f"arn:aws:iam::{ACCOUNT}:role/adbc-provisioner"
+HOST_UID = 502  # Fixed qualification host account: vahidsbr.
+OPERATION_DIRECTORY = Path(
+    "/Users/vahidsbr/.local/state/adbc-redshift/workflow/"
+    "live-qualification-20261016/host-operation-attempts"
+)
 INITIAL_POLICY = "adbc-qualification-initial"
 RUN_POLICY = "adbc-qualification-20261016-runtime"
 ROLE_NAME = "adbc-isolated-qualification-ci"
 FAILURE_STAGES = {
     "preflight-verification": "PREFLIGHT",
     "operation-inventory": "OPERATION_INVENTORY",
+    "host-guard-attempted": "HOST_GUARD",
     "host-reservation-attempted": "HOST_RESERVATION",
     "initial-role-verification": "INITIAL_ROLE",
     "initial-role-verified": "INITIAL_ROLE",
@@ -89,6 +96,8 @@ FAILURE_STAGES = {
 }
 FAILURE_REASONS = {
     "operation inventory is existing or incomplete": "OPERATION_SPENT_OR_UNKNOWN",
+    "operation already locally spent": "LOCAL_OPERATION_SPENT",
+    "unsafe host operation directory": "LOCAL_GUARD_IDENTITY",
     "operation nonce mismatch": "OPERATION_NONCE",
     "runtime template is not the versioned contract": "POLICY_TEMPLATE",
     "workgroup not ready": "WORKGROUP_NOT_READY",
@@ -122,11 +131,76 @@ def failure_reason(error):
 
 
 class Host:
-    def __init__(self, aws, github, receipt, *, clock=time.time, pause=time.sleep):
+    def __init__(
+        self,
+        aws,
+        github,
+        receipt,
+        *,
+        clock=time.time,
+        pause=time.sleep,
+        _attempt_directory=None,
+    ):
         self.aws, self.github, self.path = aws, github, Path(receipt)
         self.clock, self.pause = clock, pause
         self.state = None
         self.deadline = 0
+        # Constructor-only offline seam; production CLI/environment cannot move
+        # the guard or select another host identity.
+        self._attempt_directory = _attempt_directory
+
+    def acquire_operation(self, record):
+        directory = (
+            OPERATION_DIRECTORY
+            if self._attempt_directory is None
+            else Path(self._attempt_directory)
+        )
+        uid = HOST_UID if self._attempt_directory is None else os.getuid()
+        require(
+            directory.is_absolute() and os.getuid() == uid,
+            "unsafe host operation directory",
+        )
+        directory.mkdir(mode=0o700, exist_ok=True)
+        require(
+            directory.resolve(strict=True) == directory,
+            "unsafe host operation directory",
+        )
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor = os.open(directory, flags)
+        try:
+            observed = os.fstat(descriptor)
+            require(
+                stat.S_ISDIR(observed.st_mode)
+                and observed.st_uid == uid
+                and stat.S_IMODE(observed.st_mode) == 0o700,
+                "unsafe host operation directory",
+            )
+            self.check_deadline()
+            try:
+                attempt = os.open(
+                    record["nonce"] + ".json",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o400,
+                    dir_fd=descriptor,
+                )
+            except FileExistsError:
+                raise Rejected("operation already locally spent") from None
+            # Never remove or replace this entry, even after partial write or
+            # fsync failure. Existing bytes/remote absence never authorize reuse.
+            with os.fdopen(attempt, "w") as stream:
+                json.dump(record, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(descriptor)
+            # Also commit a newly created directory's entry in its parent.
+            parent = os.open(directory.parent, flags)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            os.close(descriptor)
+        self.check_deadline()
 
     def save(self):
         # Replace atomically; preserve attempted calls even when replies are lost.
@@ -501,6 +575,13 @@ class Host:
                 "policy_sha256": policy_sha256,
                 "deadline": self.state["deadline"],
             }
+            self.state["host_guard"] = "ATTEMPTED_UNKNOWN"
+            self.phase("host-guard-attempted")
+            self.check_deadline()
+            self.acquire_operation(reservation)
+            self.state["host_guard"] = "ACQUIRED"
+            self.save()
+            self.check_deadline()
             self.state["host_attempt"] = "ATTEMPTED_UNKNOWN"
             self.phase("host-reservation-attempted")
             self.check_deadline()

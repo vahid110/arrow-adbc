@@ -66,7 +66,11 @@ Current state only; history is in git and PR descriptions.
   verified; the original namespace-removal uncertainty remains evidence.
   Task008d adds the versioned exact-claim policy, explicit nonce scopes, immutable
   host reservation and static consumer first-failure receipts with policy-enforcing
-  offline tests. Independent review/CI remain required. The old singleton admission
+  offline tests. Its first review on `370b1310d` found missing local durability when
+  SSM never stored a reservation and deadline crossings during receipt fsync; that
+  failed head/reproductions remain evidence. The successor adds a canonical host
+  attempt journal and fresh post-persistence effect clocks; independent review/CI
+  remain required. The old singleton admission
   stays immutable version 1; all prior attempt authority is spent. No external
   resources or CI role remain and this repair grants no live authority.
   AO stays paused; Task009 publication stays paused.
