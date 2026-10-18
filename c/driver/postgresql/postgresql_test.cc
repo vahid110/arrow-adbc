@@ -1359,6 +1359,7 @@ TEST_F(PostgresStatementTest, IsolationLevels) {
 // Explicit semantic metadata exercises the production contract on PostgreSQL;
 // this does not change or bypass the connection's backend identity.
 TEST_F(PostgresStatementTest, DecimalSemanticParametersUseNumericOidThroughBothBindApis) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   for (ArrowType storage :
        {NANOARROW_TYPE_DECIMAL128, NANOARROW_TYPE_DECIMAL256, NANOARROW_TYPE_STRING}) {
     for (bool stream_bind : {false, true}) {
@@ -1424,6 +1425,7 @@ TEST_F(PostgresStatementTest, DecimalSemanticParametersUseNumericOidThroughBothB
 
 TEST_F(PostgresStatementTest,
        DecimalParametersRespectExplicitSqlAndUnmarkedPostgresText) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   for (bool marked : {false, true}) {
     nanoarrow::UniqueSchema schema;
     ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_STRING, 0,
@@ -1459,6 +1461,7 @@ TEST_F(PostgresStatementTest,
 
 TEST_F(PostgresStatementTest,
        DecimalSchemaRejectionPreservesBindOwnershipAndReplaceSentinel) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
   adbcpq::PqResultHelper setup(
@@ -1527,6 +1530,7 @@ TEST_F(PostgresStatementTest,
 }
 
 TEST_F(PostgresStatementTest, DecimalCreateUsesStoredDeclarationAndIndependentSqlValues) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
   struct Case {
@@ -1589,6 +1593,7 @@ TEST_F(PostgresStatementTest, DecimalCreateUsesStoredDeclarationAndIndependentSq
 
 TEST_F(PostgresStatementTest,
        DecimalAppendRescalesActualTargetsAndRollsBackLateCopyFailure) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
   adbcpq::PqResultHelper setup(owner->conn(),
@@ -1650,6 +1655,7 @@ TEST_F(PostgresStatementTest,
 }
 
 TEST_F(PostgresStatementTest, DecimalEmptyAndNullBatchesKeepExplicitStoredSchema) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
   for (bool empty : {true, false}) {
@@ -1691,6 +1697,7 @@ TEST_F(PostgresStatementTest, DecimalEmptyAndNullBatchesKeepExplicitStoredSchema
 }
 
 TEST_F(PostgresStatementTest, DecimalAppendAlignsReorderedSubsetFieldsByCatalogName) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
   adbcpq::PqResultHelper setup(owner->conn(),
