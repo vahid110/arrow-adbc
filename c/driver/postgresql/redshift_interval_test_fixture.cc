@@ -26,6 +26,7 @@
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
 #include "redshift_temporal_test_fixture.h"
+#include "redshift_timetz_test_fixture.h"
 #include "type_modifier_test_fixture.h"
 
 #if defined(_WIN32)
@@ -80,12 +81,18 @@ int ExportParameterWire(ArrowArray* input, ArrowSchema* input_schema,
   NANOARROW_RETURN_NOT_OK(
       ArrowArrayInitFromSchema(output.get(), output_schema.get(), &error));
   NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(output.get()));
+  adbcpq::RedshiftTimetzSchema timetz;
+  NANOARROW_RETURN_NOT_OK(adbcpq::RedshiftTimetzSchema::Parse(input_schema->children[0],
+                                                              true, &timetz, &error));
   for (int64_t row = 0; row < input->length; row++) {
-    if (ArrowArrayViewIsNull(view->children[0], row)) {
+    if (timetz.enabled && (view->offset < 0 || view->offset > INT64_MAX - row))
+      return EINVAL;
+    const int64_t field_row = timetz.enabled ? view->offset + row : row;
+    if (ArrowArrayViewIsNull(view->children[0], field_row)) {
       NANOARROW_RETURN_NOT_OK(ArrowArrayAppendNull(output->children[0], 1));
     } else {
       nanoarrow::UniqueBuffer bytes;
-      NANOARROW_RETURN_NOT_OK(writer->Write(bytes.get(), row, &error));
+      NANOARROW_RETURN_NOT_OK(writer->Write(bytes.get(), field_row, &error));
       ArrowBufferView value{};
       value.data.data = bytes->data;
       value.size_bytes = bytes->size_bytes;
@@ -305,4 +312,31 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftIntervalWriteFixture(
   }
   return ExportParameterWire(input, input_schema, *resolver,
                              qualifier >= 0 ? &target : nullptr, array, schema);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftTimetzFixture(int batch,
+                                                                 ArrowArray* array,
+                                                                 ArrowSchema* schema) {
+  ArrowError error{};
+  return adbcpq::testing::TimetzFixture(batch, array, schema, &error);
+}
+// Internal labeled target selector: -2 source-only, -1 missing target modifier,
+// 0..6 known reference target,999 unsupported target. Not an ADBC driver option.
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftTimetzWriteFixture(
+    ArrowArray* input, ArrowSchema* input_schema, int target_raw, ArrowArray* array,
+    ArrowSchema* schema) {
+  if (target_raw < -2 || (target_raw > 6 && target_raw != 999)) return EINVAL;
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(adbcpq::testing::TimetzResolver(
+      adbc::driver::pgwire::BackendProfile::Redshift(), &resolver));
+  adbcpq::PostgresType target;
+  if (target_raw != -2) {
+    NANOARROW_RETURN_NOT_OK(
+        resolver->Find(adbcpq::testing::kTimetzOid, &target, nullptr));
+    target = target.WithFieldDescriptor(
+        target_raw == -1 ? std::nullopt : std::optional<int32_t>{target_raw},
+        adbc::driver::pgwire::BackendProfile::Redshift());
+  }
+  return ExportParameterWire(input, input_schema, *resolver,
+                             target_raw != -2 ? &target : nullptr, array, schema);
 }

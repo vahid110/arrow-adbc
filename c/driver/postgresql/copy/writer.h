@@ -958,6 +958,33 @@ class PostgresCopyDurationFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+class RedshiftTimetzFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftTimetzFieldWriter(
+      RedshiftTimetzSchema source, std::optional<int32_t> target,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : source_(source), target_(target), allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t civil;
+    int32_t east;
+    NANOARROW_RETURN_NOT_OK(source_.Value(array_view_, index, &civil, &east, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::CheckValue(civil, east, target_, error));
+    const auto west = static_cast<int32_t>(-static_cast<int64_t>(east));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, 16, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, 12);
+    WriteUnsafe<int64_t>(buffer, civil);
+    WriteUnsafe<int32_t>(buffer, west);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTimetzSchema source_;
+  std::optional<int32_t> target_;
+  ArrowBufferAllocator allocation_;
+};
+
 class RedshiftTemporalFieldWriter : public PostgresCopyFieldWriter {
  public:
   RedshiftTemporalFieldWriter(RedshiftTemporalSchema source,
@@ -1220,9 +1247,37 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
   NANOARROW_RETURN_NOT_OK(
-      PostgresType::ValidateTemporalWriteSchema(type_resolver, schema, error));
+      PostgresType::ValidateTemporalWriteSchema(type_resolver, schema, error, false));
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateIntervalWriteSchema(type_resolver, schema, error));
+  RedshiftTimetzSchema timetz;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftTimetzSchema::Parse(schema, type_resolver.is_redshift(), &timetz, error));
+  if (timetz.enabled || (type_resolver.is_redshift() && target_type &&
+                         target_type->type_id() == PostgresTypeId::kTimetz)) {
+    std::optional<int32_t> target_precision;
+    if (target_type) {
+      if (target_type->type_id() != PostgresTypeId::kTimetz || !target_type->oid() ||
+          target_type->oid() != type_resolver.GetOID(PostgresTypeId::kTimetz))
+        return RedshiftTimetzSchema::Invalid(error, "cross-family/OID actual target");
+      target_precision =
+          RedshiftTimetzSchema::ReferencePrecision(target_type->type_modifier());
+      if (!target_precision)
+        return RedshiftTimetzSchema::Invalid(error, "unknown actual target precision");
+    }
+    if (schema_view.type == NANOARROW_TYPE_NA && target_type) {
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftIntervalSchema::ValidateGenuineNullSource(schema, error));
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!timetz.enabled)
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "actual target needs TIMETZ source identity");
+    *out = PostgresCopyFieldWriter::Create<RedshiftTimetzFieldWriter>(array_view, timetz,
+                                                                      target_precision);
+    return NANOARROW_OK;
+  }
   RedshiftIntervalSchema interval;
   NANOARROW_RETURN_NOT_OK(RedshiftIntervalSchema::Parse(
       schema, type_resolver.is_redshift(), &interval, error));

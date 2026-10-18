@@ -155,8 +155,10 @@ struct BackendProfile {
       out.sql_type = "BOOLEAN";
     } else if (typname == "date") {
       out.sql_type = "DATE";
-    } else if (typname == "time" || typname == "timestamp" || typname == "timestamptz") {
-      out.sql_type = typname == "time"        ? "TIME"
+    } else if (typname == "time" || typname == "timetz" || typname == "timestamp" ||
+               typname == "timestamptz") {
+      out.sql_type = typname == "timetz"      ? "TIMETZ"
+                     : typname == "time"      ? "TIME"
                      : typname == "timestamp" ? "TIMESTAMP"
                                               : "TIMESTAMPTZ";
       // Pinned AWS JDBC TypeInfoCache773fa16 getScale reference; native modifier

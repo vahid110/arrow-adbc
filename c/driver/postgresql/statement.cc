@@ -805,6 +805,13 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                       &na_error, error);
       requires_existing |=
           temporal.enabled() && temporal.precision && *temporal.precision < 6;
+      RedshiftTimetzSchema timetz;
+      CHECK_NA_DETAIL(
+          INVALID_ARGUMENT,
+          RedshiftTimetzSchema::Parse(source_schema.children[i],
+                                      type_resolver_->is_redshift(), &timetz, &na_error),
+          &na_error, error);
+      requires_existing |= timetz.enabled && timetz.precision && *timetz.precision < 6;
       RedshiftIntervalSchema interval;
       CHECK_NA_DETAIL(INVALID_ARGUMENT,
                       RedshiftIntervalSchema::Parse(source_schema.children[i],
@@ -938,8 +945,14 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                                                   type_resolver_->is_redshift(),
                                                   &interval, &na_error),
                     &na_error, error);
+    RedshiftTimetzSchema timetz;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftTimetzSchema::Parse(source_schema.children[i],
+                                    type_resolver_->is_redshift(), &timetz, &na_error),
+        &na_error, error);
     has_semantic_schema |= decimal.enabled || scalar.enabled() || bytes.enabled() ||
-                           temporal.enabled() || interval.enabled();
+                           temporal.enabled() || interval.enabled() || timetz.enabled;
     std::string declaration = pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend &&
         !append_existing_semantic) {
@@ -965,6 +978,10 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       CHECK_NA_DETAIL(INVALID_ARGUMENT,
                       interval.constraint.Declaration(&declaration, &na_error), &na_error,
                       error);
+    if (timetz.enabled && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, timetz.Declaration(&declaration, &na_error),
+                      &na_error, error);
     create += " " + declaration;
   }
 

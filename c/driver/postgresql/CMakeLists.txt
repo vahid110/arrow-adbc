@@ -203,6 +203,7 @@ if(ADBC_BUILD_TESTS)
                 redshift_numeric_test.cc
                 redshift_decimal_test.cc
                 redshift_temporal_test.cc
+                redshift_timetz_test.cc
                 redshift_bytes_test.cc
                 redshift_scalar_test.cc
                 postgresql_test.cc
@@ -269,7 +270,9 @@ if(ADBC_BUILD_TESTS)
           PQexecParams
           PQprepare
           PQexecPrepared
-          PQdescribePrepared)
+          PQdescribePrepared
+          PQnparams
+          PQparamtype)
     target_compile_definitions(adbc-driver-redshift-interval-recording-test
                                PRIVATE ${PQ_SYMBOL}=IntervalRecording_${PQ_SYMBOL})
   endforeach()

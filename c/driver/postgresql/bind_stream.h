@@ -83,6 +83,7 @@ struct BindStream {
 
   // Expected types from PostgreSQL (after DESCRIBE); used to resolve NA params
   PostgresType expected_param_types;
+  std::vector<bool> timetz_fields;
   bool has_expected_types = false;
 
   struct ArrowError na_error;
@@ -189,6 +190,7 @@ struct BindStream {
     param_lengths.resize(bind_schema->n_children);
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
     bind_field_writers.resize(bind_schema->n_children);
+    timetz_fields.resize(bind_schema->n_children, false);
     bool needs_utc_timezone = false;
 
     for (size_t i = 0; i < bind_field_writers.size(); i++) {
@@ -198,7 +200,8 @@ struct BindStream {
       // still validate its known constraint before selecting the null writer.
       if (ingest_targets && type_resolver.is_redshift() &&
           bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
-          ingest_targets->child(i).interval_family() != RedshiftIntervalFamily::kNone) {
+          (ingest_targets->child(i).interval_family() != RedshiftIntervalFamily::kNone ||
+           ingest_targets->child(i).type_id() == PostgresTypeId::kTimetz)) {
         type = ingest_targets->child(i);
       } else if (has_expected_types && bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
                  i < static_cast<size_t>(expected_param_types.n_children())) {
@@ -248,9 +251,18 @@ struct BindStream {
                        RedshiftIntervalSchema::Parse(bind_schema->children[i],
                                                      type_resolver.is_redshift(),
                                                      &interval, &na_error));
+      RedshiftTimetzSchema timetz;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftTimetzSchema::Parse(bind_schema->children[i],
+                                      type_resolver.is_redshift(), &timetz, &na_error));
+      timetz_fields[i] = timetz.enabled;
       const PostgresType* writer_target = nullptr;
       if (ingest_targets &&
-          (((interval.enabled() || type_resolver.is_redshift()) &&
+          (((timetz.enabled || type_resolver.is_redshift()) &&
+            (type.type_id() == PostgresTypeId::kTimetz ||
+             ingest_targets->child(i).type_id() == PostgresTypeId::kTimetz)) ||
+           ((interval.enabled() || type_resolver.is_redshift()) &&
             (type.interval_family() != RedshiftIntervalFamily::kNone ||
              ingest_targets->child(i).interval_family() !=
                  RedshiftIntervalFamily::kNone)) ||
@@ -276,7 +288,8 @@ struct BindStream {
 
       param_types[i] =
           writer_target &&
-                  (writer_target->interval_family() != RedshiftIntervalFamily::kNone ||
+                  (writer_target->type_id() == PostgresTypeId::kTimetz ||
+                   writer_target->interval_family() != RedshiftIntervalFamily::kNone ||
                    writer_target->type_id() == PostgresTypeId::kNumeric ||
                    writer_target->scalar_kind() != RedshiftScalarKind::kNone ||
                    writer_target->bytes_kind() != RedshiftBytesKind::kNone ||
@@ -381,6 +394,20 @@ struct BindStream {
     return Status::Ok();
   }
 
+  Status ParameterRow(size_t column, int64_t row, int64_t* field_row) {
+    *field_row = row;
+    if (timetz_fields[column]) {
+      // Struct child accessors add only their own offsets. Carry the containing
+      // relation offset once here, then the TIMETZ writer carries its offset.
+      if (row < 0 || array_view->offset < 0 || array_view->offset > INT64_MAX - row)
+        return Status::InvalidArgument("TIMETZ relation offset overflow");
+      *field_row = array_view->offset + row;
+      if (*field_row >= array_view->children[column]->length)
+        return Status::InvalidArgument("TIMETZ relation/field coverage mismatch");
+    }
+    return Status::Ok();
+  }
+
   Status BindAndExecuteCurrentRow(PGconn* pg_conn,
                                   adbc::driver::pgwire::UniqueResult* result_out,
                                   int result_format) {
@@ -390,7 +417,9 @@ struct BindStream {
     std::vector<bool> is_null_param(array_view->n_children);
 
     for (int64_t col = 0; col < array_view->n_children; col++) {
-      is_null_param[col] = ArrowArrayViewIsNull(array_view->children[col], current_row);
+      int64_t field_row;
+      UNWRAP_STATUS(ParameterRow(col, current_row, &field_row));
+      is_null_param[col] = ArrowArrayViewIsNull(array_view->children[col], field_row);
 
       // Safety check: NA type arrays should only contain nulls
       if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null_param[col]) {
@@ -404,7 +433,7 @@ struct BindStream {
         // field in addition to the serialized value.
         UNWRAP_NANOARROW(
             na_error, Internal,
-            bind_field_writers[col]->Write(&param_buffer.value, current_row, &na_error));
+            bind_field_writers[col]->Write(&param_buffer.value, field_row, &na_error));
       } else {
         UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
       }
@@ -594,7 +623,9 @@ struct BindStream {
       if (current->release == nullptr) break;
 
       for (size_t col = 0; col < columns; col++) {
-        const bool is_null = ArrowArrayViewIsNull(array_view->children[col], current_row);
+        int64_t field_row;
+        UNWRAP_STATUS(ParameterRow(col, current_row, &field_row));
+        const bool is_null = ArrowArrayViewIsNull(array_view->children[col], field_row);
         if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null) {
           return Status::InvalidArgument("Parameter $", row * columns + col + 1,
                                          " has null type but contains a non-null value");
@@ -604,9 +635,9 @@ struct BindStream {
         if (is_null) {
           UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
         } else {
-          UNWRAP_NANOARROW(na_error, Internal,
-                           bind_field_writers[col]->Write(&param_buffer.value,
-                                                          current_row, &na_error));
+          UNWRAP_NANOARROW(
+              na_error, Internal,
+              bind_field_writers[col]->Write(&param_buffer.value, field_row, &na_error));
         }
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {

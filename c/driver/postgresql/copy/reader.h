@@ -685,6 +685,93 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
 
 // Closed standard PostgreSQL reference fields. These checks do not certify a
 // Redshift SQL finite/sentinel domain; native qualification remains separate.
+class RedshiftTimetzFieldReader : public PostgresCopyFieldReader {
+ public:
+  explicit RedshiftTimetzFieldReader(
+      std::optional<int32_t> precision,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : precision_(precision), allocation_(allocation) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    const bool null = size == -1;
+    int64_t civil = 0;
+    int32_t east = 0;
+    if (!null) {
+      if (size != 12 || data->size_bytes < 12 || !data->data.data)
+        return RedshiftTimetzSchema::Invalid(error,
+                                             "expected selected12-byte reference field");
+      auto peek = *data;
+      civil = ReadUnsafe<int64_t>(&peek);
+      const int64_t west = ReadUnsafe<int32_t>(&peek);
+      const int64_t converted = -west;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTimetzSchema::CheckValue(civil, converted, precision_, error));
+      east = static_cast<int32_t>(converted);
+    }
+    if (array->n_children != 2 || array->offset != 0 || array->length < 0 ||
+        array->length > INT64_MAX / 8 - 1 || array->null_count < 0 ||
+        array->null_count > array->length || array->children[0]->offset != 0 ||
+        array->children[1]->offset != 0 || array->children[0]->length != array->length ||
+        array->children[1]->length != array->length)
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "output struct children/length disagree");
+    auto* bitmap = ArrowArrayValidityBitmap(array);
+    if ((bitmap->size_bits != 0 && bitmap->size_bits != array->length) ||
+        bitmap->size_bits < 0 ||
+        bitmap->buffer.size_bytes !=
+            bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||
+        (bitmap->size_bits == 0 && array->null_count != 0))
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "output validity length/bytes disagree");
+    const int64_t old_bitmap_bytes = bitmap->buffer.size_bytes;
+    // Reserve every fallible allocation before logical mutation. Generic reserve
+    // deliberately skips an absent validity bitmap, hence the explicit reserve.
+    nanoarrow::UniqueBitmap fresh_bitmap;
+    const bool detached = bitmap->buffer.data == nullptr;
+    auto* reservation = detached ? fresh_bitmap.get() : bitmap;
+    const int64_t bitmap_bytes = (array->length + 1) / 8 + ((array->length + 1) % 8 != 0);
+    NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(
+        &reservation->buffer, bitmap_bytes - reservation->buffer.size_bytes, error,
+        allocation_));
+    for (int child = 0; child < 2; ++child) {
+      auto* buffer = ArrowArrayBuffer(array->children[child], 1);
+      const int64_t width = child == 0 ? 8 : 4;
+      if (buffer->size_bytes != array->length * width)
+        return RedshiftTimetzSchema::Invalid(error, "output child data length disagrees");
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTimetzSchema::Reserve(buffer, width, error, allocation_));
+    }
+    // An absent bitmap must stay absent if a later child allocation fails: a
+    // newly exposed uninitialized bitmap would change the prior valid rows.
+    if (detached) ArrowBitmapMove(fresh_bitmap.get(), bitmap);
+    // Bit appends read-modify-write tail bytes. Initialize only fresh bytes,
+    // never an existing byte containing the previously committed valid prefix.
+    if (bitmap_bytes > old_bitmap_bytes)
+      std::memset(bitmap->buffer.data + old_bitmap_bytes, 0,
+                  bitmap_bytes - old_bitmap_bytes);
+    if (bitmap->size_bits == 0 && array->length)
+      ArrowBitmapAppendUnsafe(bitmap, 1, array->length);
+    ArrowBufferAppendUnsafe(ArrowArrayBuffer(array->children[0], 1), &civil,
+                            sizeof(civil));
+    ArrowBufferAppendUnsafe(ArrowArrayBuffer(array->children[1], 1), &east, sizeof(east));
+    ++array->children[0]->length;
+    ++array->children[1]->length;
+    ArrowBitmapAppendUnsafe(bitmap, !null, 1);
+    ++array->length;
+    if (null)
+      ++array->null_count;
+    else {
+      data->data.as_uint8 += 12;
+      data->size_bytes -= 12;
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  std::optional<int32_t> precision_;
+  ArrowBufferAllocator allocation_;
+};
+
 class RedshiftTemporalFieldReader : public PostgresCopyFieldReader {
  public:
   RedshiftTemporalFieldReader(RedshiftTemporalKind kind, bool lossless,
@@ -1145,6 +1232,31 @@ static inline ArrowErrorCode MakeCopyFieldReader(
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, nullptr));
 
+  if (pg_type.is_redshift_timetz()) {
+    RedshiftTimetzSchema parsed;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Parse(schema, true, &parsed, error, true));
+    if (!parsed.enabled)
+      return RedshiftTimetzSchema::Invalid(error, "missing read identity");
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    for (const char* key :
+         {"ADBC:redshift:sql_type", "ADBC:redshift:fractional_precision",
+          "ADBC:redshift:type_modifier"}) {
+      std::optional<std::string_view> actual, value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &actual, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &value, error));
+      if (actual != value)
+        return RedshiftTimetzSchema::Invalid(error,
+                                             "read metadata contradicts field context");
+    }
+    *out = std::make_unique<RedshiftTimetzFieldReader>(
+        RedshiftTimetzSchema::ReferencePrecision(pg_type.type_modifier()));
+    return NANOARROW_OK;
+  }
   if (pg_type.interval_family() != RedshiftIntervalFamily::kNone) {
     auto constraint = pg_type.interval_constraint();
     if (constraint.family != pg_type.interval_family())

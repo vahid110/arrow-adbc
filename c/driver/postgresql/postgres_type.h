@@ -200,6 +200,9 @@ class PostgresType {
   adbc::driver::pgwire::TemporalRepresentation temporal_representation() const {
     return temporal_representation_;
   }
+  bool is_redshift_timetz() const {
+    return redshift_descriptor_ && type_id_ == PostgresTypeId::kTimetz;
+  }
   RedshiftTemporalKind temporal_kind() const {
     if (type_id_ == PostgresTypeId::kDate) return RedshiftTemporalKind::kDate;
     if (type_id_ == PostgresTypeId::kTime) return RedshiftTemporalKind::kTime;
@@ -313,7 +316,9 @@ class PostgresType {
         temporal_kind() != RedshiftTemporalKind::kDate &&
         temporal_representation_ ==
             adbc::driver::pgwire::TemporalRepresentation::kLossless;
-    if (lossless_temporal) {
+    if (is_redshift_timetz()) {
+      NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::SetSchema(schema));
+    } else if (lossless_temporal) {
       NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
       nanoarrow::UniqueBuffer metadata;
       NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
@@ -504,7 +509,8 @@ class PostgresType {
 
   static ArrowErrorCode ValidateTemporalWriteSchema(const PostgresTypeResolver& resolver,
                                                     const ArrowSchema* schema,
-                                                    ArrowError* error);
+                                                    ArrowError* error,
+                                                    bool relation_schema = true);
 
   static ArrowErrorCode ValidateBytesWriteSchema(const PostgresTypeResolver& resolver,
                                                  const ArrowSchema* schema,
@@ -978,21 +984,35 @@ inline ArrowErrorCode PostgresType::ValidateBytesWriteSchema(
 }
 
 inline ArrowErrorCode PostgresType::ValidateTemporalWriteSchema(
-    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
-  auto validate = [&](auto&& self, const ArrowSchema* node,
-                      bool dictionary) -> ArrowErrorCode {
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error,
+    bool relation_schema) {
+  auto validate = [&](auto&& self, const ArrowSchema* node, bool dictionary,
+                      bool nested) -> ArrowErrorCode {
     if (!node) return NANOARROW_OK;
+    RedshiftTimetzSchema timetz;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Parse(node, resolver.is_redshift(), &timetz, error));
+    if (timetz.enabled) {
+      if (dictionary || nested)
+        return RedshiftTimetzSchema::Invalid(error,
+                                             "nested/dictionary TIMETZ unsupported");
+      return NANOARROW_OK;
+    }
     RedshiftTemporalSchema temporal;
     NANOARROW_RETURN_NOT_OK(
         RedshiftTemporalSchema::Parse(node, resolver.is_redshift(), &temporal, error));
     if (dictionary && temporal.enabled())
       return RedshiftTemporalSchema::Invalid(error,
                                              "dictionary temporal writes unsupported");
+    ArrowSchemaView view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, node, error));
     for (int64_t i = 0; i < node->n_children; ++i)
-      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary));
-    return self(self, node->dictionary, true);
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary,
+                                   nested || !relation_schema || node != schema ||
+                                       view.type != NANOARROW_TYPE_STRUCT));
+    return self(self, node->dictionary, true, true);
   };
-  return validate(validate, schema, false);
+  return validate(validate, schema, false, false);
 }
 
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
@@ -1005,6 +1025,11 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
   NANOARROW_RETURN_NOT_OK(ValidateBytesWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+  RedshiftTimetzSchema timetz;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftTimetzSchema::Parse(schema, resolver.is_redshift(), &timetz, error));
+  if (timetz.enabled)
+    return resolver.Find(resolver.GetOID(PostgresTypeId::kTimetz), out, error);
   RedshiftIntervalSchema interval;
   NANOARROW_RETURN_NOT_OK(
       RedshiftIntervalSchema::Parse(schema, resolver.is_redshift(), &interval, error));

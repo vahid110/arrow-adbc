@@ -24,6 +24,7 @@
 #include <string_view>
 
 #include "redshift_decimal.h"
+#include "redshift_timetz.h"
 
 namespace adbcpq {
 enum class RedshiftTemporalKind { kNone, kDate, kTime, kTimestamp, kTimestamptz };
@@ -95,6 +96,10 @@ struct RedshiftTemporalSchema {
   static ArrowErrorCode Parse(const ArrowSchema* schema, bool redshift,
                               RedshiftTemporalSchema* out, ArrowError* error) {
     *out = {};
+    RedshiftTimetzSchema timetz;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Parse(schema, redshift, &timetz, error));
+    if (timetz.enabled) return NANOARROW_OK;
     ArrowSchemaView view{};
     NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, schema, error));
     std::optional<std::string_view> family, name, metadata, precision, raw;
