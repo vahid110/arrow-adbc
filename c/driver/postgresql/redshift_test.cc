@@ -37,6 +37,7 @@
 
 #include "bind_stream.h"
 #include "driver/framework/objects.h"
+#include "driver/framework/utility.h"
 #include "driver/pgwire/libpq_raii.h"
 #include "redshift_decimal_test_fixture.h"
 #include "type_discovery.h"
