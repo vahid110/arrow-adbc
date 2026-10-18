@@ -594,6 +594,11 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
+  if (type_resolver_ && PostgresType::ValidateScalarWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
 
   if (bind_.release) bind_.release(&bind_);
   // Make a one-value stream
@@ -623,6 +628,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
   if (type_resolver_ &&
       PostgresType::ValidateDecimalWriteSchema(*type_resolver_, schema.get(),
                                                &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateScalarWriteSchema(*type_resolver_, schema.get(),
+                                              &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
@@ -769,7 +780,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
   create += " (";
   std::vector<std::string> source_field_names;
   source_field_names.reserve(source_schema.n_children);
-  bool has_decimal_schema = false;
+  bool has_semantic_schema = false;
 
   for (int64_t i = 0; i < source_schema.n_children; i++) {
     if (i > 0) {
@@ -801,12 +812,19 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
         RedshiftDecimalSchema::Parse(source_schema.children[i],
                                      type_resolver_->is_redshift(), &decimal, &na_error),
         &na_error, error);
-    has_decimal_schema |= decimal.enabled;
+    RedshiftScalarSchema scalar;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftScalarSchema::Parse(source_schema.children[i],
+                                    type_resolver_->is_redshift(), &scalar, &na_error),
+        &na_error, error);
+    has_semantic_schema |= decimal.enabled || scalar.enabled();
     std::string declaration = pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
                       &na_error, error);
     }
+    if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
     create += " " + declaration;
   }
 
@@ -861,7 +879,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
   }
   RAISE_STATUS(error, ddl_transaction.Commit());
   if (ingest_.mode == IngestMode::kCreateAppend || type_resolver_->is_redshift() ||
-      has_decimal_schema) {
+      has_semantic_schema) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {

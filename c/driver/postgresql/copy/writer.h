@@ -290,6 +290,68 @@ class PostgresCopyDoubleFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+// Validated scalar contract: calculate before reserving/emitting bytes, and
+// preserve source semantics only within the same integer/float/boolean family.
+class RedshiftScalarFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftScalarFieldWriter(RedshiftScalarKind source, RedshiftScalarKind target)
+      : source_(source), target_(target) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    if (RedshiftScalarSchema::Integral(target_)) {
+      int64_t value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftScalarInteger(array_view_, index, source_, &value, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftScalarInteger(array_view_, index, target_, &value, error));
+      const int32_t width = target_ == RedshiftScalarKind::kSmallint  ? 2
+                            : target_ == RedshiftScalarKind::kInteger ? 4
+                                                                      : 8;
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, width + 4));
+      WriteUnsafe<int32_t>(buffer, width);
+      if (width == 2)
+        WriteUnsafe<int16_t>(buffer, static_cast<int16_t>(value));
+      else if (width == 4)
+        WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(value));
+      else
+        WriteUnsafe<int64_t>(buffer, value);
+    } else if (target_ == RedshiftScalarKind::kBoolean) {
+      const int64_t value = ArrowArrayViewGetIntUnsafe(array_view_, index);
+      if (value != 0 && value != 1)
+        return RedshiftScalarSchema::Invalid(error, "invalid boolean value");
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 5));
+      WriteUnsafe<int32_t>(buffer, 1);
+      WriteUnsafe<int8_t>(buffer, static_cast<int8_t>(value));
+    } else if (target_ == RedshiftScalarKind::kReal) {
+      float value;
+      NANOARROW_RETURN_NOT_OK(RedshiftScalarFloat32(
+          ArrowArrayViewGetDoubleUnsafe(array_view_, index), &value, error));
+      uint32_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 8));
+      WriteUnsafe<int32_t>(buffer, 4);
+      WriteUnsafe<uint32_t>(buffer, bits);
+    } else if (target_ == RedshiftScalarKind::kDouble) {
+      const double value = ArrowArrayViewGetDoubleUnsafe(array_view_, index);
+      if (source_ == RedshiftScalarKind::kReal) {
+        float source;
+        NANOARROW_RETURN_NOT_OK(RedshiftScalarFloat32(value, &source, error));
+      }
+      uint64_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 12));
+      WriteUnsafe<int32_t>(buffer, 8);
+      WriteUnsafe<uint64_t>(buffer, bits);
+    } else {
+      return RedshiftScalarSchema::Invalid(error, "unsupported scalar target");
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftScalarKind source_;
+  RedshiftScalarKind target_;
+};
+
 class PostgresCopyIntervalFieldWriter : public PostgresCopyFieldWriter {
  public:
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
@@ -1078,6 +1140,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     ArrowError* error) {
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateDecimalWriteSchema(type_resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateScalarWriteSchema(type_resolver, schema, error));
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
@@ -1113,6 +1177,29 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     }
     *out = PostgresCopyFieldWriter::Create<RedshiftDecimalFieldWriter>(
         array_view, source_decimal, target_decimal, schema_view.type);
+    return NANOARROW_OK;
+  }
+
+  RedshiftScalarSchema source_scalar;
+  NANOARROW_RETURN_NOT_OK(RedshiftScalarSchema::Parse(schema, type_resolver.is_redshift(),
+                                                      &source_scalar, error));
+  const auto scalar_target =
+      target_type ? target_type->scalar_kind() : RedshiftScalarKind::kNone;
+  if (source_scalar.enabled() ||
+      (type_resolver.is_redshift() && scalar_target != RedshiftScalarKind::kNone)) {
+    if (target_type && scalar_target == RedshiftScalarKind::kNone)
+      return RedshiftScalarSchema::Invalid(error,
+                                           "scalar source requires compatible target");
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    const auto destination = target_type ? scalar_target : source_scalar.kind;
+    if (!source_scalar.enabled() ||
+        !RedshiftScalarSchema::Compatible(source_scalar.kind, destination))
+      return RedshiftScalarSchema::Invalid(error, "unsupported scalar target conversion");
+    *out = PostgresCopyFieldWriter::Create<RedshiftScalarFieldWriter>(
+        array_view, source_scalar.kind, destination);
     return NANOARROW_OK;
   }
 

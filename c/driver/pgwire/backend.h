@@ -138,7 +138,19 @@ struct BackendProfile {
                                             std::optional<int32_t> raw) const {
     TypeModifierMetadata out;
     if (kind != BackendKind::kRedshift) return out;
-    if (typname == "numeric" || typname == "decimal") {
+    if (typname == "int2") {
+      out.sql_type = "SMALLINT";
+    } else if (typname == "int4") {
+      out.sql_type = "INTEGER";
+    } else if (typname == "int8") {
+      out.sql_type = "BIGINT";
+    } else if (typname == "float4") {
+      out.sql_type = "REAL";
+    } else if (typname == "float8") {
+      out.sql_type = "DOUBLE PRECISION";
+    } else if (typname == "bool") {
+      out.sql_type = "BOOLEAN";
+    } else if (typname == "numeric" || typname == "decimal") {
       out.sql_type = "DECIMAL";
       if (!raw || *raw < 4) return out;
       const uint32_t encoded = static_cast<uint32_t>(*raw - 4);

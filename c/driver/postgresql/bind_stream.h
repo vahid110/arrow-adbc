@@ -152,6 +152,10 @@ struct BindStream {
                                                  &na_error) != NANOARROW_OK) {
       return Status::InvalidArgument(na_error.message);
     }
+    if (PostgresType::ValidateScalarWriteSchema(type_resolver, &bind_schema.value,
+                                                &na_error) != NANOARROW_OK) {
+      return Status::InvalidArgument(na_error.message);
+    }
     if (ingest_targets && ingest_targets->n_children() != bind_schema->n_children) {
       return Status::InvalidArgument("Ingest target/source column count mismatch");
     }
@@ -191,12 +195,20 @@ struct BindStream {
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
 
-      // Only decimal conversion gains target semantics in this bounded slice.
-      // Other prepared parameters keep their existing source-derived wire type.
+      // Exact semantic writers select destination OID and wire layout together.
+      // Other parameters retain their existing source-derived wire type.
+      RedshiftScalarSchema scalar;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftScalarSchema::Parse(bind_schema->children[i],
+                                      type_resolver.is_redshift(), &scalar, &na_error));
       const PostgresType* writer_target = nullptr;
       if (ingest_targets &&
           (type.type_id() == PostgresTypeId::kNumeric ||
-           ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric)) {
+           ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric ||
+           ((scalar.enabled() || type_resolver.is_redshift()) &&
+            (type.scalar_kind() != RedshiftScalarKind::kNone ||
+             ingest_targets->child(i).scalar_kind() != RedshiftScalarKind::kNone)))) {
         writer_target = &ingest_targets->child(i);
       }
       std::unique_ptr<PostgresCopyFieldWriter> writer;
@@ -207,7 +219,8 @@ struct BindStream {
                               /*disable_decimal_fast_path=*/false, &na_error));
 
       param_types[i] =
-          writer_target && writer_target->type_id() == PostgresTypeId::kNumeric
+          writer_target && (writer_target->type_id() == PostgresTypeId::kNumeric ||
+                            writer_target->scalar_kind() != RedshiftScalarKind::kNone)
               ? writer_target->oid()
               : type.oid();
       param_formats[i] = kPgBinaryFormat;

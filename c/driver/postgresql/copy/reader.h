@@ -186,6 +186,7 @@ inline ArrowErrorCode ReadCopyField(PostgresCopyFieldReader* reader,
 // Reader for a Postgres boolean (one byte -> bitmap)
 class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyBooleanFieldReader(bool strict = false) : strict_(strict) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
     if (field_size_bytes == -1) {
@@ -198,6 +199,11 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (strict_ && (data->size_bytes < 1 || !data->data.data ||
+                    (data->data.as_uint8[0] != 0 && data->data.as_uint8[0] != 1))) {
+      ArrowErrorSet(error, "[Redshift] Invalid boolean wire value");
+      return EINVAL;
+    }
     int64_t bytes_required = _ArrowBytesForBits(array->length + 1);
     if (bytes_required > data_->size_bytes) {
       NANOARROW_RETURN_NOT_OK(
@@ -212,6 +218,9 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
 
     return AppendValid(array);
   }
+
+ private:
+  bool strict_;
 };
 
 // Reader for Pg->Arrow conversions whose representations are identical minus
@@ -219,6 +228,7 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
 template <typename T, T kOffset = 0>
 class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyNetworkEndianFieldReader(bool strict = false) : strict_(strict) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
     if (field_size_bytes == -1) {
@@ -232,6 +242,11 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (strict_ &&
+        (data->size_bytes < static_cast<int64_t>(sizeof(T)) || !data->data.data)) {
+      ArrowErrorSet(error, "[Redshift] Truncated scalar wire value");
+      return EINVAL;
+    }
     T value = ReadUnsafe<T>(data);
     if constexpr (kOffset != 0) {
       T adjusted;
@@ -251,6 +266,9 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
     NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &value, sizeof(T)));
     return AppendValid(array);
   }
+
+ private:
+  bool strict_;
 };
 
 // Redshift YEAR TO MONTH's reference receive format contains only signed months.
@@ -1040,7 +1058,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_BOOL:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kBool:
-          *out = std::make_unique<PostgresCopyBooleanFieldReader>();
+          *out = std::make_unique<PostgresCopyBooleanFieldReader>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1049,7 +1068,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_INT16:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kInt2:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int16_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int16_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1060,7 +1080,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         case PostgresTypeId::kInt4:
         case PostgresTypeId::kOid:
         case PostgresTypeId::kRegproc:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int32_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int32_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1070,7 +1091,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
       switch (pg_type.type_id()) {
         case PostgresTypeId::kInt8:
         case PostgresTypeId::kCash:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1079,7 +1101,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_FLOAT:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kFloat4:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint32_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint32_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1088,7 +1111,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_DOUBLE:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kFloat8:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint64_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint64_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);

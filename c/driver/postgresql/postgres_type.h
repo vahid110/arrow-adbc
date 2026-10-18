@@ -29,6 +29,7 @@
 
 #include "driver/pgwire/backend.h"
 #include "redshift_decimal.h"
+#include "redshift_scalar.h"
 
 namespace adbcpq {
 
@@ -186,6 +187,26 @@ class PostgresType {
   }
 
   std::optional<int32_t> type_modifier() const { return type_modifier_; }
+
+  bool is_redshift_descriptor() const { return redshift_descriptor_; }
+  RedshiftScalarKind scalar_kind() const {
+    switch (type_id_) {
+      case PostgresTypeId::kInt2:
+        return RedshiftScalarKind::kSmallint;
+      case PostgresTypeId::kInt4:
+        return RedshiftScalarKind::kInteger;
+      case PostgresTypeId::kInt8:
+        return RedshiftScalarKind::kBigint;
+      case PostgresTypeId::kFloat4:
+        return RedshiftScalarKind::kReal;
+      case PostgresTypeId::kFloat8:
+        return RedshiftScalarKind::kDouble;
+      case PostgresTypeId::kBool:
+        return RedshiftScalarKind::kBoolean;
+      default:
+        return RedshiftScalarKind::kNone;
+    }
+  }
 
   bool is_redshift_numeric() const {
     return redshift_descriptor_ && type_id_ == PostgresTypeId::kNumeric;
@@ -415,6 +436,10 @@ class PostgresType {
   static ArrowErrorCode ValidateDecimalWriteSchema(const PostgresTypeResolver& resolver,
                                                    const ArrowSchema* schema,
                                                    ArrowError* error);
+
+  static ArrowErrorCode ValidateScalarWriteSchema(const PostgresTypeResolver& resolver,
+                                                  const ArrowSchema* schema,
+                                                  ArrowError* error);
 
   static ArrowErrorCode ValidateIntervalWriteSchema(const PostgresTypeResolver& resolver,
                                                     const ArrowSchema* schema,
@@ -788,11 +813,30 @@ inline ArrowErrorCode PostgresType::ValidateDecimalWriteSchema(
   return validate(validate, schema, false);
 }
 
+inline ArrowErrorCode PostgresType::ValidateScalarWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  auto validate = [&](auto&& self, const ArrowSchema* node,
+                      bool dictionary_value) -> ArrowErrorCode {
+    if (!node) return NANOARROW_OK;
+    RedshiftScalarSchema scalar;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftScalarSchema::Parse(node, resolver.is_redshift(), &scalar, error));
+    if (dictionary_value && scalar.enabled())
+      return RedshiftScalarSchema::Invalid(error, "dictionary scalar writes unsupported");
+    for (int64_t i = 0; i < node->n_children; i++) {
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary_value));
+    }
+    return self(self, node->dictionary, true);
+  };
+  return validate(validate, schema, false);
+}
+
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateDecimalWriteSchema(resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(ValidateScalarWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
   RedshiftDecimalSchema decimal;
@@ -800,6 +844,35 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
       RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));
   if (decimal.enabled) {
     return resolver.Find(resolver.GetOID(PostgresTypeId::kNumeric), out, error);
+  }
+  RedshiftScalarSchema scalar;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftScalarSchema::Parse(schema, resolver.is_redshift(), &scalar, error));
+  if (scalar.enabled()) {
+    PostgresTypeId id;
+    switch (scalar.kind) {
+      case RedshiftScalarKind::kSmallint:
+        id = PostgresTypeId::kInt2;
+        break;
+      case RedshiftScalarKind::kInteger:
+        id = PostgresTypeId::kInt4;
+        break;
+      case RedshiftScalarKind::kBigint:
+        id = PostgresTypeId::kInt8;
+        break;
+      case RedshiftScalarKind::kReal:
+        id = PostgresTypeId::kFloat4;
+        break;
+      case RedshiftScalarKind::kDouble:
+        id = PostgresTypeId::kFloat8;
+        break;
+      case RedshiftScalarKind::kBoolean:
+        id = PostgresTypeId::kBool;
+        break;
+      default:
+        return RedshiftScalarSchema::Invalid(error, "unknown scalar family");
+    }
+    return resolver.Find(resolver.GetOID(id), out, error);
   }
 
   std::string_view extension_name;
