@@ -70,9 +70,12 @@ Current state only; history is in git and PR descriptions.
   and all 25 serial validation steps passed). Task010f0 adds a separate noninstalled
   bounded protocol observer/fixed plans (locally integrated 65e7e9b; independent
   FULL approval and all 30 serial validation steps passed). Task010g0 adds a pure
-  anchored historical local-evidence/package-byte linker; final local validation
-  and review are pending. Archive/install inventory, runtime closure and the local
-  consumer/live handoff remain separate prerequisites. Synthetic/local PostgreSQL
+  anchored historical local-evidence/package-byte linker (locally integrated
+  1f35366 after independent FULL approval, actual historical receipt linkage and
+  retained 30-step validation). Task010g1 adds trusted in-place install comparisons
+  and a fixed same-host load-only observation; final actual validation and review
+  are pending. Broader runtime closure and the local execution/live handoff remain
+  separate prerequisites. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.
   Native temporal wire/domain/precision and character/binary boundaries, TIMETZ native layout/domain/offset/precision,
   interval native wire/domain/catalog/qualifier qualification, SUPER,

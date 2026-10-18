@@ -72,8 +72,11 @@ locally integrated e2df066 after independent FULL approval and all 25 serial
 validation steps. Task010f0 adds a noninstalled bounded protocol observer and
 fixed plans (locally integrated 65e7e9b; independent FULL approval and all 30
 serial validation steps passed). Task010g0 links anchored historical local
-source/review/validation/log/package bytes; final local validation/review is
-pending. It supplies no archive/install/runtime/consumer or live authority; see
+source/review/validation/log/package bytes (locally integrated 1f35366 after
+independent FULL approval, actual historical linkage and retained validation).
+Task010g1 adds trusted in-place install comparisons and fixed same-host load-only
+observations; final actual validation/review is pending. Neither supplies native
+execution, broader runtime closure or live authority; see
 [the local evidence boundary](local-qualification-evidence.md). Native interval constraint
 producers remain unqualified, blocking actual
 target writes even for NULL/empty input. Native temporal endpoints,

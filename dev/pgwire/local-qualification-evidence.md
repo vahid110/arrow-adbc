@@ -65,3 +65,53 @@ Run the tiny, clearly synthetic offline fixtures with
 actual accepted evidence. No CLI/provider/connection/execution/admission API is
 provided. Later installed/native all21 acceptance, the finite own-resource live
 handoff and teardown, final cross-platform CI and release authority remain open.
+
+## Same-host installed load observations (Task010g1)
+
+`pgwire_local_install.observe_install(record_bytes, *, selected, roots)` adds a
+separate trusted same-iMac snapshot comparison and one fixed load-only child.
+It rechecks G0 anchors, then compares the selected C prefix plus separate smoke
+client with the trusted tar, and manager/Redshift package and dist-info contents
+with their wheels in place. It extracts and installs nothing. All wheel payload
+metadata is compared; the only permitted pip additions are `INSTALLER` containing `pip`
+and its newline, empty `REQUESTED`, the exact selected file URL/hash in
+`direct_url.json`, and a fully validated installed `RECORD`. Only RECORD itself
+can lack a hash/size. Cache files, stale cache rows and extra/shadow sources reject.
+The collector never removes caches; root owns any separately recorded preparation.
+
+`pgwire_local_load_probe.py` runs only under the selected interpreter with `-I -B`,
+minimal environment, closed stdin and a maximum 30-second process window. It
+checks installed origins before import, then records actual manager/native/
+Redshift origins and resolves the selected C and wheel driver initializer
+symbols without calling them. It creates no database or connection. A new owned
+0600 metadata fd carries at most 1 MiB; compact status stays within 2 KiB. Parent
+reaps the process group, validates exact metadata bytes and rechecks all inputs.
+Partial/missing/nonzero/unknown/oversize output cannot yield success. Old CI status
+protocols and admission paths stay unchanged.
+
+Runtime facts cover only this named load-only process. Thin64le ARM64 file-backed
+images must match selected before/after identities and on-disk UUID/CPU/deployment
+and bounded load-command facts. OS-prefix images bind actual OS build and raw
+in-memory UUID/CPU/deployment, including distinct system deployment codes; no disk
+hash for a shared-cache image is invented. Raw dylib/RPATH edges stay unresolved;
+future dynamic loads and broader runtime closure remain unknown. The interpreter
+launch file and dyld main executable are separate facts. OS/architecture/ABI and
+actual Mach-O bytes matter; a wheel `.so` suffix does not imply Linux compatibility.
+
+Frozen `Selected`/`Roots` values bind artifact source/head/tree/validation digest,
+collector source/head/tree/code, child/interpreter/client bytes, explicit prefix/
+site/metadata roots, six C links, two wheel specifications and finite runtime
+identities. Their source identities may differ when checking approved prior
+artifacts with new verifier code. `Observed.status=same-host-load-observed` records
+those facts and digests; it grants no readiness or authority. Fresh Git/ref/clean
+observations remain root's responsibility outside this API. Defaults only tighten:
+32 MiB compressed, 64 MiB expanded/artifact, 16 MiB/member, 256 C and 128 wheel
+members, 1 MiB metadata, 1024 images, 128 file-backed nodes, 64 MiB/runtime file,
+1 MiB/4096 Mach-O commands and 16,384-character paths.
+
+Tiny synthetic inventory/parser/metadata/process tests use
+`python -I -B ci/scripts/test_pgwire_local_install.py -v`. Worker/reviewer tests
+never import/load actual installed packages. Actual root same-host validation and
+independent review are required; no native database result follows. The separate
+local execution/observation result channel, all21 native semantics and installed
+acceptance, finite admitted own-resource teardown, final CI and release remain open.

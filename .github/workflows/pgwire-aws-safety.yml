@@ -27,6 +27,9 @@ on:
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_local_evidence.py"
       - "ci/scripts/test_pgwire_local_evidence.py"
+      - "ci/scripts/pgwire_local_install.py"
+      - "ci/scripts/pgwire_local_load_probe.py"
+      - "ci/scripts/test_pgwire_local_install.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/test_pgwire_qualification.py"
       - "ci/scripts/test_pgwire_qualification_live.py"
@@ -47,6 +50,9 @@ on:
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_local_evidence.py"
       - "ci/scripts/test_pgwire_local_evidence.py"
+      - "ci/scripts/pgwire_local_install.py"
+      - "ci/scripts/pgwire_local_load_probe.py"
+      - "ci/scripts/test_pgwire_local_install.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/test_pgwire_qualification.py"
       - "ci/scripts/test_pgwire_qualification_live.py"
@@ -99,3 +105,5 @@ jobs:
         run: '"${{ runner.temp }}/safety-venv/bin/python" -m unittest discover -s ci/scripts -p "test_pgwire_qualification*.py" -v'
       - name: Link synthetic local evidence without execution or AWS
         run: '"${{ runner.temp }}/safety-venv/bin/python" -I -B ci/scripts/test_pgwire_local_evidence.py -v'
+      - name: Check synthetic same-host inventories and private load protocol
+        run: '"${{ runner.temp }}/safety-venv/bin/python" -I -B ci/scripts/test_pgwire_local_install.py -v'
