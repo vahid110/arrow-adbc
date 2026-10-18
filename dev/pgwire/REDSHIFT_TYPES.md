@@ -53,8 +53,8 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-exact128/256/marked-text,NQ | C-explicit-p/s / C-target-exact,NQ | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
 | REAL / FLOAT4 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float32 |
 | DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float64 |
-| CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C,F byte width; NQ | utf8 + CHAR width/identity |
-| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C,O-PG,T | C,O-PG | C-defaults / C,T | C,F,T byte width; NQ | utf8/large_utf8 + byte limit |
+| CHAR / CHARACTER / NCHAR / BPCHAR | C-checked raw padding,F,NQ; O-PG | C-UTF8 single-byte/width,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | utf8 + CHAR byte width/identity |
+| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C-checked UTF8,F,NQ; O-PG,T | C-checked UTF8/width,NQ | C-explicit/fixed default / C-target checked,NQ | C,F,T byte width/identity,NQ | utf8/large_utf8 + byte limit |
 | DATE | C,O-PG,T | C-date32,O-PG | C / C | C-name | date32 |
 | TIME / TIME WITHOUT TIME ZONE | C,O-PG,T | C-time64(us),O-PG | C / C | C-name; precision N | time64(us); endpoint decision below |
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
@@ -65,7 +65,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
 | HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
-| VARBYTE / VARBINARY / BINARY VARYING | C-alias,O-PG,T | C-binary,NQ | C-lookup / C | C-name; length N | binary/large_binary |
+| VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,NQ | C-raw/provisional size cap,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
 | GEOMETRY | C-opaque,NQ | N | N / N | C-name only | typed WKB/SRID representation |
 | GEOGRAPHY | C-opaque,NQ | N | N / N | C-name only | typed WKB/SRID + geodetic identity |
 
@@ -100,17 +100,17 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   parameters retain canonical family but no inferred precision/scale/width.
 - Binding: [BindStream::SetParamTypes](../../c/driver/postgresql/bind_stream.h#L144)
   derives parameter types from Arrow or explicit canonical semantic metadata;
-  Arrow NA can use inferred expected types. Known decimal/scalar ingest targets
+  Arrow NA can use inferred expected types. Known decimal/scalar/character/binary ingest targets
   select matching binary writers and parameter OIDs together. Existing PostgreSQL `arrow.json` mapping is not SUPER.
   Opaque readback is not safely round-trippable. TIME32/DATE64 map to candidate DB
   types but lack matching writer cases; TIME64 accepts only microseconds.
 - Ingest: [CREATE mapping](../../c/driver/postgresql/statement.cc#L743) calls
-  [sql_type_name](../../c/driver/postgresql/postgres_type.h#L200) without modifiers:
-  text widths and CHAR identity are lost. Task010c3 adds explicit decimal(p,s)
+  validated semantic declarations rather than relying on unqualified names. Task010c3 adds explicit decimal(p,s)
   and actual target descriptors to both COPY and prepared INSERT decimal writers;
-  Task010c4 extends this to the six primitive numeric/boolean families. Other
-  prepared parameters keep their Arrow-derived types. A read alias does
-  not prove correct VARBYTE DDL/parameter identity.
+  Task010c4 extends this to the six primitive numeric/boolean families; Task010d
+  adds CHAR/VARCHAR/VARBYTE identity, explicit byte widths and aligned destination
+  OIDs. Other prepared parameters keep their Arrow-derived types. Native VARBYTE
+  receive/modifier/parameter qualification remains pending.
   The staged CSV helper is not selected by the supported ingest path.
 - Remaining scalar hazards: Task010c4 guards Redshift integer/float narrowing;
   unmarked PostgreSQL retains its previous conversion policy. Timestamp
@@ -255,6 +255,54 @@ may follow DDL, so no stronger table-replacement atomicity is promised. Native
 Redshift range, subnormal retention and alias/protocol qualification remain open;
 local PostgreSQL/codec/installed-consumer tests are separate evidence.
 
+## Character/binary contract (Task010d)
+
+Canonical `CHAR`, `VARCHAR` and `VARBYTE` use `ADBC:redshift:sql_type` and known
+`ADBC:redshift:byte_width`; unknown raw modifiers remain diagnostic, not inferred
+widths. The pinned AWS JDBC reference applies typmod minus four to VARBYTE as to
+character types; actual native PQfmod/catalog confirmation is still required.
+Only the catalog receive mapping enables binary VARBYTE; its dynamic OID is
+selected independently of BYTEA. Reference raw bytes are not a display-hex codec
+or native wire qualification. CHAR reads retain received padding and empty/NULL
+remain distinct. VARCHAR expression read descriptors may reach 16,000,000 bytes;
+VARBYTE reads/declarations may reach 16,777,216 bytes. No width is sampled from rows.
+
+Semantic CHAR CREATE requires explicit 1..4096 byte width. VARCHAR stored widths
+are 1..65535; unmarked Redshift UTF8 uses fixed `VARCHAR(65535)`. Unmarked binary
+uses `VARBYTE(16777216)`; validated explicit widths override that default.
+Declarations fail before replacement DDL. Runtime value failures may follow
+CREATE, so table replacement has no stronger atomicity promise. Known append
+fields select aligned destination OID, width and writer together, including
+subsets/reordering. Text and binary do not implicitly coerce; source and target
+byte limits both apply, including overflow made entirely of spaces. Dictionary
+semantic shapes reject before either Bind API takes ownership; ordinary unmarked
+PostgreSQL dictionaries and type policy remain unchanged.
+
+UTF8 validation rejects malformed/overlong/surrogate/out-of-range scalars and
+embedded NUL. Under UTF8, CHAR's single-byte domain is non-NUL ASCII; no high-bit
+single-byte encoding is inferred. There is no trimming, transcoding or hex decode.
+Binary zero/high bits pass through. Array offsets, lengths and binary-view
+references are checked before getters; normal/large/view and fixed binary storage
+share bounded checks. Canonical markers opt PostgreSQL into these source/target
+checks without pretending its connection is Redshift. Native charset, padding,
+large values and wire boundaries remain qualification gates.
+
+A **provisional** plain parameterized/COPY semantic VARBYTE guard accepts at most
+1,000,000 bytes. It deliberately does not guess whether AWS's documented “1 MB”
+means 1,048,576 bytes. This narrower checkpoint guard does **not** complete the
+all-type release contract: native independent value/length probes must resolve
+1,000,000/+1 and 1,048,575/576/577. No staging/file upload, S3 or automatic route
+switch is added. Larger declarations and reads are separate from this write guard.
+
+Fresh client-encoding checks require UTF8 for Redshift and explicitly marked PG
+character writes. A changed/missing encoding rejects rather than repairing or
+retrying the session. Successful result-producing actions are checked before text
+interpretation/export; arbitrary SQL can already have effects when a postcheck
+fails. Existing stream transaction ownership and cleanup remain in charge; no
+claim that a failed encoding postcheck undoes arbitrary SQL is made. Ordinary
+unmarked PostgreSQL remains unchanged. Codec/public/installed local evidence is
+separate from native Redshift and final platform CI.
+
 ## Recommended lossless contract and acceptance
 
 These are proposals for bounded implementation PRs. A representation is supported
@@ -391,17 +439,20 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **010c3 locally integrated d04f2d2, review/native/installed validation passed:** explicit decimal DDL,
   bounded exact decimal/marked-text binding, actual target-aware append and owned
   rollback uncertainty handling. Final platform CI is deferred until development ends.
-- **010c4 implemented, final local validation/review pending:** checked primitive
+- **010c4 locally integrated b90664a, review/native/installed validation passed:** checked primitive
   scalar conversions, canonical identity/DDL, exact known-target append and strict
   boolean wire reads. Final platform CI follows development.
-- **010c successors:** character/temporal value/write gaps, interval writes and
-  native protocol/boundary evidence; no all-type completion claim.
-- **010d:** native SUPER plus supported-size binding/ingest, with the extension/
-  protocol decisions above; a mixed projection must work without user query rewrites.
-- **010e:** HLLSKETCH and spatial native codecs/semantic contracts, split if needed;
-  type-specific write/size restrictions stay explicit.
-- **010f:** complete 21-row read/bind/create/append/metadata evidence on installed C
-  and wheel artifacts, including documented unsupported operations and all aliases,
-  followed by a separately human-authorized finite live qualification and teardown.
+- **010d implemented, final local validation/review pending:** CHAR/VARCHAR/VARBYTE
+  read, binding, explicit DDL, target-aware append and metadata checks, with native
+  format/charset/size qualification (including the provisional binary write cap)
+  still open.
+- **Prepared successors, not dispatched here:** temporal value/write gaps and
+  interval writes/qualifiers; native SUPER and lossless extension/protocol decisions;
+  HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
+  these phases; no arbitrary future phase number implies completion or authority.
+- **Final all-type qualification:** complete the 21-row read/bind/create/append/
+  metadata evidence on installed C and wheel artifacts, all aliases and bounded
+  unsupported operations. The coordinator controls the separately admitted finite
+  own-resource live window/teardown and final push/applicable green platform CI.
   No live run, AWS action, staged upload, publication or automatic retry is authorized
   by this document. Only then can Task009 release readiness be assessed.

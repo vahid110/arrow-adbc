@@ -90,6 +90,7 @@ class PqResultArrayReader {
   std::vector<std::unique_ptr<PostgresCopyFieldReader>> field_readers_;
   nanoarrow::UniqueSchema schema_;
   bool autocommit_;
+  bool materialized_encoding_valid_ = false;
   std::string vendor_name_;
   struct AdbcError error_;
   struct ArrowError na_error_;
@@ -104,6 +105,7 @@ class PqResultArrayReader {
         field_readers_(std::move(other->field_readers_)),
         schema_(std::move(other->schema_)),
         autocommit_(other->autocommit_),
+        materialized_encoding_valid_(other->materialized_encoding_valid_),
         vendor_name_(std::move(other->vendor_name_)) {
     ArrowErrorInit(&na_error_);
     error_ = ADBC_ERROR_INIT;

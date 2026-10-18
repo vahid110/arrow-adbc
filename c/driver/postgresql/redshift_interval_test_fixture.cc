@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "copy/writer.h"
+#include "redshift_bytes_test_fixture.h"
 #include "redshift_interval_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
@@ -141,4 +142,31 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftScalarFixture(int batch,
                                                                  ArrowSchema* schema) {
   ArrowError error{};
   return adbcpq::testing::ScalarFixture(batch, array, schema, &error);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftBytesFixture(int batch,
+                                                                ArrowArray* array,
+                                                                ArrowSchema* schema) {
+  ArrowError error{};
+  return adbcpq::testing::BytesFixture(batch, array, schema, &error);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftBytesWriteFixture(
+    ArrowArray* input, ArrowSchema* input_schema, int target_kind, int target_width,
+    ArrowArray* array, ArrowSchema* schema) {
+  if (target_kind < 0 || target_kind > 3 || target_width < -1 || target_width > 16777216)
+    return EINVAL;
+  ArrowError error{};
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(adbcpq::testing::BytesResolver(profile, &resolver));
+  adbcpq::PostgresType target;
+  if (target_kind) {
+    NANOARROW_RETURN_NOT_OK(
+        resolver->Find(adbcpq::testing::kBytesOids[target_kind - 1], &target, &error));
+    target =
+        target.WithFieldDescriptor(target_width < 0 ? -1 : target_width + 4, profile);
+  }
+  return ExportParameterWire(input, input_schema, *resolver,
+                             target_kind ? &target : nullptr, array, schema);
 }

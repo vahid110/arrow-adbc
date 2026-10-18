@@ -71,12 +71,6 @@ Status PqResultArrayReader::FinishBoundStream(bool failed) {
 
 int PqResultArrayReader::GetSchema(struct ArrowSchema* out) {
   ResetErrors();
-  Status encoding = helper_.CheckEncoding();
-  if (!encoding.ok()) {
-    encoding.ToAdbc(&error_);
-    return EINVAL;
-  }
-
   if (schema_->release == nullptr) {
     if (bind_stream_ && !IsConnectionLive()) {
       Status::InvalidState("[libpq] Connection was released before reading bound results")
@@ -113,11 +107,9 @@ int PqResultArrayReader::GetNext(struct ArrowArray* out) {
 }
 
 int PqResultArrayReader::GetNextImpl(struct ArrowArray* out) {
-  Status status = helper_.CheckEncoding();
-  if (!status.ok()) {
-    status.ToAdbc(&error_);
-    return EINVAL;
-  }
+  // An exported materialized PGresult owns bytes whose encoding was checked
+  // when obtained. Decoding/schema/EOF must not inspect a possibly closed conn_.
+  Status status;
   if (schema_->release == nullptr) {
     status = Initialize(nullptr);
     if (!status.ok()) {
@@ -149,6 +141,11 @@ int PqResultArrayReader::GetNextImpl(struct ArrowArray* out) {
       out->release = nullptr;
       return NANOARROW_OK;
     }
+  }
+
+  if (helper_.require_utf8() && !materialized_encoding_valid_) {
+    Status::InvalidState("[Redshift] Result encoding was not validated").ToAdbc(&error_);
+    return EINVAL;
   }
 
   nanoarrow::UniqueArray tmp;
@@ -190,6 +187,7 @@ int PqResultArrayReader::GetNextImpl(struct ArrowArray* out) {
 
   // Signal that the next call to GetNext() will have to populate the result again
   helper_.ClearResult();
+  materialized_encoding_valid_ = false;
 
   // Canonically return zero-size results as an empty stream
   if (tmp->length == 0) {
@@ -269,6 +267,9 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     }
   }
 
+  // Both helper execution/description and bound execution checked the live
+  // connection before/after retrieval. Keep that proof with the owned result.
+  materialized_encoding_valid_ = true;
   // Use the same per-field descriptors as ExecuteSchema/COPY, including PQfmod.
   // The resolved root is local: two same-OID fields retain independent modifiers.
   PostgresType output_type;
@@ -349,6 +350,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       return fail_bind(std::move(execute_status));
     }
     helper_.SetResult(result.release());
+    materialized_encoding_valid_ = true;
     if (affected_rows) {
       (*affected_rows) += helper_.AffectedRows();
     }

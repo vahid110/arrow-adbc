@@ -75,4 +75,51 @@ inline ArrowErrorCode BytesBatch(ArrowSchema* schema, ArrowArray* array,
   }
   return ArrowArrayFinishBuildingDefault(array, error);
 }
+// Independent raw standard PostgreSQL field bytes; not captured VARBYTE or
+// native Redshift CHAR traffic. No production writer is the read-test oracle.
+inline ArrowErrorCode BytesFixture(int batch, ArrowArray* array, ArrowSchema* schema,
+                                   ArrowError* error) {
+  if (batch < 0 || batch > 7) return EINVAL;
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(
+      BytesResolver(adbc::driver::pgwire::BackendProfile::Redshift(), &resolver));
+  PqResultHelper query(nullptr, "");
+  PGresult* result = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  if (!result) return ENOMEM;
+  query.SetResult(result);
+  PGresAttDesc attrs[3] = {};
+  for (int col = 0; col < 3; ++col) {
+    attrs[col].name = const_cast<char*>(kBytesNames[col]);
+    attrs[col].typid = kBytesOids[col];
+    attrs[col].format = 1;
+    attrs[col].atttypmod = col == 0   ? 8
+                           : col == 1 ? (batch == 3 ? 70004 : 24)
+                                      : (batch == 7 ? 16777220 : 24);
+  }
+  if (!PQsetResultAttrs(result, 3, attrs)) return ENOMEM;
+  const int rows = batch == 1 ? 0 : (batch >= 2 ? 1 : 4);
+  for (int row = 0; row < rows; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      const bool null = batch == 2 || row == 3;
+      std::string bytes;
+      if (row == 0)
+        bytes = NumericHex(col == 0   ? "61202020"
+                           : col == 1 ? "f09f9880275c2020"
+                                      : "0080ff5c78");
+      if (row == 2) bytes = col == 0 ? "    " : col == 1 ? "  " : NumericHex("6162");
+      if (batch == 3 && col == 1) bytes.assign(70000, 'q');
+      if (batch == 4 && col == 1) bytes = NumericHex("eda080");
+      if (batch == 5 && col == 2) bytes.assign(21, 'a');
+      if (batch == 6 && col == 0) bytes = NumericHex("c280");
+      if (batch == 7 && col == 2) {
+        bytes.assign(16777216, static_cast<char>(0xff));
+        bytes[0] = 0;
+      }
+      if (!PQsetvalue(result, row, col, null ? nullptr : bytes.data(),
+                      null ? -1 : static_cast<int>(bytes.size())))
+        return ENOMEM;
+    }
+  }
+  return FixtureFromQuery(query, resolver, array, schema, error);
+}
 }  // namespace adbcpq::testing

@@ -42,6 +42,7 @@
 #include "connection.h"
 #include "driver/framework/utility.h"
 #include "metadata.h"
+#include "redshift_bytes_test_fixture.h"
 #include "redshift_decimal_test_fixture.h"
 #include "redshift_interval_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
@@ -2054,6 +2055,140 @@ TEST_F(PostgresStatementTest, ModifierCatalogQueriesUseRealFiltersOrderAndParser
 
 // Actual PostgreSQL protocol/catalog plumbing for the Redshift scalar policy,
 // without changing the connection identity or claiming native vendor execution.
+TEST_F(PostgresStatementTest, CharacterPublicBindArrayAndStreamSelectActualOfferedType) {
+  for (bool stream_bind : {false, true}) {
+    ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(
+            &statement,
+            "SELECT pg_typeof($1)::text AS kind,encode(bpcharsend($1),'hex') AS wire",
+            &error),
+        IsOkStatus(&error));
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(
+        adbcpq::testing::BytesSchema(schema.get(), NANOARROW_TYPE_STRING, "CHAR", "4"),
+        0);
+    ASSERT_EQ(adbcpq::testing::BytesBatch(schema.get(), array.get(),
+                                          {"a  ", "", std::nullopt}, nullptr),
+              0);
+    if (stream_bind) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      ASSERT_THAT(AdbcStatementBindStream(&statement, input.get(), &error),
+                  IsOkStatus(&error));
+    } else
+      ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsOkStatus(&error));
+    adbc_validation::StreamReader result;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &result.stream, nullptr, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(result.GetSchema());
+    int row = 0;
+    const char* expected[] = {"612020", "", nullptr};
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(result.Next());
+      if (!result.array->release) break;
+      for (int64_t i = 0; i < result.array->length; ++i, ++row) {
+        ASSERT_LT(row, 3);
+        auto kind = ArrowArrayViewGetStringUnsafe(result.array_view->children[0], i);
+        EXPECT_EQ(std::string(kind.data, kind.size_bytes), "character");
+        if (!expected[row])
+          EXPECT_TRUE(ArrowArrayViewIsNull(result.array_view->children[1], i));
+        else {
+          auto wire = ArrowArrayViewGetStringUnsafe(result.array_view->children[1], i);
+          EXPECT_EQ(std::string(wire.data, wire.size_bytes), expected[row]);
+        }
+      }
+    }
+    EXPECT_EQ(row, 3);
+    if (result.stream.release) result.stream.release(&result.stream);
+    ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+  }
+}
+
+TEST_F(PostgresStatementTest, CharacterMetadataOnActualNormalBoundEmptyAndCatalogPaths) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(adbcpq::DiscoverPostgresTypes(owner->conn(), profile, &resolver).ok());
+  for (int mode = 0; mode < 3; ++mode) {
+    const char* sql =
+        mode == 1   ? "SELECT 'a'::CHAR(4) AS fixed,'😀'::VARCHAR(12) AS "
+                      "variable,repeat('q',70000)::VARCHAR(70000) AS wide WHERE $1=1"
+        : mode == 2 ? "SELECT 'a'::CHAR(4) AS fixed,'😀'::VARCHAR(12) AS "
+                      "variable,repeat('q',70000)::VARCHAR(70000) AS wide WHERE FALSE"
+                    : "SELECT 'a'::CHAR(4) AS fixed,'😀'::VARCHAR(12) AS "
+                      "variable,repeat('q',70000)::VARCHAR(70000) AS wide";
+    adbcpq::PqResultArrayReader reader(owner->conn(), resolver, sql);
+    if (mode == 1) {
+      auto lease = std::make_shared<int>(0);
+      ASSERT_TRUE(owner->TryClaimBoundStream(lease));
+      reader.SetConnection(owner, std::move(lease));
+      nanoarrow::UniqueSchema input_schema;
+      nanoarrow::UniqueArray input;
+      ASSERT_EQ(adbcpq::testing::ScalarSchema(input_schema.get(), NANOARROW_TYPE_INT32),
+                0);
+      ASSERT_EQ(adbcpq::testing::ScalarBatch<int32_t>(input_schema.get(), input.get(),
+                                                      {1}, nullptr),
+                0);
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(input_schema.get(), input.get(), stream.get());
+      reader.SetBind(stream.get());
+    }
+    adbc_validation::StreamReader output;
+    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream).ok());
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    EXPECT_EQ(PostgresFieldMetadata(output.schema->children[0], "ADBC:redshift:sql_type"),
+              "CHAR");
+    EXPECT_EQ(
+        PostgresFieldMetadata(output.schema->children[0], "ADBC:redshift:byte_width"),
+        "4");
+    EXPECT_EQ(PostgresFieldMetadata(output.schema->children[1], "ADBC:redshift:sql_type"),
+              "VARCHAR");
+    EXPECT_EQ(
+        PostgresFieldMetadata(output.schema->children[2], "ADBC:redshift:byte_width"),
+        "70000");
+    ASSERT_NO_FATAL_FAILURE(output.Next());
+    if (mode == 2)
+      EXPECT_FALSE(output.array->release);
+    else {
+      const auto fixed = ArrowArrayViewGetStringUnsafe(output.array_view->children[0], 0);
+      EXPECT_EQ(std::string(fixed.data, fixed.size_bytes), "a   ");
+      const auto wide = ArrowArrayViewGetStringUnsafe(output.array_view->children[2], 0);
+      EXPECT_EQ(wide.size_bytes, 70000);
+    }
+  }
+  adbcpq::PqResultHelper create(owner->conn(),
+                                "CREATE TEMP TABLE adbc_d_aliases(fixed CHARACTER(4), "
+                                "variable NATIONAL CHARACTER VARYING(12))");
+  ASSERT_TRUE(create.Execute().ok());
+  adbcpq::MetadataQuerySet queries(profile);
+  adbcpq::PqResultHelper table(owner->conn(), queries.TableSchema(), true);
+  ASSERT_TRUE(table.Execute({"pg_temp.adbc_d_aliases"}).ok());
+  adbcpq::PostgresType types;
+  ASSERT_TRUE(table.ResolveTableSchema(*resolver, &types).ok());
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(types.SetSchema(schema.get(), "Redshift"), 0);
+  EXPECT_EQ(PostgresFieldMetadata(schema->children[0], "ADBC:redshift:sql_type"), "CHAR");
+  EXPECT_EQ(PostgresFieldMetadata(schema->children[1], "ADBC:redshift:byte_width"), "12");
+  adbcpq::PqResultHelper nsp(owner->conn(),
+                             "SELECT pg_my_temp_schema()::regnamespace::text");
+  ASSERT_TRUE(nsp.Execute().ok());
+  adbcpq::PqResultHelper columns(owner->conn(), queries.Columns(false), true);
+  ASSERT_TRUE(
+      columns.Execute({std::string(nsp.Row(0)[0].value()), "adbc_d_aliases"}).ok());
+  ASSERT_EQ(columns.NumRows(), 2);
+  for (int i = 0; i < 2; ++i) {
+    auto metadata = adbcpq::ResolveColumnMetadata(columns.Row(i), profile);
+    ASSERT_TRUE(metadata.has_value());
+    EXPECT_EQ(metadata.value().xdbc->xdbc_type_name, i == 0 ? "CHAR" : "VARCHAR");
+    EXPECT_EQ(metadata.value().xdbc->xdbc_column_size, i == 0 ? 4 : 12);
+  }
+}
+
 TEST_F(PostgresStatementTest, SemanticTextEncodingGuardsInitialAndChangedSessionState) {
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
@@ -2297,6 +2432,85 @@ TEST_F(PostgresStatementTest,
       adbcpq::PqResultHelper sentinel(
           owner->conn(),
           "SELECT amount::text,pg_typeof(amount)::text FROM adbc_scalar_replace_guard");
+      ASSERT_TRUE(sentinel.Execute().ok());
+      ASSERT_EQ(sentinel.NumRows(), 1);
+      EXPECT_EQ(sentinel.Row(0)[0].value(), "42");
+      EXPECT_EQ(sentinel.Row(0)[1].value(), "integer");
+    }
+}
+
+TEST_F(PostgresStatementTest,
+       BytesMalformedIdentityRetainsBothBindOwnersAndReplaceSentinel) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(
+      owner->conn(),
+      "CREATE TEMP TABLE adbc_bytes_replace_guard(amount INTEGER); INSERT INTO "
+      "adbc_bytes_replace_guard VALUES(42)");
+  ASSERT_TRUE(setup.Execute().ok());
+  for (bool dictionary : {false, true})
+    for (bool stream_bind : {false, true}) {
+      ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+      ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                         "adbc_bytes_replace_guard", &error),
+                  IsOkStatus(&error));
+      ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                         ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+                  IsOkStatus(&error));
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      if (dictionary) {
+        ASSERT_EQ(adbcpq::testing::DecimalDictionarySchema(schema.get(),
+                                                           NANOARROW_TYPE_STRING, false),
+                  0);
+        ASSERT_EQ(adbcpq::testing::DecimalMetadata(schema->children[0]->dictionary,
+                                                   "ADBC:redshift:sql_type", "VARCHAR"),
+                  0);
+        const char crafted[] = {0, 0, 0, 9};
+        ASSERT_EQ(adbcpq::testing::DecimalDictionaryBatch(
+                      schema.get(), array.get(),
+                      ArrowStringView{crafted, sizeof(crafted)}, nullptr),
+                  0);
+      } else {
+        ASSERT_EQ(adbcpq::testing::BytesSchema(schema.get(), NANOARROW_TYPE_BINARY,
+                                               "VARCHAR", "10"),
+                  0);
+        ASSERT_EQ(adbcpq::testing::BytesBatch(schema.get(), array.get(), {"x"}, nullptr),
+                  0);
+      }
+      auto array_releases = std::make_shared<int>(0),
+           schema_releases = std::make_shared<int>(0);
+      adbcpq::testing::DecimalCountReleases(array.get(), array_releases);
+      adbcpq::testing::DecimalCountReleases(schema.get(), schema_releases);
+      if (stream_bind) {
+        nanoarrow::UniqueArrayStream stream;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+        const auto release = stream->release;
+        EXPECT_THAT(AdbcStatementBindStream(&statement, stream.get(), &error),
+                    IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+        EXPECT_EQ(stream->release, release);
+        EXPECT_EQ(*array_releases, 0);
+        EXPECT_EQ(*schema_releases, 0);
+        if (stream->release) stream->release(stream.get());
+      } else {
+        const auto release_array = array->release;
+        const auto release_schema = schema->release;
+        EXPECT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                    IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+        EXPECT_EQ(array->release, release_array);
+        EXPECT_EQ(schema->release, release_schema);
+        EXPECT_EQ(*array_releases, 0);
+        EXPECT_EQ(*schema_releases, 0);
+        if (array->release) array->release(array.get());
+        if (schema->release) schema->release(schema.get());
+      }
+      if (error.release) error.release(&error);
+      ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+      EXPECT_EQ(*array_releases, 1);
+      EXPECT_EQ(*schema_releases, 1);
+      adbcpq::PqResultHelper sentinel(
+          owner->conn(),
+          "SELECT amount::text,pg_typeof(amount)::text FROM adbc_bytes_replace_guard");
       ASSERT_TRUE(sentinel.Execute().ok());
       ASSERT_EQ(sentinel.NumRows(), 1);
       EXPECT_EQ(sentinel.Row(0)[0].value(), "42");
@@ -4681,6 +4895,68 @@ TEST_F(PostgresStatementTest, EarlyBindResultReleaseKeepsExplicitTransaction) {
       PQexec(pg_conn, "SELECT COUNT(*) FROM pg_temp.adbc_tz_early_explicit"));
   ASSERT_EQ(PQresultStatus(rolled_back.get()), PGRES_TUPLES_OK);
   EXPECT_STREQ(PQgetvalue(rolled_back.get(), 0, 0), "0");
+}
+
+TEST_F(PostgresStatementTest,
+       CheckedResultEncodingSnapshotOutlivesConnectionForSchemaAndEof) {
+  for (int mode = 0; mode < 3; ++mode) {
+    adbc_validation::Handle<AdbcConnection> detached;
+    ASSERT_THAT(AdbcConnectionNew(&detached.value, &error), IsOkStatus(&error));
+    ASSERT_THAT(AdbcConnectionInit(&detached.value, &database, &error),
+                IsOkStatus(&error));
+    auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+        detached->private_data);
+    std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+    ASSERT_TRUE(
+        adbcpq::DiscoverPostgresTypes(
+            owner->conn(), adbc::driver::pgwire::BackendProfile::Redshift(), &resolver)
+            .ok());
+    adbcpq::PqResultArrayReader reader(owner->conn(), resolver,
+                                       mode
+                                           ? "SELECT '😀'::VARCHAR(8) AS value WHERE $1=1"
+                                           : "SELECT '😀'::VARCHAR(8) AS value");
+    if (mode) {
+      auto lease = std::make_shared<int>(0);
+      ASSERT_TRUE(owner->TryClaimBoundStream(lease));
+      reader.SetConnection(owner, std::move(lease));
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(adbcpq::testing::ScalarSchema(schema.get(), NANOARROW_TYPE_INT32), 0);
+      ASSERT_EQ(
+          adbcpq::testing::ScalarBatch<int32_t>(schema.get(), array.get(), {1}, nullptr),
+          0);
+      nanoarrow::UniqueArrayStream bind;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), bind.get());
+      reader.SetBind(bind.get());
+    }
+    adbc_validation::StreamReader output;
+    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream).ok());
+    if (mode == 2) {
+      ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+      ASSERT_NO_FATAL_FAILURE(output.Next());
+      ASSERT_TRUE(output.array->release);
+      ASSERT_NO_FATAL_FAILURE(output.Next());
+      EXPECT_FALSE(output.array->release);
+    }
+    ASSERT_THAT(AdbcConnectionRelease(&detached.value, &error), IsOkStatus(&error));
+    // Only owned schema/result bytes are accessed; no closed libpq handle is used.
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    if (mode == 1)
+      EXPECT_EQ(output.MaybeNext(), EINVAL);
+    else {
+      ASSERT_NO_FATAL_FAILURE(output.Next());
+      if (!mode) {
+        ASSERT_TRUE(output.array->release);
+        const auto value =
+            ArrowArrayViewGetStringUnsafe(output.array_view->children[0], 0);
+        EXPECT_EQ(std::string(value.data, value.size_bytes), "😀");
+        ASSERT_NO_FATAL_FAILURE(output.Next());
+      }
+      EXPECT_FALSE(output.array->release);
+    }
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    if (output.stream.release) output.stream.release(&output.stream);
+  }
 }
 
 TEST_F(PostgresStatementTest, BoundResultAfterConnectionReleaseIsSafe) {

@@ -55,10 +55,14 @@ decimal128 reads and strict exact-text unknowns with reference codec/C Data test
 exact decimal128/256 and DECIMAL-text binding, target-aware append and owned
 rollback uncertainty handling (locally integrated d04f2d2; independent review and
 serial native/installed validation passed). Task010c4 adds checked integer/float/
-boolean read/bind/target-aware ingest and canonical identity; final local validation/
-review is pending. Platform CI follows the human's local-first workflow.
+boolean read/bind/target-aware ingest and canonical identity (locally integrated
+b90664a; independent review and serial native/installed validation passed).
+Task010d implements character/binary identity, checked widths and explicit
+target-aware ingest; final local validation/review is pending. Its provisional
+plain VARBYTE limit is a native/release gate. Platform CI follows the local-first workflow.
 Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
-character/temporal value/write gaps, SUPER, HLL and spatial work remain open before
+native character/binary boundaries, temporal value/write gaps, SUPER, HLL and spatial
+work remain open before
 separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer

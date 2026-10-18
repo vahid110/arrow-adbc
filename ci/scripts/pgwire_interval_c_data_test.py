@@ -237,6 +237,109 @@ class IntervalCDataTest(unittest.TestCase):
                 [None if row is None else 42 for row in rows],
             )
 
+    def test_character_binary_reader_preserves_padding_raw_bytes_and_wide_descriptors(
+        self,
+    ):
+        def produce(which):
+            schema, array = ArrowSchema(), ArrowArray()
+            code = self.bytes_produce(which, ctypes.byref(array), ctypes.byref(schema))
+            if code:
+                self.assertFalse(array.release)
+                self.assertFalse(schema.release)
+                return code, None
+            result = pa.RecordBatch._import_from_c(
+                ctypes.addressof(array), ctypes.addressof(schema)
+            )
+            return code, result
+
+        _, result = produce(0)
+        self.assertEqual(result.column(0).to_pylist(), ["a   ", "", "    ", None])
+        self.assertEqual(result.column(1).to_pylist(), ["😀'\\  ", "", "  ", None])
+        self.assertEqual(
+            result.column(2).to_pylist(), [b"\x00\x80\xff\\x", b"", b"ab", None]
+        )
+        for i, family, width in (
+            (0, b"CHAR", b"4"),
+            (1, b"VARCHAR", b"20"),
+            (2, b"VARBYTE", b"20"),
+        ):
+            self.assertEqual(
+                result.schema.field(i).metadata[b"ADBC:redshift:sql_type"], family
+            )
+            self.assertEqual(
+                result.schema.field(i).metadata[b"ADBC:redshift:byte_width"], width
+            )
+        _, empty = produce(1)
+        self.assertEqual(empty.num_rows, 0)
+        self.assertEqual(empty.schema, result.schema)
+        _, nulls = produce(2)
+        self.assertEqual(
+            nulls.to_pylist(), [{"bpchar": None, "varchar": None, "varbyte": None}]
+        )
+        _, wide = produce(3)
+        self.assertEqual(wide.column(1)[0].as_py(), "q" * 70000)
+        self.assertEqual(
+            wide.schema.field(1).metadata[b"ADBC:redshift:byte_width"], b"70000"
+        )
+        for invalid in (4, 5, 6):
+            self.assertNotEqual(produce(invalid)[0], 0)
+        _, maximum = produce(7)
+        raw = maximum.column(2)[0].as_buffer()
+        self.assertEqual(len(raw), 16777216)
+        self.assertEqual(raw[0], 0)
+        self.assertEqual(raw[-1], 255)
+        self.assertEqual(
+            maximum.schema.field(2).metadata[b"ADBC:redshift:byte_width"], b"16777216"
+        )
+
+    def test_consumer_character_binary_writers_have_closed_utf8_and_byte_widths(self):
+        def encode(kind, values, family, width, target=(0, 0)):
+            metadata = {
+                b"ADBC:redshift:sql_type": family.encode(),
+                b"ADBC:redshift:byte_width": str(width).encode(),
+            }
+            return self.encode_parameter(
+                kind, values, self.bytes_write, target, metadata
+            )
+
+        for arrow_type in (pa.string(), pa.large_string(), pa.string_view()):
+            code, wire = encode(arrow_type, ["😀'\\  ", "", None], "VARCHAR", 20)
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                wire,
+                [
+                    bytes.fromhex("00000008f09f9880275c2020"),
+                    bytes.fromhex("00000000"),
+                    None,
+                ],
+            )
+        for arrow_type in (
+            pa.binary(),
+            pa.large_binary(),
+            pa.binary_view(),
+            pa.binary(3),
+        ):
+            code, wire = encode(
+                arrow_type, [b"\x00\x80\xff", None], "VARBYTE", 20, (3, 20)
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(wire, [bytes.fromhex("000000030080ff"), None])
+        for arrow_type, values, family, width, target in (
+            (pa.string(), ["a  "], "CHAR", 2, (0, 0)),
+            (pa.string(), ["😀x"], "VARCHAR", 20, (2, 4)),
+            (pa.string(), ["é"], "CHAR", 4, (0, 0)),
+            (pa.string(), ["a\0b"], "VARCHAR", 20, (0, 0)),
+            (pa.binary(), [b"abc"], "VARBYTE", 2, (3, 20)),
+            (pa.binary(), [b"a"], "VARBYTE", 20, (2, 20)),
+            (pa.string(), ["a"], "VARCHAR", 20, (3, 20)),
+            (pa.string(), ["a"], "VARCHAR", 20, (2, -1)),
+        ):
+            code, output = encode(arrow_type, values, family, width, target)
+            self.assertNotEqual(code, 0)
+            self.assertIsNone(output)
+        code, wire = encode(pa.string(), [], "VARCHAR", 20)
+        self.assertEqual((code, wire), (0, []))
+
     def encode_decimal(self, arrow_type, values, target=(0, 0), metadata=None):
         return self.encode_parameter(
             arrow_type, values, self.decimal_write, target, metadata
@@ -549,4 +652,10 @@ if __name__ == "__main__":
         ctypes.POINTER(ArrowSchema),
     ]
     IntervalCDataTest.scalar_write.restype = ctypes.c_int
+    IntervalCDataTest.bytes_produce = staticmethod(library.AdbcRedshiftBytesFixture)
+    IntervalCDataTest.bytes_produce.argtypes = IntervalCDataTest.produce.argtypes
+    IntervalCDataTest.bytes_produce.restype = ctypes.c_int
+    IntervalCDataTest.bytes_write = staticmethod(library.AdbcRedshiftBytesWriteFixture)
+    IntervalCDataTest.bytes_write.argtypes = IntervalCDataTest.decimal_write.argtypes
+    IntervalCDataTest.bytes_write.restype = ctypes.c_int
     unittest.main(verbosity=2)

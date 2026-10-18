@@ -39,6 +39,7 @@
 #include "driver/framework/objects.h"
 #include "driver/framework/utility.h"
 #include "driver/pgwire/libpq_raii.h"
+#include "redshift_bytes_test_fixture.h"
 #include "redshift_decimal_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
 #include "type_discovery.h"
@@ -315,6 +316,95 @@ TEST(ParameterizedScalarInsertTest, ActualTargetWidthsLossChecksAndTransactionOw
                                     std::string("SELECT count(*)::text FROM ") + table);
     ASSERT_TRUE(restored.Execute().ok());
     EXPECT_EQ(restored.Row(0)[0].value(), "1");
+  }
+}
+
+TEST(ParameterizedBytesInsertTest,
+     LateWidthAndBinaryEnvelopeFailurePreserveTransactionOwner) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (!uri) GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK);
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(
+      adbcpq::DiscoverPostgresTypes(
+          connection.get(), adbc::driver::pgwire::BackendProfile::PostgreSQL(), &resolver)
+          .ok());
+  adbcpq::PqResultHelper create(
+      connection.get(),
+      "CREATE TEMP TABLE adbc_bytes_prepared_text(amount VARCHAR(4)); INSERT INTO "
+      "adbc_bytes_prepared_text VALUES('sent'); CREATE TEMP TABLE "
+      "adbc_bytes_prepared_binary(amount BYTEA); INSERT INTO adbc_bytes_prepared_binary "
+      "VALUES('sent')");
+  ASSERT_TRUE(create.Execute().ok());
+  for (bool binary : {false, true}) {
+    const char* table =
+        binary ? "adbc_bytes_prepared_binary" : "adbc_bytes_prepared_text";
+    adbcpq::PqResultHelper catalog(
+        connection.get(),
+        "SELECT attname,atttypid,atttypmod FROM pg_attribute WHERE attrelid=$1::regclass "
+        "AND attnum>0 AND NOT attisdropped ORDER BY attnum");
+    ASSERT_TRUE(catalog.Execute({table}).ok());
+    adbcpq::PostgresType target;
+    ASSERT_TRUE(catalog.ResolveTableSchema(*resolver, &target).ok());
+    auto execute = [&](bool owned, size_t rows,
+                       int64_t* affected) -> adbc::driver::Status {
+      nanoarrow::UniqueSchema schema;
+      ArrowError error{};
+      if (adbcpq::testing::BytesSchema(
+              schema.get(), binary ? NANOARROW_TYPE_BINARY : NANOARROW_TYPE_STRING,
+              binary ? "VARBYTE" : "VARCHAR", binary ? "16777216" : "20"))
+        return adbc::driver::Status::Internal("bytes test schema");
+      std::vector<ArrowArray> batches(2);
+      auto code = adbcpq::testing::BytesBatch(
+          schema.get(), &batches[0], std::vector<std::optional<std::string>>(rows, "ok"),
+          &error);
+      if (!code)
+        code = adbcpq::testing::BytesBatch(schema.get(), &batches[1],
+                                           {binary ? std::string(1000001, 'x') : "abc  "},
+                                           &error);
+      if (code) {
+        for (auto& batch : batches)
+          if (batch.release) batch.release(&batch);
+        return adbc::driver::Status::Internal("bytes test batches");
+      }
+      nanoarrow::UniqueArrayStream stream;
+      adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+      adbcpq::BindStream bind;
+      bind.SetBind(stream.get());
+      auto status = bind.Begin([] { return adbc::driver::Status::Ok(); });
+      if (!status.ok()) return status;
+      return bind.ExecutePreparedRows(connection.get(), table, "amount", *resolver, owned,
+                                      rows, affected, &target);
+    };
+    for (size_t rows : {size_t{1}, size_t{16}}) {
+      int64_t affected = -1;
+      auto status = execute(true, rows, &affected);
+      EXPECT_FALSE(status.ok());
+      EXPECT_EQ(affected, 0);
+      EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_IDLE);
+      adbcpq::PqResultHelper verify(connection.get(),
+                                    std::string("SELECT count(*)::text FROM ") + table);
+      ASSERT_TRUE(verify.Execute().ok());
+      EXPECT_EQ(verify.Row(0)[0].value(), "1");
+    }
+    adbcpq::PqResultHelper begin(
+        connection.get(), std::string("BEGIN; INSERT INTO ") + table + " VALUES('own')");
+    ASSERT_TRUE(begin.Execute().ok());
+    int64_t affected = -1;
+    EXPECT_FALSE(execute(false, 1, &affected).ok());
+    EXPECT_EQ(affected, 1);
+    EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_INTRANS);
+    adbcpq::PqResultHelper pending(connection.get(),
+                                   std::string("SELECT count(*)::text FROM ") + table);
+    ASSERT_TRUE(pending.Execute().ok());
+    EXPECT_EQ(pending.Row(0)[0].value(), "3");
+    adbcpq::PqResultHelper rollback(connection.get(), "ROLLBACK");
+    ASSERT_TRUE(rollback.Execute().ok());
+    adbcpq::PqResultHelper verify(connection.get(),
+                                  std::string("SELECT count(*)::text FROM ") + table);
+    ASSERT_TRUE(verify.Execute().ok());
+    EXPECT_EQ(verify.Row(0)[0].value(), "1");
   }
 }
 

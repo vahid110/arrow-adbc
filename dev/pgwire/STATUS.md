@@ -53,9 +53,13 @@ Current state only; history is in git and PR descriptions.
   DECIMAL-marked text and owned rollback uncertainty (locally integrated at d04f2d2;
   independent review and serial native/installed tests passed). Task010c4 adds
   checked integer/float/boolean binding, canonical DDL/metadata and target-aware
-  append; final local validation/review is pending. Synthetic/local PostgreSQL
+  append (locally integrated b90664a; independent review and serial native/installed
+  validation passed). Task010d implements checked character/binary identity,
+  widths, explicit DDL and target-aware append; final local validation/review is
+  pending, including a provisional VARBYTE plain-route size gate. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.
-  Interval writes/qualifiers, character/temporal, SUPER, HLL and spatial work remains
+  Native character/binary boundaries, interval writes/qualifiers, temporal, SUPER,
+  HLL and spatial work remain
   required before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
