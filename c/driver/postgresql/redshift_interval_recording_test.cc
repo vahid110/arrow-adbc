@@ -68,8 +68,8 @@ PGresult* Rows(int columns, const std::vector<std::vector<const char*>>& rows) {
   return out;
 }
 PGresult* Command() { return PQmakeEmptyPGresult(nullptr, PGRES_COMMAND_OK); }
-PGresult* TimetzResult(bool empty = false) {
-  auto* out = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+PGresult* TimetzResult(bool empty = false, ExecStatusType status = PGRES_TUPLES_OK) {
+  auto* out = PQmakeEmptyPGresult(nullptr, status);
   PGresAttDesc attr{};
   attr.name = const_cast<char*>("amount");
   attr.typid = 65113;
@@ -96,7 +96,8 @@ PGresult* Query(const char* query) {
                     {"65017", "intervald2s", "unqualified_fixture_receive", "0", "0"},
                     {"67009", "int8", "int8recv", "0", "0"},
                     {"65113", "timetz", "timetz_recv", "0", "0"},
-                    {"75001", "bpchar", "bpcharrecv", "0", "0"}});
+                    {"75001", "bpchar", "bpcharrecv", "0", "0"},
+                    {"75002", "text", "textrecv", "0", "0"}});
   if (q == "SELECT CURRENT_SCHEMA()") return Rows(1, {{"public"}});
   if (q.find("SHOW enable_case_sensitive_identifier") != std::string::npos)
     return Rows(1, {{"on"}});
@@ -223,8 +224,9 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
 PGresult* PQdescribePrepared(PGconn*, const char*) {
-  return recording.prepared_query.starts_with("SELECT owned_timetz") ? TimetzResult(true)
-                                                                     : Command();
+  return recording.prepared_query.starts_with("SELECT owned_timetz")
+             ? TimetzResult(true, PGRES_COMMAND_OK)
+             : Command();
 }
 int PQnparams(const PGresult*) {
   return recording.prepared_query == "SELECT owned_timetz_param" ? 1 : 0;
@@ -639,6 +641,18 @@ TEST_F(IntervalPublicRecordingTest,
     }
 }
 TEST_F(IntervalPublicRecordingTest, TimetzKnownTargetNullEmptyAndUnknownPrecisionGate) {
+  // CREATE's unused declaration maps NA through discovered TEXT. This recorder
+  // must supply that ordinary catalog prerequisite; actual NULL parameters below
+  // must still select the known TIMETZ target OID rather than the fallback.
+  auto* owner =
+      static_cast<std::shared_ptr<PostgresConnection>*>(connection.private_data);
+  nanoarrow::UniqueSchema null_schema;
+  ASSERT_EQ(ArrowSchemaInitFromType(null_schema.get(), NANOARROW_TYPE_NA), 0);
+  PostgresType fallback;
+  ASSERT_EQ(PostgresType::FromSchema(*(*owner)->type_resolver(), null_schema.get(),
+                                     &fallback, nullptr),
+            0);
+  EXPECT_EQ(fallback.oid(), 75002U);
   recording.timetz_target = true;
   for (bool stream : {false, true})
     for (bool unmarked : {false, true})
