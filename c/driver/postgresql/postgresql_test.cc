@@ -47,6 +47,7 @@
 #include "redshift_decimal_test_fixture.h"
 #include "redshift_interval_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
+#include "redshift_temporal_test_fixture.h"
 #include "result_reader.h"
 #include "type_discovery.h"
 #include "validation/adbc_validation.h"
@@ -2091,6 +2092,331 @@ TEST_F(PostgresStatementTest, ModifierCatalogQueriesUseRealFiltersOrderAndParser
 
 // Actual PostgreSQL protocol/catalog plumbing for the Redshift scalar policy,
 // without changing the connection identity or claiming native vendor execution.
+// Explicit semantic input on genuine PostgreSQL; no backend identity override.
+TEST_F(PostgresStatementTest, TemporalPublicBindArrayAndStreamKeepOidAndLiteralWire) {
+  using adbcpq::RedshiftTemporalKind;
+  const ArrowType storage[] = {NANOARROW_TYPE_DATE32, NANOARROW_TYPE_TIME64,
+                               NANOARROW_TYPE_TIMESTAMP, NANOARROW_TYPE_INT64};
+  const RedshiftTemporalKind kinds[] = {
+      RedshiftTemporalKind::kDate, RedshiftTemporalKind::kTime,
+      RedshiftTemporalKind::kTimestamp, RedshiftTemporalKind::kTimestamptz};
+  const int64_t values[] = {10957, 86400000000, 946684800000001, -1};
+  const char* sql[] = {"SELECT pg_typeof($1)::text,encode(date_send($1),'hex')",
+                       "SELECT pg_typeof($1)::text,encode(time_send($1),'hex')",
+                       "SELECT pg_typeof($1)::text,encode(timestamp_send($1),'hex')",
+                       "SELECT pg_typeof($1)::text,encode(timestamptz_send($1),'hex')"};
+  const char* names[] = {"date", "time without time zone", "timestamp without time zone",
+                         "timestamp with time zone"};
+  const char* hex[] = {"00000000", "000000141dd76000", "0000000000000001",
+                       "ffffffffffffffff"};
+  for (int col = 0; col < 4; ++col)
+    for (bool stream : {false, true}) {
+      ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+      ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, sql[col], &error),
+                  IsOkStatus(&error));
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      const bool extension = col == 1 || col == 3;
+      ASSERT_EQ(adbcpq::testing::TemporalSchema(
+                    schema.get(), extension ? NANOARROW_TYPE_INT64 : storage[col],
+                    kinds[col], NANOARROW_TIME_UNIT_MICRO, extension),
+                0);
+      ASSERT_EQ(adbcpq::testing::TemporalBatch(schema.get(), array.get(),
+                                               {values[col], std::nullopt}, nullptr),
+                0);
+      if (stream) {
+        nanoarrow::UniqueArrayStream input;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+        ASSERT_THAT(AdbcStatementBindStream(&statement, input.get(), &error),
+                    IsOkStatus(&error));
+      } else
+        ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                    IsOkStatus(&error));
+      adbc_validation::StreamReader output;
+      ASSERT_THAT(
+          AdbcStatementExecuteQuery(&statement, &output.stream.value, nullptr, &error),
+          IsOkStatus(&error));
+      ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+      int row = 0;
+      while (true) {
+        ASSERT_NO_FATAL_FAILURE(output.Next());
+        if (!output.array->release) break;
+        for (int64_t i = 0; i < output.array->length; ++i, ++row) {
+          ASSERT_LT(row, 2);
+          const auto type =
+              ArrowArrayViewGetStringUnsafe(output.array_view->children[0], i);
+          EXPECT_EQ(std::string(type.data, type.size_bytes), names[col]);
+          if (row == 1)
+            EXPECT_TRUE(ArrowArrayViewIsNull(output.array_view->children[1], i));
+          else {
+            const auto wire =
+                ArrowArrayViewGetStringUnsafe(output.array_view->children[1], i);
+            EXPECT_EQ(std::string(wire.data, wire.size_bytes), hex[col]);
+          }
+        }
+      }
+      EXPECT_EQ(row, 2);
+      if (output.stream->release) output.stream->release(&output.stream.value);
+      ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+    }
+}
+
+TEST_F(PostgresStatementTest, TemporalInvalidIdentityKeepsPublicBindOwnership) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::TemporalSchema(schema.get(), NANOARROW_TYPE_INT64,
+                                              adbcpq::RedshiftTemporalKind::kTime,
+                                              NANOARROW_TIME_UNIT_MICRO, true),
+              0);
+    ASSERT_EQ(
+        adbcpq::testing::DecimalMetadata(schema->children[0], "ARROW:extension:name",
+                                         "adbc.redshift.time_us.v2"),
+        0);
+    ASSERT_EQ(adbcpq::testing::TemporalBatch(schema.get(), array.get(), {1}, nullptr), 0);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      EXPECT_THAT(AdbcStatementBindStream(&statement, input.get(), &error),
+                  IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+      EXPECT_NE(input->release, nullptr);
+    } else {
+      EXPECT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+      EXPECT_NE(array->release, nullptr);
+      EXPECT_NE(schema->release, nullptr);
+    }
+    if (error.release) error.release(&error);
+  }
+}
+
+TEST_F(PostgresStatementTest, TemporalCreateAppendExistingPrecisionAndMissingTargetGate) {
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper setup(
+      owner->conn(),
+      "CREATE TEMP TABLE adbc_e1_create_append(value TIMESTAMP(3)); INSERT INTO "
+      "adbc_e1_create_append VALUES(TIMESTAMP '2000-01-01')");
+  ASSERT_TRUE(setup.Execute().ok());
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_e1_create_append", &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                     ADBC_INGEST_OPTION_MODE_CREATE_APPEND, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TEMPORARY,
+                                     ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::TemporalSchema(schema.get(), NANOARROW_TYPE_TIMESTAMP,
+                                              adbcpq::RedshiftTemporalKind::kTimestamp,
+                                              NANOARROW_TIME_UNIT_MICRO, false, "3"),
+              0);
+    ASSERT_EQ(adbcpq::testing::TemporalBatch(schema.get(), array.get(), {946684800001000},
+                                             nullptr),
+              0);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      ASSERT_THAT(AdbcStatementBindStream(&statement, input.get(), &error),
+                  IsOkStatus(&error));
+    } else
+      ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                  IsOkStatus(&error));
+    int64_t rows = -1;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, &rows, &error),
+                IsOkStatus(&error));
+    EXPECT_EQ(rows, 1);
+  }
+  for (bool cross_family : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::TemporalSchema(
+                  schema.get(), NANOARROW_TYPE_TIMESTAMP,
+                  cross_family ? adbcpq::RedshiftTemporalKind::kTimestamptz
+                               : adbcpq::RedshiftTemporalKind::kTimestamp,
+                  NANOARROW_TIME_UNIT_MICRO, false, "3"),
+              0);
+    ASSERT_EQ(adbcpq::testing::TemporalBatch(
+                  schema.get(), array.get(),
+                  {cross_family ? 946684800001000 : 946684800001001}, nullptr),
+              0);
+    ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                IsOkStatus(&error));
+    EXPECT_NE(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_OK);
+    if (error.release) error.release(&error);
+  }
+  adbcpq::PqResultHelper count(owner->conn(),
+                               "SELECT count(*) FROM adbc_e1_create_append");
+  ASSERT_TRUE(count.Execute().ok());
+  EXPECT_EQ(count.Row(0)[0].ParseInteger().value(), 3);
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                     "adbc_e1_missing_precision", &error),
+              IsOkStatus(&error));
+  nanoarrow::UniqueSchema schema;
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(adbcpq::testing::TemporalSchema(schema.get(), NANOARROW_TYPE_TIMESTAMP,
+                                            adbcpq::RedshiftTemporalKind::kTimestamp,
+                                            NANOARROW_TIME_UNIT_MICRO, false, "3"),
+            0);
+  ASSERT_EQ(adbcpq::testing::TemporalBatch(schema.get(), array.get(), {946684800001000},
+                                           nullptr),
+            0);
+  ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+              IsOkStatus(&error));
+  EXPECT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+  if (error.release) error.release(&error);
+  adbcpq::PqResultHelper alive(
+      owner->conn(),
+      "SELECT 42,to_regclass('pg_temp.adbc_e1_missing_precision') IS NULL");
+  ASSERT_TRUE(alive.Execute().ok());
+  EXPECT_EQ(alive.Row(0)[0].ParseInteger().value(), 42);
+  EXPECT_EQ(alive.Row(0)[1].value(), "t");
+  ASSERT_THAT(AdbcConnectionRollback(&connection, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                      ADBC_OPTION_VALUE_ENABLED, &error),
+              IsOkStatus(&error));
+}
+
+// Real query/metadata execution with explicit synthetic Redshift field contexts
+// over a shared resolver; this is not a Redshift connection/transport claim.
+TEST_F(PostgresStatementTest,
+       TemporalReaderContextsAcrossNormalBoundEmptyAndCatalogPaths) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(adbcpq::DiscoverPostgresTypes(owner->conn(), profile, &resolver).ok());
+  using adbc::driver::pgwire::TemporalRepresentation;
+  const std::string projection =
+      "SELECT DATE '2000-01-01' AS d,TIME(3) '00:00:00.001' AS t,"
+      "TIMESTAMP(3) '2000-01-01 00:00:00.001' AS ts,TIMESTAMPTZ(3) '2000-01-01 "
+      "00:00:00.001+00' AS tz";
+  for (auto representation :
+       {TemporalRepresentation::kLossless, TemporalRepresentation::kArrow,
+        TemporalRepresentation::kLossless}) {
+    const bool lossless = representation == TemporalRepresentation::kLossless;
+    for (int path = 0; path < 3; ++path) {
+      const bool bound = path == 1;
+      adbcpq::PqResultArrayReader reader(owner->conn(), resolver,
+                                         projection + (bound       ? " WHERE $1=1"
+                                                       : path == 2 ? " WHERE FALSE"
+                                                                   : ""),
+                                         representation);
+      if (bound) {
+        auto lease = std::make_shared<int>(0);
+        ASSERT_TRUE(owner->TryClaimBoundStream(lease));
+        reader.SetConnection(owner, std::move(lease));
+        nanoarrow::UniqueSchema schema;
+        nanoarrow::UniqueArray array;
+        ASSERT_EQ(adbcpq::testing::ScalarSchema(schema.get(), NANOARROW_TYPE_INT32), 0);
+        ASSERT_EQ(adbcpq::testing::ScalarBatch<int32_t>(schema.get(), array.get(), {1, 1},
+                                                        nullptr),
+                  0);
+        nanoarrow::UniqueArrayStream input;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+        reader.SetBind(input.get());
+      }
+      adbc_validation::StreamReader output;
+      ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream.value).ok());
+      ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+      EXPECT_STREQ(output.schema->children[0]->format, "tdD");
+      for (int col = 1; col < 4; ++col) {
+        EXPECT_EQ(PostgresFieldMetadata(output.schema->children[col],
+                                        "ADBC:redshift:fractional_precision"),
+                  "3");
+        EXPECT_EQ(
+            PostgresFieldMetadata(output.schema->children[col], "ARROW:extension:name")
+                .has_value(),
+            lossless);
+      }
+      int rows = 0;
+      while (true) {
+        ASSERT_NO_FATAL_FAILURE(output.Next());
+        if (!output.array->release) break;
+        for (int64_t i = 0; i < output.array->length; ++i, ++rows) {
+          EXPECT_EQ(ArrowArrayViewGetIntUnsafe(output.array_view->children[0], i), 10957);
+          EXPECT_EQ(ArrowArrayViewGetIntUnsafe(output.array_view->children[1], i), 1000);
+          for (int col = 2; col < 4; ++col)
+            EXPECT_EQ(ArrowArrayViewGetIntUnsafe(output.array_view->children[col], i),
+                      lossless ? 1000 : 946684800001000);
+        }
+      }
+      EXPECT_EQ(rows, path == 2 ? 0 : bound ? 2 : 1);
+    }
+    adbcpq::PqResultHelper describe(owner->conn(), projection);
+    ASSERT_TRUE(describe.Prepare().ok());
+    ASSERT_TRUE(describe.DescribePrepared().ok());
+    adbcpq::PostgresType types;
+    ASSERT_TRUE(describe.ResolveOutputTypes(*resolver, &types, representation).ok());
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(types.SetSchema(schema.get(), "Redshift"), 0);
+    EXPECT_EQ(
+        PostgresFieldMetadata(schema->children[2], "ARROW:extension:name").has_value(),
+        lossless);
+    adbcpq::PqResultHelper params(
+        owner->conn(), "SELECT $1::TIME(3),$2::TIMESTAMP(3),$3::TIMESTAMPTZ(3)");
+    ASSERT_TRUE(params.Prepare().ok());
+    ASSERT_TRUE(params.DescribePrepared().ok());
+    ASSERT_TRUE(params.ResolveParamTypes(*resolver, &types, representation).ok());
+    schema.reset();
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(types.SetSchema(schema.get(), "Redshift"), 0);
+    for (int col = 0; col < 3; ++col) {
+      EXPECT_FALSE(PostgresFieldMetadata(schema->children[col],
+                                         "ADBC:redshift:fractional_precision"));
+      EXPECT_EQ(PostgresFieldMetadata(schema->children[col], "ARROW:extension:name")
+                    .has_value(),
+                lossless);
+    }
+  }
+  adbcpq::PqResultHelper create(owner->conn(),
+                                "CREATE TEMP TABLE adbc_e1_context(d DATE,t TIME(2),ts "
+                                "TIMESTAMP(3),tz TIMESTAMPTZ(4))");
+  ASSERT_TRUE(create.Execute().ok());
+  adbcpq::MetadataQuerySet queries(profile);
+  adbcpq::PqResultHelper table(owner->conn(), queries.TableSchema(), true);
+  ASSERT_TRUE(table.Execute({"pg_temp.adbc_e1_context"}).ok());
+  for (auto mode : {TemporalRepresentation::kArrow, TemporalRepresentation::kLossless}) {
+    adbcpq::PostgresType types;
+    ASSERT_TRUE(table.ResolveTableSchema(*resolver, &types, mode).ok());
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(types.SetSchema(schema.get(), "Redshift"), 0);
+    EXPECT_EQ(
+        PostgresFieldMetadata(schema->children[2], "ADBC:redshift:fractional_precision"),
+        "3");
+    EXPECT_EQ(
+        PostgresFieldMetadata(schema->children[2], "ARROW:extension:name").has_value(),
+        mode == TemporalRepresentation::kLossless);
+  }
+  adbcpq::PqResultHelper nsp(owner->conn(),
+                             "SELECT pg_my_temp_schema()::regnamespace::text");
+  ASSERT_TRUE(nsp.Execute().ok());
+  adbcpq::PqResultHelper columns(owner->conn(), queries.Columns(false), true);
+  ASSERT_TRUE(
+      columns.Execute({std::string(nsp.Row(0)[0].value()), "adbc_e1_context"}).ok());
+  ASSERT_EQ(columns.NumRows(), 4);
+  for (int col = 0; col < 4; ++col) {
+    auto metadata = adbcpq::ResolveColumnMetadata(columns.Row(col), profile);
+    ASSERT_TRUE(metadata.has_value());
+    EXPECT_EQ(
+        metadata.value().xdbc->xdbc_type_name,
+        adbcpq::RedshiftTemporalSchema::SqlName(adbcpq::testing::kTemporalKinds[col]));
+    if (col) EXPECT_EQ(metadata.value().xdbc->xdbc_decimal_digits, col + 1);
+  }
+}
+
 TEST_F(PostgresStatementTest, CharacterPublicBindArrayAndStreamSelectActualOfferedType) {
   for (bool stream_bind : {false, true}) {
     ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));

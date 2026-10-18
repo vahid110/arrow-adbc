@@ -52,6 +52,11 @@ inline constexpr std::string_view kRedshiftCaseSettingQuery =
 using RedshiftSettingReader =
     std::function<Status(std::string_view query, std::string* value)>;
 
+// Normalize exact quoted lookup names using a fresh setting only when ASCII
+// uppercase is present. No locale folding, truncation, SQL or session mutation.
+Status NormalizeRedshiftLookupIdentifiers(std::string* table, std::string* schema,
+                                          const RedshiftSettingReader& read_setting);
+
 // Full preflight run before replace ingest issues DROP. read_setting is called
 // only when a case-only column collision is possible.
 Status PreflightRedshiftReplace(std::string_view table, std::string_view schema,

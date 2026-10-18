@@ -57,11 +57,15 @@ rollback uncertainty handling (locally integrated d04f2d2; independent review an
 serial native/installed validation passed). Task010c4 adds checked integer/float/
 boolean read/bind/target-aware ingest and canonical identity (locally integrated
 b90664a; independent review and serial native/installed validation passed).
-Task010d implements character/binary identity, checked widths and explicit
-target-aware ingest; final local validation/review is pending. Its provisional
-plain VARBYTE limit is a native/release gate. Platform CI follows the local-first workflow.
+Task010d adds character/binary identity, checked widths and explicit target-aware
+ingest (locally integrated c07f811; independent review and all 20 serial
+native/installed validation steps passed). Its provisional plain VARBYTE limit
+is a native/release gate. Task010e1 implements DATE/TIME/TIMESTAMP/TIMESTAMPTZ
+with field-local Arrow/lossless modes, checked units/epochs and source/target
+precision; final local validation/review is pending. Native temporal endpoints,
+sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
 Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
-native character/binary boundaries, temporal value/write gaps, SUPER, HLL and spatial
+native character/binary boundaries, TIMETZ, SUPER, HLL and spatial
 work remain open before
 separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap

@@ -24,6 +24,7 @@
 #include "redshift_interval_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
+#include "redshift_temporal_test_fixture.h"
 #include "type_modifier_test_fixture.h"
 
 #if defined(_WIN32)
@@ -166,6 +167,31 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftBytesWriteFixture(
         resolver->Find(adbcpq::testing::kBytesOids[target_kind - 1], &target, &error));
     target =
         target.WithFieldDescriptor(target_width < 0 ? -1 : target_width + 4, profile);
+  }
+  return ExportParameterWire(input, input_schema, *resolver,
+                             target_kind ? &target : nullptr, array, schema);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftTemporalFixture(int batch,
+                                                                   ArrowArray* array,
+                                                                   ArrowSchema* schema) {
+  ArrowError error{};
+  return adbcpq::testing::TemporalFixture(batch, array, schema, &error);
+}
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftTemporalWriteFixture(
+    ArrowArray* input, ArrowSchema* input_schema, int target_kind, int precision,
+    ArrowArray* array, ArrowSchema* schema) {
+  if (target_kind < 0 || target_kind > 4 || precision < -1 || precision > 6)
+    return EINVAL;
+  ArrowError error{};
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(adbcpq::testing::TemporalResolver(profile, &resolver));
+  adbcpq::PostgresType target;
+  if (target_kind) {
+    NANOARROW_RETURN_NOT_OK(
+        resolver->Find(adbcpq::testing::kTemporalOids[target_kind - 1], &target, &error));
+    target = target.WithFieldDescriptor(precision, profile);
   }
   return ExportParameterWire(input, input_schema, *resolver,
                              target_kind ? &target : nullptr, array, schema);

@@ -55,11 +55,11 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | C-checked raw padding,F,NQ; O-PG | C-UTF8 single-byte/width,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | utf8 + CHAR byte width/identity |
 | VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C-checked UTF8,F,NQ; O-PG,T | C-checked UTF8/width,NQ | C-explicit/fixed default / C-target checked,NQ | C,F,T byte width/identity,NQ | utf8/large_utf8 + byte limit |
-| DATE | C,O-PG,T | C-date32,O-PG | C / C | C-name | date32 |
-| TIME / TIME WITHOUT TIME ZONE | C,O-PG,T | C-time64(us),O-PG | C / C | C-name; precision N | time64(us); endpoint decision below |
+| DATE | C-checked,F,NQ; O-PG,T | C-exact date32/date64,NQ | C-canonical / C-target exact,NQ | C,F identity/raw modifier,NQ | date32 |
+| TIME / TIME WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | time64(us) or closed int64 extension |
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
-| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C,O-PG,T | C,O-PG | C / C | C-name; precision N | timestamp(us), no timezone |
-| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C,O-PG | C,O-PG | C / C | C-name; precision N | timestamp(us, UTC), server-retained instant |
+| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us) civil or closed native-count extension |
+| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C-checked,F,NQ; O-PG | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us, UTC) or closed native-count extension |
 | INTERVAL YEAR TO MONTH | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; qualifier N | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; precision N | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
@@ -100,23 +100,27 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   parameters retain canonical family but no inferred precision/scale/width.
 - Binding: [BindStream::SetParamTypes](../../c/driver/postgresql/bind_stream.h#L144)
   derives parameter types from Arrow or explicit canonical semantic metadata;
-  Arrow NA can use inferred expected types. Known decimal/scalar/character/binary ingest targets
+  Arrow NA can use inferred expected types. Known decimal/scalar/character/binary/temporal ingest targets
   select matching binary writers and parameter OIDs together. Existing PostgreSQL `arrow.json` mapping is not SUPER.
-  Opaque readback is not safely round-trippable. TIME32/DATE64 map to candidate DB
-  types but lack matching writer cases; TIME64 accepts only microseconds.
+  Opaque readback is not safely round-trippable. Task010e1 adds checked temporal
+  units/epochs, exact DATE64 days and closed temporal native-count extensions;
+  unmarked PostgreSQL keeps its previous conversion policy.
 - Ingest: [CREATE mapping](../../c/driver/postgresql/statement.cc#L743) calls
   validated semantic declarations rather than relying on unqualified names. Task010c3 adds explicit decimal(p,s)
   and actual target descriptors to both COPY and prepared INSERT decimal writers;
   Task010c4 extends this to the six primitive numeric/boolean families; Task010d
   adds CHAR/VARCHAR/VARBYTE identity, explicit byte widths and aligned destination
-  OIDs. Other prepared parameters keep their Arrow-derived types. Native VARBYTE
+  OIDs. Task010e1 extends aligned targets to four temporal families, checking
+  source and known target precision independently. Other prepared parameters keep
+  their Arrow-derived types. Native VARBYTE
   receive/modifier/parameter qualification remains pending.
   The staged CSV helper is not selected by the supported ingest path.
 - Remaining scalar hazards: Task010c4 guards Redshift integer/float narrowing;
-  unmarked PostgreSQL retains its previous conversion policy. Timestamp
-  nanoseconds divide by 1000, as do generic interval nanoseconds. Reject overflow/nonrepresentable fractions, not silent wrapping or
-  truncation. Timestamp reader epoch overflow already errors; full Redshift range,
-  TIME 24:00 and timezone semantics still need explicit acceptance.
+  unmarked PostgreSQL retains its previous conversion policy. Task010e1 rejects
+  temporal submicrosecond remainder and checked unit/epoch overflow, including
+  source-unit epoch cancellation. Native full finite/calendar/sentinel domains
+  and negotiated temporal wire qualification remain open; generic interval
+  nanosecond conversion is separate successor work.
 - Tests: [RedshiftSmokeTest](../../c/driver/postgresql/redshift_test.cc#L387) declares
   scalar/null/edge/metadata cases, including `DECIMAL(38,0)`, but SUPER coverage is
   explicitly `JSON_SERIALIZE`, not native SELECT. [reader tests](../../c/driver/postgresql/copy/postgres_copy_reader_test.cc#L536),
@@ -255,6 +259,81 @@ may follow DDL, so no stronger table-replacement atomicity is promised. Native
 Redshift range, subnormal retention and alias/protocol qualification remain open;
 local PostgreSQL/codec/installed-consumer tests are separate evidence.
 
+## Temporal core contract (Task010e1)
+
+`adbc.redshift.temporal_representation` accepts `arrow` (default) or `lossless`
+before connection Init. Any later change, including the same value, rejects.
+Explicit use on a PostgreSQL connection rejects at Init; ordinary unconfigured
+PostgreSQL remains unchanged. Per-field contexts copy the choice without changing
+the database-shared OID resolver. Reference decoder contexts over one resolver
+are offline evidence; actual two-Redshift-connection isolation remains a live gate.
+
+DATE uses date32 with a checked native2000-to-Unix1970 day shift. Default TIME is
+time64(us) on `[0,86400000000)`; default TIMESTAMP is civil timestamp(us), and
+TIMESTAMPTZ is timestamp(us, UTC), both with checked epoch shifts. Lossless mode
+uses these exact primitive int64 extension contracts (exact JSON bytes):
+
+| Extension name | Serialized extension metadata |
+|---|---|
+| `adbc.redshift.time_us.v1` | `{"version":1,"family":"TIME","unit":"us","origin":"start_of_day","semantics":"civil"}` |
+| `adbc.redshift.timestamp_us_2000.v1` | `{"version":1,"family":"TIMESTAMP","unit":"us","epoch":"2000-01-01T00:00:00","semantics":"civil"}` |
+| `adbc.redshift.timestamptz_us_2000.v1` | `{"version":1,"family":"TIMESTAMPTZ","unit":"us","epoch":"2000-01-01T00:00:00Z","semantics":"utc_instant"}` |
+
+`ADBC:redshift:sql_type` retains canonical identity in either mode. Unknown
+versions, conflicting family/unit/epoch/metadata, children and semantic dictionaries
+reject before binding ownership/DDL; stripped int64 metadata never implies a
+temporal family. Explicit matching semantic metadata may opt PostgreSQL input
+into the shared contract for honest local testing; it changes no backend identity
+or output mode. A nonempty Arrow timestamp timezone label denotes already-UTC
+instant counts; labels are not reinterpreted as local clock offsets. Original
+server-discarded timezone names/offsets are not recoverable.
+
+The provisional **reference storage** policy accepts TIME us `[0,86400000000]`,
+with 24:00 representable only in the lossless extension. DATE int32 and timestamp
+int64 signed extrema are rejected as reserved/unqualified reference codes, not
+claimed Redshift infinities. The remaining integer space is **not** thereby SQL
+valid. Native negotiated wire, exact finite endpoints, sentinel codes, BC/no-year-
+zero calendar semantics and session-zone behavior require qualification. Lossless
+storage avoids an additional Arrow epoch overflow but does not validate SQL ranges.
+Use integer storage rather than Python datetime convenience conversion for BC,
+extreme counts or 24:00; C Data import and IPC retain the extension metadata:
+
+```python
+# batch is imported codec-produced C Data; unknown extensions retain metadata.
+exact_counts = batch.column("timestamp").cast(pa.int64()).to_pylist()
+exact_days = batch.column("date").cast(pa.int32()).to_pylist()
+# Read exact extension metadata from batch.schema.field("timestamp").metadata.
+```
+
+Inputs accept checked Arrow date32/date64, all legal time units, timestamp units
+and these closed extensions. DATE64 requires exact whole days; nanosecond input
+requires zero submicrosecond remainder. Known source and actual aligned target
+fractional precision independently require exact divisibility, before writing
+parameter bytes. Cross-family targets reject. Arbitrary SQL parameter casts have
+OID-only descriptions, so no target precision is invented or SQL rewritten.
+
+`ADBC:redshift:fractional_precision` records only understood raw modifiers:
+reference raw -1 means6, raw0..6 means itself. Missing modifiers remain unknown;
+other **read** raw modifiers remain diagnostic `ADBC:redshift:type_modifier` only,
+without invented precision. Known read precision is checked before cursor/output
+mutation. Unsupported known **source/target write** modifiers reject. These raw
+interpretations are pinned reference evidence, not qualified native PQfmod proof.
+Canonical bare DDL is implemented; explicitly requested source p0..5 CREATE,
+REPLACE or creating CREATE_APPEND rejects preDDL until native precision syntax is
+qualified, rather than silently discarding precision. This interim restriction is
+an open first-release gate. Existing-target APPEND and CREATE_APPEND honor exact known p. For an explicit
+source p0..5 CREATE_APPEND, a parameterized catalog-only probe distinguishes an
+existing exact namespace/name from absent targets, then re-resolves the actual
+target and skips all unused creation declarations. Own-TEMP discovery uses the
+implicit namespace in [CURRENT_SCHEMAS(true)](https://docs.aws.amazon.com/redshift/latest/dg/r_CURRENT_SCHEMAS.html),
+matching the pinned JDBC `nspname=ANY(current_schemas(true))` reference; uppercase
+Redshift lookup identifiers use a fresh recognized case-setting read and ASCII-only
+normalization. No missing-regclass exception, SQL parsing or retry is used; races
+surface through actual target resolution. Native own-TEMP/case behavior remains
+a qualification gate.
+The existing whole-stream transaction owner, caller-owned transaction semantics,
+rollback uncertainty retirement and result-owned UTF8 lifetime proof are retained.
+
 ## Character/binary contract (Task010d)
 
 Canonical `CHAR`, `VARCHAR` and `VARBYTE` use `ADBC:redshift:sql_type` and known
@@ -351,9 +430,9 @@ bytes or opaque fallback can satisfy the all-type milestone.
    by the server. TIMETZ needs an explicit offset-time extension/struct if an
    offset is server-retained; never silently drop it. [Arrow's type definitions](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
    exclude24:00 from Time and bound timestamp(us) to int64. At these mismatches,
-   explicit checked rejection is the current limit; a documented lossless
-   full-range representation remains a release design gate, not modulo-day wrapping,
-   infinity substitution or nanosecond truncation. Cover session timezone changes,
+   Task010e1 supplies explicit checked Arrow/lossless representations above. Native
+   full-range/calendar/sentinel qualification remains a release gate, without
+   modulo-day wrapping, infinity substitution or nanosecond truncation. Cover session timezone changes,
    DST instants and restoration after bind failure without promising server-lost information.
 5. **Both intervals.** [AWS qualifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_interval_data_types.html):
    YEAR, MONTH, YEAR TO MONTH; DAY, HOUR, MINUTE, SECOND, DAY TO HOUR,
@@ -442,12 +521,15 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **010c4 locally integrated b90664a, review/native/installed validation passed:** checked primitive
   scalar conversions, canonical identity/DDL, exact known-target append and strict
   boolean wire reads. Final platform CI follows development.
-- **010d implemented, final local validation/review pending:** CHAR/VARCHAR/VARBYTE
+- **010d locally integrated c07f811, independent FULL review and 20 validation steps passed:** CHAR/VARCHAR/VARBYTE
   read, binding, explicit DDL, target-aware append and metadata checks, with native
   format/charset/size qualification (including the provisional binary write cap)
   still open.
-- **Prepared successors, not dispatched here:** temporal value/write gaps and
-  interval writes/qualifiers; native SUPER and lossless extension/protocol decisions;
+- **010e1 implemented, final local validation/review pending:** four temporal core
+  families with connection-local Arrow/lossless contexts, exact binding, known
+  precision checks and target-aware ingest. Native wire/domain/sentinel/calendar
+  and precision DDL gates remain open.
+- **Prepared successors, not dispatched here:** TIMETZ and interval writes/qualifiers; native SUPER and lossless extension/protocol decisions;
   HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
   these phases; no arbitrary future phase number implies completion or authority.
 - **Final all-type qualification:** complete the 21-row read/bind/create/append/

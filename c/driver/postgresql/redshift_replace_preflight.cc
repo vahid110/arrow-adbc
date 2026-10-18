@@ -91,6 +91,25 @@ Status ValidateRedshiftReplaceCaseSetting(std::string_view setting) {
                 "enable_case_sensitive_identifier setting");
 }
 
+Status NormalizeRedshiftLookupIdentifiers(std::string* table, std::string* schema,
+                                          const RedshiftSettingReader& read_setting) {
+  if (!table || !schema) return Status::InvalidArgument("Missing lookup identifier");
+  auto has_upper = [](const std::string& value) {
+    return value.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos;
+  };
+  if (!has_upper(*table) && !has_upper(*schema)) return Status::Ok();
+  std::string setting;
+  UNWRAP_STATUS(read_setting(kRedshiftCaseSettingQuery, &setting));
+  if (setting != "on" && setting != "true" && setting != "off" && setting != "false")
+    return Status::InvalidArgument("Unknown Redshift identifier-case setting");
+  if (setting == "off" || setting == "false") {
+    for (auto* name : {table, schema})
+      for (char& c : *name)
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  }
+  return Status::Ok();
+}
+
 Status PreflightRedshiftReplace(std::string_view table, std::string_view schema,
                                 const std::vector<std::string_view>& columns,
                                 const RedshiftSettingReader& read_setting) {

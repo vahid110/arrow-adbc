@@ -781,6 +781,64 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     }
   }
 
+  // Only these temporal sources need to distinguish existing CREATE_APPEND
+  // from CREATE: unqualified precision syntax must never erase a requested p.
+  bool append_existing_temporal = false;
+  if (ingest_.mode == IngestMode::kCreateAppend) {
+    bool requires_existing = false;
+    for (int64_t i = 0; i < source_schema.n_children; ++i) {
+      RedshiftTemporalSchema temporal;
+      ArrowError na_error{};
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftTemporalSchema::Parse(source_schema.children[i],
+                                                    type_resolver_->is_redshift(),
+                                                    &temporal, &na_error),
+                      &na_error, error);
+      requires_existing |=
+          temporal.enabled() && temporal.precision && *temporal.precision < 6;
+    }
+    if (requires_existing) {
+      std::string target = ingest_.target;
+      std::string schema = ingest_.db_schema.empty() ? current_schema : ingest_.db_schema;
+      if (type_resolver_->is_redshift()) {
+        std::string lookup_schema = ingest_.temporary ? "" : schema;
+        auto read_setting = [conn](std::string_view query, std::string* value) -> Status {
+          PqResultHelper setting(conn, std::string(query), true);
+          UNWRAP_STATUS(setting.Execute());
+          if (setting.NumRows() != 1 || setting.NumColumns() != 1 ||
+              setting.Row(0)[0].is_null)
+            return Status(ADBC_STATUS_INVALID_DATA, "Missing identifier-case setting");
+          *value = std::string(setting.Row(0)[0].value());
+          return Status::Ok();
+        };
+        RAISE_STATUS(error, adbc::driver::pgwire::NormalizeRedshiftLookupIdentifiers(
+                                &target, &lookup_schema, read_setting));
+        if (!ingest_.temporary) schema = std::move(lookup_schema);
+      }
+      // Catalog-only query: CURRENT_SCHEMAS is leader-only on Redshift. The
+      // current session's implicit TEMP namespace is the only matching member.
+      // Do not cast a possibly missing relation to regclass or catch SQL errors:
+      // that would abort a caller-owned transaction before the pre-DDL gate.
+      PqResultHelper exists(
+          conn,
+          "SELECT cls.oid FROM pg_catalog.pg_class AS cls "
+          "INNER JOIN pg_catalog.pg_namespace AS ns ON ns.oid=cls.relnamespace "
+          "WHERE cls.relname=$1 AND " +
+              std::string(ingest_.temporary ? "substring(ns.nspname,1,8)='pg_temp_' AND "
+                                              "ns.nspname=ANY(current_schemas(true))"
+                                            : "ns.nspname=$2"),
+          type_resolver_->is_redshift());
+      RAISE_STATUS(error, exists.Execute(ingest_.temporary
+                                             ? std::vector<std::string>{target}
+                                             : std::vector<std::string>{target, schema}));
+      if (exists.NumColumns() != 1 || exists.NumRows() > 1) {
+        InternalAdbcSetError(error, "[libpq] Ambiguous CREATE_APPEND target");
+        return ADBC_STATUS_INVALID_DATA;
+      }
+      append_existing_temporal = exists.NumRows() == 1;
+    }
+  }
+
   std::string create;
 
   if (ingest_.temporary) {
@@ -858,15 +916,18 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     has_semantic_schema |=
         decimal.enabled || scalar.enabled() || bytes.enabled() || temporal.enabled();
     std::string declaration = pg_type.sql_type_name();
-    if (decimal.enabled && ingest_.mode != IngestMode::kAppend) {
+    if (decimal.enabled && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_temporal) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
                       &na_error, error);
     }
     if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
-    if (temporal.enabled() && ingest_.mode != IngestMode::kAppend)
+    if (temporal.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_temporal)
       CHECK_NA_DETAIL(INVALID_ARGUMENT, temporal.Declaration(&declaration, &na_error),
                       &na_error, error);
-    if (bytes.enabled() && ingest_.mode != IngestMode::kAppend) {
+    if (bytes.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_temporal) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, bytes.Declaration(&declaration, &na_error),
                       &na_error, error);
       // PostgreSQL has BYTEA without a width declaration. Keep the explicit
@@ -877,7 +938,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     create += " " + declaration;
   }
 
-  if (ingest_.mode == IngestMode::kAppend) {
+  if (ingest_.mode == IngestMode::kAppend || append_existing_temporal) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {

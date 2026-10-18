@@ -90,4 +90,50 @@ inline ArrowErrorCode TemporalBatch(ArrowSchema* schema, ArrowArray* array,
   }
   return ArrowArrayFinishBuildingDefault(array, error);
 }
+// Standard PostgreSQL binary reference vectors, not captured Redshift traffic.
+// Decode through the real PGresult descriptor/reader path and export its C Data.
+inline ArrowErrorCode TemporalFixture(int batch, ArrowArray* array, ArrowSchema* schema,
+                                      ArrowError* error) {
+  if (batch < 0 || batch > 4) return EINVAL;
+  const bool lossless = batch == 1 || batch == 2 || batch == 4;
+  const auto mode = lossless ? adbc::driver::pgwire::TemporalRepresentation::kLossless
+                             : adbc::driver::pgwire::TemporalRepresentation::kArrow;
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(
+      TemporalResolver(adbc::driver::pgwire::BackendProfile::Redshift(), &resolver));
+  PqResultHelper query(nullptr, "");
+  PGresult* result = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  if (!result) return ENOMEM;
+  query.SetResult(result);
+  PGresAttDesc attrs[4] = {};
+  for (int col = 0; col < 4; ++col) {
+    attrs[col].name = const_cast<char*>(kTemporalNames[col]);
+    attrs[col].typid = kTemporalOids[col];
+    attrs[col].atttypmod = col == 0 ? -1 : 6;
+    attrs[col].format = 1;
+  }
+  if (!PQsetResultAttrs(result, 4, attrs)) return ENOMEM;
+  const char* fields[4][4] = {
+      {"00000000", "0000000000000000", "0000000000000000", "0000000000000000"},
+      {"ffffd533", "000000141dd75fff", "fffca2fec4c82000", "fffca2fec4c82000"},
+      {"fff4da8b", "000000000016e360", "ffffffffffffffff", "ffffffffffffffff"},
+      {"00000001", "00000000000004d2", "0000000000000001", "0000000000000001"}};
+  const int rows = batch >= 3 ? 0 : 5;
+  for (int row = 0; row < rows; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      const bool null = row == 4;
+      const char* hex = null ? "" : fields[row][col];
+      if (batch == 2 && !null) {
+        if (col == 1 && row == 0) hex = "000000141dd76000";
+        if (col >= 2 && row == 0) hex = "7ffffffffffffffe";
+        if (col >= 2 && row == 1) hex = "8000000000000001";
+      }
+      const auto value = NumericHex(hex);
+      if (!PQsetvalue(result, row, col, null ? nullptr : const_cast<char*>(value.data()),
+                      null ? -1 : static_cast<int>(value.size())))
+        return ENOMEM;
+    }
+  }
+  return FixtureFromQuery(query, resolver, array, schema, error, mode);
+}
 }  // namespace adbcpq::testing

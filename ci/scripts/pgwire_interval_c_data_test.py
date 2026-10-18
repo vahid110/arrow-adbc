@@ -345,6 +345,181 @@ class IntervalCDataTest(unittest.TestCase):
             arrow_type, values, self.decimal_write, target, metadata
         )
 
+    def temporal_batch(self, variant):
+        array, schema = ArrowArray(), ArrowSchema()
+        self.assertEqual(
+            self.temporal_produce(variant, ctypes.byref(array), ctypes.byref(schema)),
+            0,
+        )
+        try:
+            return pa.RecordBatch._import_from_c(
+                ctypes.addressof(array), ctypes.addressof(schema)
+            )
+        finally:
+            for value in (array, schema):
+                if value.release:
+                    ctypes.CFUNCTYPE(None, ctypes.POINTER(type(value)))(value.release)(
+                        ctypes.byref(value)
+                    )
+
+    def test_temporal_codec_contexts_c_data_and_ipc_keep_exact_physical_values(self):
+        # Both schemas/arrays come from production descriptor and field readers.
+        # Compare integer storage, avoiding datetime's narrower civil calendar.
+        # Independent proleptic-Gregorian integer oracle (astronomical year0).
+        # This states Arrow day-count expectations, not a native SQL BC claim.
+        def before_year(year):
+            previous = year - 1
+            return 365 * previous + previous // 4 - previous // 100 + previous // 400
+
+        self.assertEqual(before_year(2000) - before_year(1970), 10957)
+        self.assertEqual(before_year(0) - before_year(1970), -719528)
+        for variant in (0, 1, 0, 1, 3, 4):
+            data = self.temporal_batch(variant)
+            lossless = variant in (1, 4)
+            self.assertEqual(
+                data.schema.names, ["date", "time", "timestamp", "timestamptz"]
+            )
+            self.assertEqual(data.column(0).type, pa.date32())
+            self.assertEqual(
+                data.column(1).type, pa.int64() if lossless else pa.time64("us")
+            )
+            self.assertEqual(
+                data.column(2).type, pa.int64() if lossless else pa.timestamp("us")
+            )
+            self.assertEqual(
+                data.column(3).type,
+                pa.int64() if lossless else pa.timestamp("us", "UTC"),
+            )
+            expected = [
+                [10957, 0, -719528, 10958, None],
+                [0, 86399999999, 1500000, 1234, None],
+                [0, -946684800000000, -1, 1, None],
+                [0, -946684800000000, -1, 1, None],
+            ]
+            for col in range(4):
+                values = (
+                    data.column(col)
+                    .cast(pa.int32() if col == 0 else pa.int64())
+                    .to_pylist()
+                )
+                want = [] if variant >= 3 else expected[col]
+                if not lossless and col >= 2:
+                    want = [None if x is None else x + 946684800000000 for x in want]
+                self.assertEqual(values, want)
+                field = data.schema.field(col)
+                self.assertEqual(
+                    field.metadata[b"ADBC:redshift:sql_type"],
+                    [b"DATE", b"TIME", b"TIMESTAMP", b"TIMESTAMPTZ"][col],
+                )
+                if col:
+                    self.assertEqual(
+                        field.metadata[b"ADBC:redshift:fractional_precision"], b"6"
+                    )
+                    if lossless:
+                        self.assertIn(b"ARROW:extension:name", field.metadata)
+                    else:
+                        self.assertNotIn(b"ARROW:extension:name", field.metadata)
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, data.schema) as writer:
+                writer.write_batch(data)
+            with pa.ipc.open_stream(sink.getvalue()) as reader:
+                restored = reader.read_next_batch()
+            self.assertTrue(restored.equals(data))
+            self.assertTrue(restored.schema.equals(data.schema, check_metadata=True))
+
+    def test_temporal_lossless_extrema_and_end_of_day_survive_ipc_without_datetime(
+        self,
+    ):
+        data = self.temporal_batch(2)
+        self.assertEqual(data.column(1)[0].as_py(), 86400000000)
+        for col in (2, 3):
+            self.assertEqual(
+                data.column(col).to_pylist(), [2**63 - 2, -(2**63) + 1, -1, 1, None]
+            )
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, data.schema) as writer:
+            writer.write_batch(data)
+        restored = pa.ipc.open_stream(sink.getvalue()).read_next_batch()
+        self.assertTrue(restored.equals(data))
+        # Export the imported lossless C Data field back to the actual writer.
+        # No physical int64 inference is involved: metadata supplies closed identity.
+        for col in (1, 2, 3):
+            field = restored.schema.field(col)
+            code, actual = self.encode_parameter(
+                field.type,
+                restored.column(col).to_pylist(),
+                self.temporal_write,
+                (col + 1, 6),
+                field.metadata,
+            )
+            self.assertEqual(code, 0)
+            first = [
+                "00000008000000141dd76000",
+                "000000087ffffffffffffffe",
+                "000000087ffffffffffffffe",
+            ][col - 1]
+            self.assertEqual(actual[0].hex(), first)
+            self.assertIsNone(actual[-1])
+
+    def test_temporal_consumer_units_precision_and_closed_metadata_reach_writer(self):
+        for arrow_type, family, value, target, expected in [
+            (pa.date32(), b"DATE", 10957, 1, "0000000400000000"),
+            (pa.date64(), b"DATE", -86400000, 1, "00000004ffffd532"),
+            (pa.time32("s"), b"TIME", 1, 2, "0000000800000000000f4240"),
+            (pa.time32("ms"), b"TIME", 1, 2, "0000000800000000000003e8"),
+            (pa.time64("ns"), b"TIME", 1000, 2, "000000080000000000000001"),
+            (
+                pa.timestamp("ms"),
+                b"TIMESTAMP",
+                9224318015999999,
+                3,
+                "000000087fffff5bb3b29c18",
+            ),
+            (
+                pa.timestamp("s", "Asia/Kathmandu"),
+                b"TIMESTAMPTZ",
+                9224318015999,
+                4,
+                "000000087fffff5bb3a35dc0",
+            ),
+        ]:
+            code, actual = self.encode_parameter(
+                arrow_type,
+                [value, None],
+                self.temporal_write,
+                (target, 6),
+                {b"ADBC:redshift:sql_type": family},
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(actual, [bytes.fromhex(expected), None])
+        for arrow_type, family, value, precision in [
+            (pa.date64(), b"DATE", 1, None),
+            (pa.time64("ns"), b"TIME", 1001, None),
+            (pa.time64("us"), b"TIME", 86400000000, None),
+            (pa.timestamp("us"), b"TIMESTAMP", 946684800001234, b"3"),
+        ]:
+            metadata = {b"ADBC:redshift:sql_type": family}
+            if precision:
+                metadata[b"ADBC:redshift:fractional_precision"] = precision
+            code, actual = self.encode_parameter(
+                arrow_type, [value], self.temporal_write, (0, 6), metadata
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIsNone(actual)
+        field = self.temporal_batch(1).schema.field(1)
+        for key, value in [
+            (b"ARROW:extension:name", b"adbc.redshift.time_us.v2"),
+            (b"ARROW:extension:metadata", b"{}"),
+            (b"ADBC:redshift:sql_type", b"TIMESTAMP"),
+        ]:
+            metadata = dict(field.metadata)
+            metadata[key] = value
+            code, actual = self.encode_parameter(
+                pa.int64(), [1], self.temporal_write, (0, 6), metadata
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIsNone(actual)
+
     def encode_scalar(self, arrow_type, values, target=0, metadata=None):
         return self.encode_parameter(
             arrow_type, values, self.scalar_write, (target,), metadata
@@ -658,4 +833,14 @@ if __name__ == "__main__":
     IntervalCDataTest.bytes_write = staticmethod(library.AdbcRedshiftBytesWriteFixture)
     IntervalCDataTest.bytes_write.argtypes = IntervalCDataTest.decimal_write.argtypes
     IntervalCDataTest.bytes_write.restype = ctypes.c_int
+    IntervalCDataTest.temporal_produce = staticmethod(
+        library.AdbcRedshiftTemporalFixture
+    )
+    IntervalCDataTest.temporal_produce.argtypes = IntervalCDataTest.produce.argtypes
+    IntervalCDataTest.temporal_produce.restype = ctypes.c_int
+    IntervalCDataTest.temporal_write = staticmethod(
+        library.AdbcRedshiftTemporalWriteFixture
+    )
+    IntervalCDataTest.temporal_write.argtypes = IntervalCDataTest.decimal_write.argtypes
+    IntervalCDataTest.temporal_write.restype = ctypes.c_int
     unittest.main(verbosity=2)

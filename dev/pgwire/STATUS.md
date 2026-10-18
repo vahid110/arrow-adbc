@@ -54,11 +54,15 @@ Current state only; history is in git and PR descriptions.
   independent review and serial native/installed tests passed). Task010c4 adds
   checked integer/float/boolean binding, canonical DDL/metadata and target-aware
   append (locally integrated b90664a; independent review and serial native/installed
-  validation passed). Task010d implements checked character/binary identity,
-  widths, explicit DDL and target-aware append; final local validation/review is
-  pending, including a provisional VARBYTE plain-route size gate. Synthetic/local PostgreSQL
+  validation passed). Task010d adds checked character/binary identity, widths, explicit DDL and
+  target-aware append (locally integrated c07f811; independent review and all 20
+  serial native/installed validation steps passed), retaining a provisional
+  VARBYTE plain-route size gate. Task010e1 implements four temporal core families
+  with immutable per-connection Arrow/lossless output contexts, exact binding and
+  target-aware ingest; final local validation/review is pending. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.
-  Native character/binary boundaries, interval writes/qualifiers, temporal, SUPER,
+  Native temporal wire/domain/precision and character/binary boundaries, TIMETZ,
+  interval writes/qualifiers, SUPER,
   HLL and spatial work remain
   required before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
