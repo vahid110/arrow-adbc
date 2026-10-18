@@ -128,6 +128,31 @@ else()
 endif()
 
 if(ADBC_BUILD_TESTS)
+  # Observer/test code is excluded from both driver source and install lists.
+  add_test_case(native_protocol_capture_test
+                PREFIX
+                adbc
+                EXTRA_LABELS
+                protocol-observation
+                SOURCES
+                ../pgwire/native_protocol_capture.cc
+                ../pgwire/native_protocol_capture_test.cc
+                EXTRA_LINK_LIBS
+                ${LIBPQ_LINK_LIBRARIES})
+  target_compile_features(adbc-native-protocol-capture-test PRIVATE cxx_std_20)
+  target_include_directories(adbc-native-protocol-capture-test SYSTEM
+                             PRIVATE ${LIBPQ_INCLUDE_DIRS})
+  if(UNIX)
+    # Explicit root-only own-PG test; never a default test or installed client.
+    add_executable(adbc-native-protocol-capture-plumbing-test EXCLUDE_FROM_ALL
+                   ../pgwire/native_protocol_capture.cc
+                   ../pgwire/native_protocol_capture_plumbing_test.cc)
+    target_compile_features(adbc-native-protocol-capture-plumbing-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-capture-plumbing-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
+    target_link_libraries(adbc-native-protocol-capture-plumbing-test
+                          PRIVATE ${LIBPQ_LINK_LIBRARIES})
+  endif()
   # This small test-only producer exports C Data from the actual catalog/schema/
   # field codec. It is excluded from normal installs and every driver artifact.
   add_library(adbc_redshift_interval_test_fixture SHARED

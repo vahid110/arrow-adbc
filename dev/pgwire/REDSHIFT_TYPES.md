@@ -647,9 +647,12 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **010e2 locally integrated 35584f5, independent FULL approval and 24 validation steps passed:** both interval families,
   all 13 qualifier identities and precision 0..6, exact reference writes/DDL and
   raw diagnostic catalog observation. Native target producer mapping remains open.
-- **010e3 implemented, final local FULL validation/review pending:** explicit TIMETZ fixed-offset
+- **010e3 locally integrated e2df066, independent FULL approval and 25 validation steps passed:** explicit TIMETZ fixed-offset
   struct, checked reference codecs, source/actual-target precision and bare DDL.
   Native layout/domain/offset/precision qualification remains open.
+- **010f0 implemented, final local validation/review pending:** noninstalled bounded
+  raw-protocol observations and fixed probe plans, not a native executor or type codec.
+  See [the observation boundary](native-protocol-observation.md).
 - **Prepared successors, not dispatched here:** native SUPER and lossless extension/protocol decisions;
   HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
   these phases; no arbitrary future phase number implies completion or authority.

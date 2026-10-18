@@ -185,3 +185,29 @@ redshift_exc = executable(
     dependencies: [libpq_dep, gtest_main_dep, fmt_dep, nanoarrow_dep],
 )
 test('adbc-driver-redshift', redshift_exc)
+
+# Noninstalled protocol observer; no driver runtime or fixture authorization path.
+protocol_capture = executable(
+    'adbc-native-protocol-capture-test',
+    sources: [
+        '../pgwire/native_protocol_capture.cc',
+        '../pgwire/native_protocol_capture_test.cc',
+    ],
+    dependencies: [libpq_dep, gtest_main_dep],
+    override_options: ['cpp_std=c++20'],
+    install: false,
+)
+test('adbc-native-protocol-capture', protocol_capture, timeout: 30)
+if host_machine.system() != 'windows'
+    executable(
+        'adbc-native-protocol-capture-plumbing-test',
+        sources: [
+            '../pgwire/native_protocol_capture.cc',
+            '../pgwire/native_protocol_capture_plumbing_test.cc',
+        ],
+        dependencies: [libpq_dep],
+        override_options: ['cpp_std=c++20'],
+        build_by_default: false,
+        install: false,
+    )
+endif

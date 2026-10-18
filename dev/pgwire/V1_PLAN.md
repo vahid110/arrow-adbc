@@ -68,7 +68,9 @@ validation steps passed). Task010e2 supplies versioned interval contracts for al
 independent FULL approval and all 24 serial validation steps passed).
 Task010e3 implements the fixed-offset TIMETZ struct/reference codec, explicit
 source precision, actual-target precision checks and bounded bare declarations;
-final local FULL validation/review is pending. Native interval constraint
+locally integrated e2df066 after independent FULL approval and all 25 serial
+validation steps. Task010f0 adds a noninstalled bounded protocol observer and
+fixed plans; final local validation/review is pending. Native interval constraint
 producers remain unqualified, blocking actual
 target writes even for NULL/empty input. Native temporal endpoints,
 sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.

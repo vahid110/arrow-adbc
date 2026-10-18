@@ -176,7 +176,11 @@ jobs:
           cmake --build build/pgwire-ci
           --target adbc-driver-postgresql-test adbc-driver-postgresql-copy-test
           adbc-driver-redshift-test adbc-driver-redshift-interval-recording-test
+          adbc-native-protocol-capture-test
           --parallel 4
+
+      - name: Observe protocol fixtures without a socket
+        run: ctest --test-dir build/pgwire-ci --output-on-failure --no-tests=error -R '^adbc-native-protocol-capture-test$'
 
       - name: Run PostgreSQL tests
         run: ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
@@ -219,13 +223,15 @@ jobs:
             adbc-driver-postgresql-test \
             adbc-driver-postgresql-copy-test \
             adbc-driver-redshift-test \
-            adbc-driver-redshift-interval-recording-test
+            adbc-driver-redshift-interval-recording-test \
+            adbc-native-protocol-capture-test
           meson test -C build/pgwire-meson --no-rebuild --num-processes 1 \
             --print-errorlogs \
             adbc-driver-postgresql \
             adbc-driver-postgresql-copy \
             adbc-driver-redshift \
-            adbc-driver-redshift-interval-recording
+            adbc-driver-redshift-interval-recording \
+            adbc-native-protocol-capture
 
   cpp-macos:
     name: C++ / PostgreSQL 18 (${{ matrix.platform }})
@@ -277,6 +283,7 @@ jobs:
         run: |
           ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
           ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
+          ctest --test-dir build/pgwire-ci --output-on-failure --no-tests=error -R '^adbc-native-protocol-capture-test$'
 
       - name: Install and test the Redshift driver through the driver manager
         run: |
