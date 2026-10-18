@@ -205,7 +205,7 @@ class SyntheticInstall:
         raw = io.BytesIO()
         with tarfile.open(fileobj=raw, mode="w:gz") as archive:
             archive.add(self.prefix, arcname="test-prefix", recursive=True)
-            archive.add(self.client, arcname="test-client")
+            archive.add(self.client, arcname="test-client/adbc_redshift_install_smoke")
         old = self.bundle.package["c_archive"]
         self.bundle.package["c_archive"] = self.bundle.put(
             self.bundle.artifacts, old.path, raw.getvalue()
@@ -411,6 +411,56 @@ class LocalInstallTest(unittest.TestCase):
         path.write_bytes(original)
         f.observe()
 
+    def test_client_member_requires_exact_named_regular_path(self):
+        f = self.fixture
+        path = f.bundle.artifacts / f.bundle.package["c_archive"].path
+        original_bytes = path.read_bytes()
+        with tarfile.open(fileobj=io.BytesIO(original_bytes), mode="r:gz") as archive:
+            entries = [
+                (
+                    copy.copy(member),
+                    archive.extractfile(member).read() if member.isfile() else None,
+                )
+                for member in archive
+            ]
+        client_name = "test-client/adbc_redshift_install_smoke"
+        self.assertEqual(
+            [
+                member.name
+                for member, _ in entries
+                if member.isfile() and member.name.startswith("test-client")
+            ],
+            [client_name],
+        )
+        f.observe()
+        client, data = next(
+            (member, data) for member, data in entries if member.name == client_name
+        )
+        unrelated = [
+            (member, data)
+            for member, data in entries
+            if not member.name.startswith("test-client")
+        ]
+        for wrong in (
+            "test-client",
+            "test-client/wrong-name",
+            "other-client/adbc_redshift_install_smoke",
+        ):
+            changed = copy.copy(client)
+            changed.name = wrong
+            trial = unrelated + [(changed, data)]
+            raw = io.BytesIO()
+            with tarfile.open(fileobj=raw, mode="w:gz") as archive:
+                for member, body in trial:
+                    archive.addfile(
+                        member, io.BytesIO(body) if body is not None else None
+                    )
+            f.replace_artifact("c_archive", raw.getvalue())
+            with self.subTest(wrong=wrong):
+                self.rejected()
+        f.replace_artifact("c_archive", original_bytes)
+        f.observe()
+
     def test_tar_and_zip_never_extract_or_accept_aliases_specials_duplicates(self):
         f = self.fixture
         tar_path = f.bundle.artifacts / f.bundle.package["c_archive"].path
@@ -439,7 +489,7 @@ class LocalInstallTest(unittest.TestCase):
             [
                 (member, data)
                 for member, data in original
-                if member.name != "test-client"
+                if member.name != "test-client/adbc_redshift_install_smoke"
             ],
         ]
         for entries in cases:

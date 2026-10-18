@@ -392,7 +392,7 @@ def _c_inventory(artifact, prefix, client, selected):
             if name == "test-prefix":
                 require(member.isdir(), "invalid-member")
                 continue
-            if name == "test-client":
+            if name == "test-client/adbc_redshift_install_smoke":
                 require(member.isfile() and not found_client, "invalid-member")
                 data = _body(archive.extractfile(member), member.size, bounds)
                 require(
