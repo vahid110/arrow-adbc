@@ -20,6 +20,7 @@
 import ctypes
 import sys
 import unittest
+from decimal import Decimal
 
 import pyarrow as pa
 
@@ -142,6 +143,98 @@ class IntervalCDataTest(unittest.TestCase):
             for column in batch.columns:
                 self.assertEqual(column.null_count, 0 if empty else 1)
 
+    def test_decimal_reference_values_from_production_reader_across_batches(self):
+        # Independent exact strings; no float or context-rounded scaleb operation.
+        expected = [
+            ["9", "-9", "0"],
+            ["999999999999999999", "-999999999999999999", "1"],
+            ["9223372036854775807", "-9223372036854775808", "9999999999999999999"],
+            ["99999999999999999999", "0", "1"],
+            [
+                "99999999999999999999999999999999999999",
+                "-99999999999999999999999999999999999999",
+                "0",
+            ],
+            ["1.25", "-1.23", "0.00"],
+            [
+                "9.9999999999999999999999999999999999999",
+                "-0.0000000000000000000000000000000000001",
+                "0.0000000000000000000000000000000000000",
+            ],
+            [
+                "0.99999999999999999999999999999999999999",
+                "0.00000000000000000000000000000000000001",
+                "0.00000000000000000000000000000000000000",
+            ],
+        ]
+        unknown = ["-12345678901234567890.0012300", "0.12345678", "0.0000"]
+        schema = None
+        for batch_id in range(4):
+            array = ArrowArray()
+            c_schema = ArrowSchema()
+            self.assertEqual(
+                self.decimal_produce(
+                    batch_id, ctypes.byref(array), ctypes.byref(c_schema)
+                ),
+                0,
+            )
+            batch = pa.RecordBatch._import_from_c(
+                ctypes.addressof(array), ctypes.addressof(c_schema)
+            )
+            if schema is None:
+                schema = batch.schema
+            else:
+                self.assertTrue(schema.equals(batch.schema, check_metadata=True))
+            rows = (
+                [0, 1, 2, None]
+                if batch_id == 0
+                else [2, 1]
+                if batch_id == 1
+                else []
+                if batch_id == 2
+                else [None]
+            )
+            for col, (precision, scale) in enumerate(
+                [
+                    (1, 0),
+                    (18, 0),
+                    (19, 0),
+                    (20, 0),
+                    (38, 0),
+                    (10, 2),
+                    (38, 37),
+                    (38, 38),
+                ]
+            ):
+                self.assertEqual(
+                    batch.schema.field(col).type, pa.decimal128(precision, scale)
+                )
+                self.assertEqual(
+                    batch.column(col).to_pylist(),
+                    [
+                        None if row is None else Decimal(expected[col][row])
+                        for row in rows
+                    ],
+                )
+                self.assertEqual(
+                    batch.schema.field(col).metadata[b"ADBC:redshift:sql_type"],
+                    b"DECIMAL",
+                )
+            self.assertEqual(
+                batch.column(8).to_pylist(),
+                [None if row is None else unknown[row] for row in rows],
+            )
+            self.assertEqual(batch.schema.field(8).type, pa.string())
+            self.assertEqual(
+                batch.schema.field(8).metadata[b"ADBC:redshift:sql_type"], b"DECIMAL"
+            )
+            self.assertNotIn(b"ARROW:extension:name", batch.schema.field(8).metadata)
+            self.assertNotIn(b"ADBC:redshift:precision", batch.schema.field(8).metadata)
+            self.assertEqual(
+                batch.column(9).to_pylist(),
+                [None if row is None else 42 for row in rows],
+            )
+
 
 if __name__ == "__main__":
     library = ctypes.CDLL(sys.argv.pop(1))
@@ -157,4 +250,7 @@ if __name__ == "__main__":
     )
     IntervalCDataTest.modifier_produce.argtypes = IntervalCDataTest.produce.argtypes
     IntervalCDataTest.modifier_produce.restype = ctypes.c_int
+    IntervalCDataTest.decimal_produce = staticmethod(library.AdbcRedshiftDecimalFixture)
+    IntervalCDataTest.decimal_produce.argtypes = IntervalCDataTest.produce.argtypes
+    IntervalCDataTest.decimal_produce.restype = ctypes.c_int
     unittest.main(verbosity=2)

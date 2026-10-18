@@ -50,7 +50,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | SMALLINT / INT2 | C,O-PG,T | C,O-PG | C / C | C-name | int16 |
 | INTEGER / INT / INT4 | C,O-PG,T | C,O-PG,T | C / C,T | C-name,T | int32 |
 | BIGINT / INT8 | C,O-PG,T,L | C,O-PG,L | C,L / C,L | C-name,L | int64 |
-| DECIMAL / NUMERIC | C-string,O-PG,T | C-decimal,O-PG | C-defaults / C | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
+| DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-decimal,O-PG | C-defaults / C | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
 | REAL / FLOAT4 | C,O-PG,T | C,O-PG | C / C | C-name | float32 |
 | DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T | C,O-PG | C / C | C-name | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C,F byte width; NQ | utf8 + CHAR width/identity |
@@ -88,8 +88,9 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   requests **binary** extended-query output and parameters, then calls
   `MakeCopyFieldReader`. Backend `kText` means non-COPY execution, not text wire
   fields. [SetSchema](../../c/driver/postgresql/postgres_type.h#L216) maps numeric
-  to string with `arrow.opaque`, TIMETZ to opaque binary, and generic PostgreSQL
-  interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
+  to string with `arrow.opaque` for PostgreSQL; Redshift uses decimal128 for known
+  p/s and exact UTF-8 for unknown descriptors. TIMETZ maps to opaque binary and
+  generic PostgreSQL interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
   interval IDs and strict family readers; neither uses the PostgreSQL interval codec. Unknown bytes can be useful diagnostics without proving a native codec.
 - Modifiers: Task010c1 retains `PQfmod` per field in
   [ResolveOutputTypes](../../c/driver/postgresql/result_helper.cc), including the
@@ -152,8 +153,8 @@ The [pinned AWS JDBC arithmetic](https://github.com/aws/amazon-redshift-jdbc-dri
 is reference evidence, not a captured native descriptor. Unsupported encodings
 keep raw diagnostics without fabricated defaults. Interval/temporal precision,
 qualifiers, VARBYTE and other modifier meanings remain unknown. PostgreSQL's
-public schema metadata policy stays unchanged. Numeric storage remains its
-existing string/opaque representation; this metadata is not a new value codec.
+public schema metadata policy stays unchanged. Task010c2 uses these descriptors for decimal128 reads; unknown Redshift numeric
+modifiers keep exact UTF-8 text with DECIMAL identity and no opaque label.
 
 Catalogs describe views/derived expressions too, so both schema/catalog readers
 retain the full read envelope above. This does not authorize wider stored-column
@@ -164,6 +165,28 @@ remains open. [Character results](https://docs.aws.amazon.com/redshift/latest/dg
 may reach 16M bytes despite narrower stored-column limits. GetObjects emits known
 numeric precision/scale/radix or character column-size/octet-length; unknown
 values remain null. CREATE/append validation is a separate future writer task.
+
+## Decimal reference reads (Task010c2)
+
+Known Redshift numeric descriptors produce decimal128(p,s); missing/unsupported
+modifiers produce exact UTF-8 decimal text with DECIMAL identity. Schemas do not
+sample values or change between batches. Finite sign/header/digit/length checks,
+field isolation, precision checks and exact rescaling reject malformed values,
+nonfinite signs, hidden nonzero fractions and overflow before appending a value.
+Extra trailing zeroes may rescale exactly. SQL NULL remains distinct from zero.
+Unknown text retains display-scale trailing zeroes and normalizes signed zero.
+
+The tested wire reference is [PostgreSQL 18 numeric_send](https://github.com/postgres/postgres/blob/3d6a828938a5fa0444275d3d2f67b64ec3199eb7/src/backend/utils/adt/numeric.c),
+base-10000 numeric binary, matching this
+driver's existing libpq binary path; it does not select formats by payload length
+or substitute the AWS Python connector's negotiated scaled-integer format. The
+reference's int16 count/weight and 14-bit display scale bound per-field work and
+text allocation. PostgreSQL's existing public schema/reader stays unchanged.
+Literal reference vectors, actual normal/bound/empty PostgreSQL plumbing and
+codec-produced C Data/PyArrow decimals are offline evidence, **not captured
+Redshift traffic**. Native precision19 coefficient limits, scale37/38 boundaries
+and actual libpq protocol qualification remain open; decimal DDL/binds/append
+are unchanged and remain separate first-release work.
 
 ## Recommended lossless contract and acceptance
 
@@ -290,11 +313,14 @@ must be reviewed before implementation; an unresolved representation blocks rele
   from driver artifacts and normal installs. Native libpq-path qualification is
   still pending a separately admitted installed-artifact batch, with its own finite
   authority; this slice does not complete Task010.
-- **010c1 implemented, review/CI pending:** per-field descriptor plumbing and
+- **010c1 merged (PR23), offline CI passed:** per-field descriptor plumbing and
   bounded Redshift schema/GetObjects metadata, including normal/bound/empty query
   readers and OID-only parameter identity. Synthetic descriptor/C Data and local
-  PostgreSQL regressions cover the actual parser/consumer seams; no new native
-  numeric codec or write support is claimed.
+  PostgreSQL regressions cover the actual parser/consumer seams.
+- **010c2 implemented, review/CI pending:** known numeric p/s selects decimal128;
+  unknown modifiers keep exact decimal text. Strict finite base-10000 reference
+  fields pass through the production reader and C Data import tests. Native
+  Redshift/libpq format/boundary qualification and all writes remain pending.
 - **010c successors:** scalar/decimal/temporal value/write gaps, native-format
   evidence, faithful DDL/target-aware append, legal declaration bounds and loss checks.
 - **010d:** native SUPER plus supported-size binding/ingest, with the extension/

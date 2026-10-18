@@ -186,6 +186,14 @@ class PostgresType {
 
   std::optional<int32_t> type_modifier() const { return type_modifier_; }
 
+  bool is_redshift_numeric() const {
+    return redshift_descriptor_ && type_id_ == PostgresTypeId::kNumeric;
+  }
+  std::optional<int32_t> numeric_precision() const {
+    return modifier_metadata_.precision;
+  }
+  std::optional<int32_t> numeric_scale() const { return modifier_metadata_.scale; }
+
   PostgresType Array(uint32_t oid = 0, const std::string& typname = "") const {
     PostgresType out(PostgresTypeId::kArray);
     out.AppendChild("item", *this);
@@ -264,9 +272,15 @@ class PostgresType {
 
       // ---- Numeric/Decimal-------------------
       case PostgresTypeId::kNumeric:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
-        NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
-
+        if (is_redshift_numeric() && numeric_precision() && numeric_scale()) {
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDecimal(
+              schema, NANOARROW_TYPE_DECIMAL128, *numeric_precision(), *numeric_scale()));
+        } else {
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
+          if (!is_redshift_numeric()) {
+            NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
+          }
+        }
         break;
 
       // ---- Binary/string --------------------
