@@ -2081,8 +2081,9 @@ TEST_F(PostgresStatementTest, CharacterPublicBindArrayAndStreamSelectActualOffer
       ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
                   IsOkStatus(&error));
     adbc_validation::StreamReader result;
-    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &result.stream, nullptr, &error),
-                IsOkStatus(&error));
+    ASSERT_THAT(
+        AdbcStatementExecuteQuery(&statement, &result.stream.value, nullptr, &error),
+        IsOkStatus(&error));
     ASSERT_NO_FATAL_FAILURE(result.GetSchema());
     int row = 0;
     const char* expected[] = {"612020", "", nullptr};
@@ -2102,7 +2103,7 @@ TEST_F(PostgresStatementTest, CharacterPublicBindArrayAndStreamSelectActualOffer
       }
     }
     EXPECT_EQ(row, 3);
-    if (result.stream.release) result.stream.release(&result.stream);
+    if (result.stream->release) result.stream->release(&result.stream.value);
     ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
   }
 }
@@ -2138,7 +2139,7 @@ TEST_F(PostgresStatementTest, CharacterMetadataOnActualNormalBoundEmptyAndCatalo
       reader.SetBind(stream.get());
     }
     adbc_validation::StreamReader output;
-    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream).ok());
+    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream.value).ok());
     ASSERT_NO_FATAL_FAILURE(output.GetSchema());
     EXPECT_EQ(PostgresFieldMetadata(output.schema->children[0], "ADBC:redshift:sql_type"),
               "CHAR");
@@ -4930,7 +4931,7 @@ TEST_F(PostgresStatementTest,
       reader.SetBind(bind.get());
     }
     adbc_validation::StreamReader output;
-    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream).ok());
+    ASSERT_TRUE(reader.ToArrayStream(nullptr, &output.stream.value).ok());
     if (mode == 2) {
       ASSERT_NO_FATAL_FAILURE(output.GetSchema());
       ASSERT_NO_FATAL_FAILURE(output.Next());
@@ -4955,7 +4956,7 @@ TEST_F(PostgresStatementTest,
       EXPECT_FALSE(output.array->release);
     }
     ASSERT_NO_FATAL_FAILURE(output.GetSchema());
-    if (output.stream.release) output.stream.release(&output.stream);
+    if (output.stream->release) output.stream->release(&output.stream.value);
   }
 }
 
