@@ -57,7 +57,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C,O-PG,T | C,O-PG | C / C | C-name; precision N | timestamp(us), no timezone |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C,O-PG | C,O-PG | C / C | C-name; precision N | timestamp(us, UTC), server-retained instant |
-| INTERVAL YEAR TO MONTH | C-opaque,NQ | N family mapping | N / N | C-name only | month_interval (signed months) |
+| INTERVAL YEAR TO MONTH | C-opaque,NQ | N family mapping | N / N | C-name only | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | C-opaque,NQ | N family mapping | N / N | C-name only | duration(us) + interval family/qualifier |
 | BOOLEAN / BOOL | C,O-PG,T | C,O-PG | C / C | C-name | bool |
 | HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
@@ -184,8 +184,12 @@ bytes or opaque fallback can satisfy the all-type milestone.
 5. **Both intervals.** [AWS qualifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_interval_data_types.html):
    YEAR, MONTH, YEAR TO MONTH; DAY, HOUR, MINUTE, SECOND, DAY TO HOUR,
    DAY TO MINUTE, DAY TO SECOND, HOUR TO MINUTE, HOUR TO SECOND, MINUTE TO SECOND. SECOND-bearing forms accept fractional
-   precision 0..6. Prefer Arrow month_interval for signed months and duration(us)
+   precision 0..6. Prefer month_day_nano_interval with (months,0,0) and duration(us)
    for day/second signed elapsed microseconds, retaining SQL family/qualifier.
+   [PyArrow](https://github.com/apache/arrow/blob/main/python/pyarrow/types.py#L47)
+   does not support month-only/day-time interval types; the month/day/nanosecond
+   layout avoids a C-only result. Require actual installed C and Python import
+   tests; year/month uses zero days/nanoseconds, with no multiplication.
    Do not convert calendar months to days, use millisecond day_time (loses fractions),
    or multiply the whole int64 duration into nanoseconds. Check signs, zero,
    boundaries, null/empty/mixed projections, malformed lengths and all qualifiers;
@@ -237,7 +241,8 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **010b next:** the two interval families' discovery/native read/schema/metadata
   only. Use backend-owned family classification with dynamic catalog OIDs; separate
   proposed 4/8-byte fixture formats from the pinned AWS reference and Arrow
-  month_interval/duration(us); libpq-path qualification remains pending and
+  month_day_nano_interval(months,0,0)/duration(us); actual installed C/Python
+  import checks are required, libpq-path qualification remains pending and
   unsupported field widths must reject. Carry canonical
   family identity consistently in result/empty/ExecuteSchema/GetTableSchema;
   recover qualifier/precision only from validated metadata, otherwise report unknown.
