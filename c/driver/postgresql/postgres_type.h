@@ -28,6 +28,7 @@
 #include <nanoarrow/nanoarrow.hpp>
 
 #include "driver/pgwire/backend.h"
+#include "redshift_bytes.h"
 #include "redshift_decimal.h"
 #include "redshift_scalar.h"
 
@@ -183,12 +184,22 @@ class PostgresType {
     out.redshift_descriptor_ =
         profile.kind == adbc::driver::pgwire::BackendKind::kRedshift;
     out.modifier_metadata_ = profile.DescribeTypeModifier(typname_, raw);
+    if (out.modifier_metadata_.sql_type == "VARBYTE" &&
+        type_id_ != PostgresTypeId::kBytea)
+      out.modifier_metadata_ = {};
     return out;
   }
 
   std::optional<int32_t> type_modifier() const { return type_modifier_; }
 
   bool is_redshift_descriptor() const { return redshift_descriptor_; }
+  RedshiftBytesKind bytes_kind() const {
+    if (type_id_ == PostgresTypeId::kBpchar) return RedshiftBytesKind::kChar;
+    if (type_id_ == PostgresTypeId::kVarchar || type_id_ == PostgresTypeId::kText)
+      return RedshiftBytesKind::kVarchar;
+    if (type_id_ == PostgresTypeId::kBytea) return RedshiftBytesKind::kVarbyte;
+    return RedshiftBytesKind::kNone;
+  }
   RedshiftScalarKind scalar_kind() const {
     switch (type_id_) {
       case PostgresTypeId::kInt2:
@@ -437,6 +448,10 @@ class PostgresType {
                                                    const ArrowSchema* schema,
                                                    ArrowError* error);
 
+  static ArrowErrorCode ValidateBytesWriteSchema(const PostgresTypeResolver& resolver,
+                                                 const ArrowSchema* schema,
+                                                 ArrowError* error);
+
   static ArrowErrorCode ValidateScalarWriteSchema(const PostgresTypeResolver& resolver,
                                                   const ArrowSchema* schema,
                                                   ArrowError* error);
@@ -629,13 +644,30 @@ class PostgresTypeResolver {
     }
   }
 
+  uint32_t GetBytesOID(RedshiftBytesKind kind) const {
+    if (!is_redshift()) {
+      const auto id = kind == RedshiftBytesKind::kChar      ? PostgresTypeId::kBpchar
+                      : kind == RedshiftBytesKind::kVarchar ? PostgresTypeId::kVarchar
+                                                            : PostgresTypeId::kBytea;
+      return GetOID(id);
+    }
+    for (const auto& entry : mapping_) {
+      const auto& type = entry.second;
+      if (type.bytes_kind() == kind &&
+          profile_.DescribeTypeModifier(type.typname(), std::nullopt).sql_type ==
+              RedshiftBytesSchema::SqlName(kind))
+        return type.oid();
+    }
+    return 0;
+  }
+
   // Insert a type into this resolver. Returns NANOARROW_OK on success
   // or places a null-terminated error message into error otherwise. The order
   // of Inserts matters: Non-array types must be inserted before the corresponding
   // array types and class definitions must be inserted before the corresponding
   // class type using InsertClass().
   ArrowErrorCode Insert(const Item& item, ArrowError* error) {
-    auto result = base_.find(item.typreceive);
+    auto result = base_.find(std::string(profile_.CanonicalTypeReceive(item.typreceive)));
     PostgresType base;
 
     if (result == base_.end()) {
@@ -831,12 +863,31 @@ inline ArrowErrorCode PostgresType::ValidateScalarWriteSchema(
   return validate(validate, schema, false);
 }
 
+inline ArrowErrorCode PostgresType::ValidateBytesWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  auto validate = [&](auto&& self, const ArrowSchema* node,
+                      bool dictionary) -> ArrowErrorCode {
+    if (!node) return NANOARROW_OK;
+    RedshiftBytesSchema bytes;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::Parse(node, resolver.is_redshift(), &bytes, error));
+    if (dictionary && bytes.enabled())
+      return RedshiftBytesSchema::Invalid(
+          error, "dictionary character/binary writes unsupported");
+    for (int64_t i = 0; i < node->n_children; ++i)
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary));
+    return self(self, node->dictionary, true);
+  };
+  return validate(validate, schema, false);
+}
+
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateDecimalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateScalarWriteSchema(resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(ValidateBytesWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
   RedshiftDecimalSchema decimal;
@@ -844,6 +895,12 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
       RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));
   if (decimal.enabled) {
     return resolver.Find(resolver.GetOID(PostgresTypeId::kNumeric), out, error);
+  }
+  RedshiftBytesSchema bytes;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftBytesSchema::Parse(schema, resolver.is_redshift(), &bytes, error));
+  if (bytes.enabled()) {
+    return resolver.Find(resolver.GetBytesOID(bytes.kind), out, error);
   }
   RedshiftScalarSchema scalar;
   NANOARROW_RETURN_NOT_OK(

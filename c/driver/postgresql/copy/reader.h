@@ -621,8 +621,12 @@ class PostgresCopyNumericFieldReader : public PostgresCopyFieldReader {
 // Arrow types and any Postgres type.
 class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyBinaryFieldReader(RedshiftBytesSchema semantic = {})
+      : semantic_(semantic) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
+    if (semantic_.enabled() && field_size_bytes < -1)
+      return RedshiftBytesSchema::Invalid(error, "invalid field length");
     // -1 for NULL (0 would be empty string)
     if (field_size_bytes < 0) {
       return ArrowArrayAppendNull(array, 1);
@@ -635,6 +639,12 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (semantic_.enabled()) {
+      ArrowBufferView bytes = *data;
+      bytes.size_bytes = field_size_bytes;
+      NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
+          bytes, semantic_.kind, semantic_.width, false, error));
+    }
     int32_t* offsets = reinterpret_cast<int32_t*>(offsets_->data);
     int32_t next_offset = 0;
     if (!psnip_safe_int32_add(&next_offset, offsets[array->length], field_size_bytes)) {
@@ -648,6 +658,9 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
 
     return AppendValid(array);
   }
+
+ private:
+  RedshiftBytesSchema semantic_;
 };
 
 // Reader for Pg->Arrow conversions into a fixed-width Arrow binary type (e.g.
@@ -1127,7 +1140,16 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         case PostgresTypeId::kName:
         case PostgresTypeId::kEnum:
         case PostgresTypeId::kJson:
-          *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+          if (pg_type.is_redshift_descriptor() &&
+              pg_type.bytes_kind() != RedshiftBytesKind::kNone) {
+            const auto info =
+                adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+                    pg_type.typname(), pg_type.type_modifier());
+            *out = std::make_unique<PostgresCopyBinaryFieldReader>(
+                RedshiftBytesSchema{pg_type.bytes_kind(), info.byte_width});
+          } else {
+            *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+          }
           return NANOARROW_OK;
         case PostgresTypeId::kNumeric:
           if (pg_type.is_redshift_numeric()) {
@@ -1155,7 +1177,16 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_BINARY:
       // No need to check pg_type here: we can return the bytes of any
       // Postgres type as binary.
-      *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+      if (pg_type.is_redshift_descriptor() &&
+          pg_type.bytes_kind() == RedshiftBytesKind::kVarbyte) {
+        const auto info =
+            adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+                pg_type.typname(), pg_type.type_modifier());
+        *out = std::make_unique<PostgresCopyBinaryFieldReader>(
+            RedshiftBytesSchema{RedshiftBytesKind::kVarbyte, info.byte_width});
+      } else {
+        *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+      }
       return NANOARROW_OK;
 
     case NANOARROW_TYPE_FIXED_SIZE_BINARY:

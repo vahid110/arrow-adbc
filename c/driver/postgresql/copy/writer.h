@@ -958,6 +958,29 @@ class PostgresCopyDurationFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target)
+      : source_(source), target_(target) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::Validate(bytes, source_.kind, source_.width, true, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::Validate(bytes, target_.kind, target_.width, true, error));
+    // All validation precedes buffer mutation; never trim overflow blanks.
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, bytes.size_bytes + 4));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(bytes.size_bytes));
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftBytesSchema source_, target_;
+};
+
 class PostgresCopyBinaryFieldWriter : public PostgresCopyFieldWriter {
  public:
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
@@ -1142,6 +1165,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
       PostgresType::ValidateDecimalWriteSchema(type_resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateScalarWriteSchema(type_resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateBytesWriteSchema(type_resolver, schema, error));
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
@@ -1200,6 +1225,46 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
       return RedshiftScalarSchema::Invalid(error, "unsupported scalar target conversion");
     *out = PostgresCopyFieldWriter::Create<RedshiftScalarFieldWriter>(
         array_view, source_scalar.kind, destination);
+    return NANOARROW_OK;
+  }
+
+  RedshiftBytesSchema source_bytes;
+  NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Parse(schema, type_resolver.is_redshift(),
+                                                     &source_bytes, error));
+  const auto bytes_target =
+      target_type ? target_type->bytes_kind() : RedshiftBytesKind::kNone;
+  if (source_bytes.enabled() ||
+      (type_resolver.is_redshift() && bytes_target != RedshiftBytesKind::kNone)) {
+    if (target_type && bytes_target == RedshiftBytesKind::kNone)
+      return RedshiftBytesSchema::Invalid(
+          error, "character/binary source requires compatible target");
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    RedshiftBytesSchema destination = source_bytes;
+    if (target_type) {
+      destination.kind = bytes_target;
+      // Width comes from the actual aligned destination, not source rows/schema.
+      const char* name = bytes_target == RedshiftBytesKind::kChar      ? "bpchar"
+                         : bytes_target == RedshiftBytesKind::kVarchar ? "varchar"
+                                                                       : "varbyte";
+      destination.width = adbc::driver::pgwire::BackendProfile::Redshift()
+                              .DescribeTypeModifier(name, target_type->type_modifier())
+                              .byte_width;
+      // Ordinary PostgreSQL TEXT/BYTEA have no width descriptor; explicit semantic
+      // sources still retain their own limits while these destinations are unbounded.
+      const bool pg_unbounded = !type_resolver.is_redshift() &&
+                                (target_type->type_id() == PostgresTypeId::kText ||
+                                 target_type->type_id() == PostgresTypeId::kBytea);
+      if (!destination.width && !pg_unbounded)
+        return RedshiftBytesSchema::Invalid(error, "unknown destination byte width");
+    }
+    if (!source_bytes.enabled() || ((source_bytes.kind == RedshiftBytesKind::kVarbyte) !=
+                                    (destination.kind == RedshiftBytesKind::kVarbyte)))
+      return RedshiftBytesSchema::Invalid(error, "unsupported text/binary coercion");
+    *out = PostgresCopyFieldWriter::Create<RedshiftBytesFieldWriter>(
+        array_view, source_bytes, destination);
     return NANOARROW_OK;
   }
 

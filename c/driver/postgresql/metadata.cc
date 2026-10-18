@@ -117,7 +117,8 @@ adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetada
     auto& xdbc = *column.xdbc;
     xdbc.xdbc_type_name = std::string_view(row[3].data, row[3].len);
     const auto metadata = profile.DescribeTypeModifier(*xdbc.xdbc_type_name, raw);
-    if (RedshiftScalarSchema::Canonical(metadata.sql_type) != RedshiftScalarKind::kNone) {
+    if (RedshiftScalarSchema::Canonical(metadata.sql_type) != RedshiftScalarKind::kNone ||
+        RedshiftBytesSchema::Canonical(metadata.sql_type) != RedshiftBytesKind::kNone) {
       xdbc.xdbc_type_name = metadata.sql_type;
     }
     if (metadata.precision && metadata.scale) {

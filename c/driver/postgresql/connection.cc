@@ -83,7 +83,14 @@ class PostgresGetObjectsHelper : public adbc::driver::GetObjectsHelper {
         some_tables_(conn, queries_.Tables(true)),
         all_columns_(conn, queries_.Columns(false)),
         some_columns_(conn, queries_.Columns(true)),
-        all_constraints_(conn, queries_.Constraints()) {}
+        all_constraints_(conn, queries_.Constraints()) {
+    const bool utf8 =
+        backend_profile.kind == adbc::driver::pgwire::BackendKind::kRedshift;
+    for (auto* helper :
+         {&all_catalogs_, &some_catalogs_, &all_schemas_, &some_schemas_, &all_tables_,
+          &some_tables_, &all_columns_, &some_columns_, &all_constraints_})
+      helper->set_require_utf8(utf8);
+  }
 
   Status Load(adbc::driver::GetObjectsDepth depth,
               std::optional<std::string_view> catalog_filter,
@@ -275,7 +282,11 @@ void SilentNoticeProcessor(void* /*arg*/, const char* /*message*/) {}
 }  // namespace
 
 AdbcStatusCode PostgresConnection::CheckConnectionUsable(struct AdbcError* error) const {
-  if (!unusable()) return ADBC_STATUS_OK;
+  if (!unusable()) {
+    if (conn_ && backend_profile().kind == adbc::driver::pgwire::BackendKind::kRedshift)
+      RAISE_STATUS(error, CheckUtf8Encoding(conn_));
+    return ADBC_STATUS_OK;
+  }
   if (unusable_reason_ == UnusableReason::kBoundStreamCleanup) {
     InternalAdbcSetError(
         error,
@@ -405,7 +416,8 @@ AdbcStatusCode PostgresConnection::GetInfo(struct AdbcConnection* connection,
           RAISE_ADBC(EnsureTransaction(error));
           // Gives a version in the form 140000 instead of 14.0.0
           const char* stmt = "SHOW server_version_num";
-          auto result_helper = PqResultHelper{conn_, std::string(stmt)};
+          auto result_helper =
+              PqResultHelper{conn_, std::string(stmt), type_resolver_->is_redshift()};
           RAISE_STATUS(error, result_helper.Execute());
           auto it = result_helper.begin();
           if (it == result_helper.end()) {
@@ -506,7 +518,8 @@ AdbcStatusCode PostgresConnection::GetOption(const char* option, char* value,
           error, "[libpq] Release the bound result stream before another query");
       return ADBC_STATUS_INVALID_STATE;
     }
-    PqResultHelper result_helper{conn_, "SELECT CURRENT_SCHEMA()"};
+    PqResultHelper result_helper{conn_, "SELECT CURRENT_SCHEMA()",
+                                 type_resolver_->is_redshift()};
     RAISE_STATUS(error, result_helper.Execute());
     auto it = result_helper.begin();
     if (it == result_helper.end()) {
@@ -948,7 +961,8 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
 
   std::vector<std::string> params = {table_name_str};
 
-  PqResultHelper result_helper = PqResultHelper{conn_, std::string(query.c_str())};
+  PqResultHelper result_helper =
+      PqResultHelper{conn_, std::string(query.c_str()), type_resolver_->is_redshift()};
 
   RAISE_STATUS(error, result_helper.Execute(params));
 
@@ -1099,7 +1113,7 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
     std::string query = fmt::format("SET search_path TO {}", value_esc);
     PQfreemem(value_esc);
 
-    PqResultHelper result_helper{conn_, query};
+    PqResultHelper result_helper{conn_, query, type_resolver_->is_redshift()};
     RAISE_STATUS(error, result_helper.Execute());
     return ADBC_STATUS_OK;
   } else if (std::strcmp(key, ADBC_CONNECTION_OPTION_ISOLATION_LEVEL) == 0) {
@@ -1137,7 +1151,7 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
 
     std::string query = fmt::format(
         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {}", pg_level);
-    PqResultHelper result_helper{conn_, query};
+    PqResultHelper result_helper{conn_, query, type_resolver_->is_redshift()};
     RAISE_STATUS(error, result_helper.Execute());
     return ADBC_STATUS_OK;
   } else if (std::strcmp(key, ADBC_POSTGRESQL_OPTION_USE_COPY) == 0) {

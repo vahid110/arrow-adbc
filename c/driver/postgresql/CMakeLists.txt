@@ -201,6 +201,7 @@ if(ADBC_BUILD_TESTS)
                 type_modifier_test.cc
                 redshift_numeric_test.cc
                 redshift_decimal_test.cc
+                redshift_bytes_test.cc
                 redshift_scalar_test.cc
                 postgresql_test.cc
                 redshift_test.cc

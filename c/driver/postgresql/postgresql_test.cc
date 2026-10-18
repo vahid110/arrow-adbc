@@ -2054,6 +2054,38 @@ TEST_F(PostgresStatementTest, ModifierCatalogQueriesUseRealFiltersOrderAndParser
 
 // Actual PostgreSQL protocol/catalog plumbing for the Redshift scalar policy,
 // without changing the connection identity or claiming native vendor execution.
+TEST_F(PostgresStatementTest, SemanticTextEncodingGuardsInitialAndChangedSessionState) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  auto* conn = owner->conn();
+  struct Restore {
+    PGconn* conn;
+    ~Restore() {
+      adbc::driver::pgwire::UniqueResult result(
+          PQexec(conn, "SET client_encoding = UTF8"));
+    }
+  } restore{conn};
+  ASSERT_TRUE(adbcpq::CheckUtf8Encoding(conn).ok());
+  EXPECT_FALSE(adbcpq::CheckUtf8Encoding(nullptr).ok());
+  adbcpq::PqResultHelper initial(conn, "SET client_encoding = LATIN1");
+  ASSERT_TRUE(initial.Execute().ok());
+  EXPECT_FALSE(adbcpq::CheckUtf8Encoding(conn).ok());
+  adbcpq::PqResultHelper blocked(conn, "SELECT 42", true);
+  EXPECT_FALSE(blocked.Execute().ok());
+  EXPECT_FALSE(blocked.HasResult());
+  adbcpq::PqResultHelper ordinary(conn, "SELECT 42");
+  EXPECT_TRUE(ordinary.Execute().ok());  // Unmarked PG remains its own contract.
+  adbcpq::PqResultHelper reset(conn, "SET client_encoding = UTF8");
+  ASSERT_TRUE(reset.Execute().ok());
+  adbcpq::PqResultHelper changes(conn, "SET client_encoding = LATIN1", true);
+  EXPECT_FALSE(changes.Execute().ok());  // Query executed, postcheck refuses success.
+  EXPECT_STREQ(PQparameterStatus(conn, "client_encoding"), "LATIN1");
+  EXPECT_FALSE(blocked.Prepare().ok());
+  EXPECT_FALSE(blocked.Execute().ok());
+  ASSERT_TRUE(reset.Execute().ok());
+  EXPECT_TRUE(blocked.Execute().ok());
+}
+
 TEST_F(PostgresStatementTest, ScalarIdentityOnNormalBoundEmptyAndParameterReaders) {
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);

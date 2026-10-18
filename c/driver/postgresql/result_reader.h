@@ -41,7 +41,7 @@ class PqResultArrayReader {
   PqResultArrayReader(PGconn* conn, std::shared_ptr<PostgresTypeResolver> type_resolver,
                       std::string query)
       : conn_(conn),
-        helper_(conn, std::move(query)),
+        helper_(conn, std::move(query), type_resolver->is_redshift()),
         type_resolver_(type_resolver),
         autocommit_(false) {
     ArrowErrorInit(&na_error_);

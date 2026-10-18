@@ -36,6 +36,7 @@
 namespace adbcpq {
 
 Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) const {
+  UNWRAP_STATUS(CheckEncoding());
   // TODO: make stmtName a unique identifier?
   adbc::driver::pgwire::UniqueResult result(
       PQprepare(conn_, /*stmtName=*/"", query_.c_str(), n_params, param_oids));
@@ -43,6 +44,7 @@ Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) cons
     return MakeStatus(result.get(), "Failed to prepare query: {}\nQuery was: {}",
                       PQerrorMessage(conn_), query_.c_str());
   }
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
@@ -53,6 +55,7 @@ Status PqResultHelper::Prepare(const std::vector<Oid>& param_oids) const {
 }
 
 Status PqResultHelper::DescribePrepared() {
+  UNWRAP_STATUS(CheckEncoding());
   ClearResult();
   result_.reset(PQdescribePrepared(conn_, /*stmtName=*/""));
   if (PQresultStatus(result_.get()) != PGRES_COMMAND_OK) {
@@ -63,11 +66,13 @@ Status PqResultHelper::DescribePrepared() {
     return status;
   }
 
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
 Status PqResultHelper::Execute(const std::vector<std::string>& params,
                                PostgresType* param_types) {
+  UNWRAP_STATUS(CheckEncoding());
   if (params.size() == 0 && param_types == nullptr && output_format_ == Format::kText) {
     ClearResult();
     result_.reset(PQexec(conn_, query_.c_str()));
@@ -105,10 +110,12 @@ Status PqResultHelper::Execute(const std::vector<std::string>& params,
                       query_.c_str(), PQerrorMessage(conn_));
   }
 
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
 Status PqResultHelper::ExecuteCopy() {
+  UNWRAP_STATUS(CheckEncoding());
   // Remove trailing semicolon(s) from the query before feeding it into COPY
   while (!query_.empty() && query_.back() == ';') {
     query_.pop_back();
@@ -130,6 +137,7 @@ Status PqResultHelper::ExecuteCopy() {
     return status;
   }
 
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 

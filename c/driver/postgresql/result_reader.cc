@@ -71,6 +71,11 @@ Status PqResultArrayReader::FinishBoundStream(bool failed) {
 
 int PqResultArrayReader::GetSchema(struct ArrowSchema* out) {
   ResetErrors();
+  Status encoding = helper_.CheckEncoding();
+  if (!encoding.ok()) {
+    encoding.ToAdbc(&error_);
+    return EINVAL;
+  }
 
   if (schema_->release == nullptr) {
     if (bind_stream_ && !IsConnectionLive()) {
@@ -108,7 +113,11 @@ int PqResultArrayReader::GetNext(struct ArrowArray* out) {
 }
 
 int PqResultArrayReader::GetNextImpl(struct ArrowArray* out) {
-  Status status;
+  Status status = helper_.CheckEncoding();
+  if (!status.ok()) {
+    status.ToAdbc(&error_);
+    return EINVAL;
+  }
   if (schema_->release == nullptr) {
     status = Initialize(nullptr);
     if (!status.ok()) {
@@ -228,6 +237,7 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
 
     // Now set parameter types (will use reconciled types for NA fields)
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
+    helper_.set_require_utf8(helper_.require_utf8() || bind_stream_->require_utf8);
 
     // Re-prepare with the actual parameter types
     Status prepare_status = helper_.Prepare(bind_stream_->param_types);
@@ -367,6 +377,7 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
     }
 
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
+    helper_.set_require_utf8(helper_.require_utf8() || bind_stream_->require_utf8);
     Status prepare_status = helper_.Prepare(bind_stream_->param_types);
     if (!prepare_status.ok()) {
       // Preserve the preparation error even if rollback also fails.

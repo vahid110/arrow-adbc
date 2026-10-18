@@ -160,11 +160,13 @@ struct BackendProfile {
         out.precision = precision;
         out.scale = scale;
       }
-    } else if (typname == "bpchar" || typname == "varchar") {
-      out.sql_type = typname == "bpchar" ? "CHAR" : "VARCHAR";
+    } else if (typname == "bpchar" || typname == "varchar" || typname == "varbyte") {
+      out.sql_type = typname == "bpchar"    ? "CHAR"
+                     : typname == "varchar" ? "VARCHAR"
+                                            : "VARBYTE";
       if (!raw || *raw < 5) return out;
       const int32_t width = *raw - 4;
-      if (width <= 16000000) out.byte_width = width;
+      if (width <= (typname == "varbyte" ? 16777216 : 16000000)) out.byte_width = width;
     }
     return out;
   }

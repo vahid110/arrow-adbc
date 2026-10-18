@@ -600,6 +600,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
 
+  if (type_resolver_ && PostgresType::ValidateBytesWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
   if (bind_.release) bind_.release(&bind_);
   // Make a one-value stream
   adbc::driver::MakeArrayStream(schema, values, &bind_);
@@ -634,6 +640,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
   if (type_resolver_ &&
       PostgresType::ValidateScalarWriteSchema(*type_resolver_, schema.get(),
                                               &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateBytesWriteSchema(*type_resolver_, schema.get(),
+                                             &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
@@ -818,13 +830,29 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
         RedshiftScalarSchema::Parse(source_schema.children[i],
                                     type_resolver_->is_redshift(), &scalar, &na_error),
         &na_error, error);
-    has_semantic_schema |= decimal.enabled || scalar.enabled();
+    RedshiftBytesSchema bytes;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftBytesSchema::Parse(source_schema.children[i],
+                                   type_resolver_->is_redshift(), &bytes, &na_error),
+        &na_error, error);
+    if (bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte)
+      RAISE_STATUS(error, CheckUtf8Encoding(conn));
+    has_semantic_schema |= decimal.enabled || scalar.enabled() || bytes.enabled();
     std::string declaration = pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
                       &na_error, error);
     }
     if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
+    if (bytes.enabled() && ingest_.mode != IngestMode::kAppend) {
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, bytes.Declaration(&declaration, &na_error),
+                      &na_error, error);
+      // PostgreSQL has BYTEA without a width declaration. Keep the explicit
+      // semantic source envelope while exercising the shared path on PostgreSQL.
+      if (!type_resolver_->is_redshift() && bytes.kind == RedshiftBytesKind::kVarbyte)
+        declaration = "BYTEA";
+    }
     create += " " + declaration;
   }
 
@@ -899,6 +927,7 @@ AdbcStatusCode PostgresStatement::ResolveCopyTargetTypes(
                                "WHERE attr.attrelid = $1::regclass::oid "
                                "AND attr.attnum > 0 AND NOT attr.attisdropped "
                                "ORDER BY attr.attnum"};
+  result_helper.set_require_utf8(type_resolver_->is_redshift());
   RAISE_STATUS(error, result_helper.Execute({escaped_table}));
   PostgresType table;
   RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table));
@@ -979,7 +1008,7 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
     return ADBC_STATUS_OK;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
   RAISE_STATUS(error, helper.Prepare());
   RAISE_STATUS(error, helper.DescribePrepared());
 
@@ -1035,7 +1064,7 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
 
   if (bind_.release) {
     nanoarrow::UniqueSchema param_schema;
@@ -1109,7 +1138,8 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   // This is a little unfortunate; we need another DB roundtrip
   std::string current_schema;
   {
-    PqResultHelper result_helper{connection_->conn(), "SELECT CURRENT_SCHEMA()"};
+    PqResultHelper result_helper{connection_->conn(), "SELECT CURRENT_SCHEMA()",
+                                 type_resolver_->is_redshift()};
     RAISE_STATUS(error, result_helper.Execute());
     auto it = result_helper.begin();
     if (it == result_helper.end()) {
@@ -1167,6 +1197,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
           rows_affected, has_copy_target_types ? &copy_target_types : nullptr);
     }
 
+    UNWRAP_STATUS(bind_stream.CheckTextEncoding(connection_->conn(), *type_resolver_));
     std::string query = "COPY ";
     query += escaped_table;
     query += " (";
@@ -1290,7 +1321,7 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
   RAISE_STATUS(error, helper.Prepare());
   RAISE_STATUS(error, helper.DescribePrepared());
   PostgresType param_types;
