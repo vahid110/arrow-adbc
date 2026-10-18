@@ -68,7 +68,11 @@ Current state only; history is in git and PR descriptions.
   TIMETZ struct, checked reference reads/writes, source/target precision and
   bare declaration handling (locally integrated e2df066; independent FULL approval
   and all 25 serial validation steps passed). Task010f0 adds a separate noninstalled
-  bounded protocol observer/fixed plans; its final local validation/review is pending. Synthetic/local PostgreSQL
+  bounded protocol observer/fixed plans (locally integrated 65e7e9b; independent
+  FULL approval and all 30 serial validation steps passed). Task010g0 adds a pure
+  anchored historical local-evidence/package-byte linker; final local validation
+  and review are pending. Archive/install inventory, runtime closure and the local
+  consumer/live handoff remain separate prerequisites. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.
   Native temporal wire/domain/precision and character/binary boundaries, TIMETZ native layout/domain/offset/precision,
   interval native wire/domain/catalog/qualifier qualification, SUPER,
