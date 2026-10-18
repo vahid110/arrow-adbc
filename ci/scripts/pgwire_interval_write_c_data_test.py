@@ -19,11 +19,24 @@
 
 import argparse
 import ctypes
+import importlib.util
 import struct
 import unittest
+from pathlib import Path
 
 import pyarrow as pa
-from pgwire_interval_c_data_test import ArrowArray, ArrowSchema
+
+# Python -I intentionally excludes sibling imports. Load only this exact test
+# definition file without changing sys.path or shadowing installed packages.
+_types_spec = importlib.util.spec_from_file_location(
+    "_interval_c_data_types",
+    Path(__file__).resolve().with_name("pgwire_interval_c_data_test.py"),
+)
+if _types_spec is None or _types_spec.loader is None:
+    raise RuntimeError("Cannot load the exact sibling C Data test definitions")
+_types = importlib.util.module_from_spec(_types_spec)
+_types_spec.loader.exec_module(_types)
+ArrowArray, ArrowSchema = _types.ArrowArray, _types.ArrowSchema
 
 QUALIFIERS = [
     "YEAR",
