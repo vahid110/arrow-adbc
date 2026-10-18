@@ -93,6 +93,9 @@ class PostgresConnection {
   }
   bool autocommit() const { return autocommit_; }
   bool use_copy() const { return use_copy_; }
+  adbc::driver::pgwire::TemporalRepresentation temporal_representation() const {
+    return temporal_representation_;
+  }
   void MarkBoundStreamCleanupFailed() {
     MarkUnusable(UnusableReason::kBoundStreamCleanup);
   }
@@ -132,6 +135,10 @@ class PostgresConnection {
   adbc::driver::pgwire::UniqueCancel cancel_;
   bool autocommit_;
   bool use_copy_;
+  adbc::driver::pgwire::TemporalRepresentation temporal_representation_ =
+      adbc::driver::pgwire::TemporalRepresentation::kArrow;
+  bool temporal_option_set_ = false;
+  bool temporal_locked_ = false;
   UnusableReason unusable_reason_;
   std::weak_ptr<void> active_bound_stream_;
   std::vector<std::pair<std::string, std::string>> post_init_options_;

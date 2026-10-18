@@ -79,11 +79,14 @@ struct TableTypeMapping {
   std::string_view relkind;
 };
 
+enum class TemporalRepresentation { kArrow, kLossless };
+
 struct TypeModifierMetadata {
   std::string_view sql_type;
   std::optional<int32_t> precision;
   std::optional<int32_t> scale;
   std::optional<int32_t> byte_width;
+  std::optional<int32_t> fractional_precision;
 };
 
 enum class CatalogIntervalFamily { kNone, kYearMonth, kDaySecond };
@@ -150,6 +153,16 @@ struct BackendProfile {
       out.sql_type = "DOUBLE PRECISION";
     } else if (typname == "bool") {
       out.sql_type = "BOOLEAN";
+    } else if (typname == "date") {
+      out.sql_type = "DATE";
+    } else if (typname == "time" || typname == "timestamp" || typname == "timestamptz") {
+      out.sql_type = typname == "time"        ? "TIME"
+                     : typname == "timestamp" ? "TIMESTAMP"
+                                              : "TIMESTAMPTZ";
+      // Pinned AWS JDBC TypeInfoCache773fa16 getScale reference; native modifier
+      // qualification remains open. Missing OID-only modifiers stay unknown.
+      if (raw && (*raw == -1 || (*raw >= 0 && *raw <= 6)))
+        out.fractional_precision = *raw == -1 ? 6 : *raw;
     } else if (typname == "numeric" || typname == "decimal") {
       out.sql_type = "DECIMAL";
       if (!raw || *raw < 4) return out;

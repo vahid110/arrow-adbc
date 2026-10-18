@@ -36,6 +36,7 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
+#include <arrow-adbc/driver/redshift.h>
 #include <fmt/format.h>
 #include <libpq-fe.h>
 
@@ -510,7 +511,12 @@ AdbcStatusCode PostgresConnection::GetOption(const char* option, char* value,
                                              size_t* length, struct AdbcError* error) {
   RAISE_ADBC(CheckConnectionUsable(error));
   std::string output;
-  if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
+  if (std::strcmp(option, ADBC_REDSHIFT_OPTION_TEMPORAL_REPRESENTATION) == 0) {
+    output = temporal_representation_ ==
+                     adbc::driver::pgwire::TemporalRepresentation::kLossless
+                 ? "lossless"
+                 : "arrow";
+  } else if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
     output = PQdb(conn_);
   } else if (std::strcmp(option, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0) {
     if (HasActiveBoundStream()) {
@@ -967,7 +973,8 @@ AdbcStatusCode PostgresConnection::GetTableSchema(const char* catalog,
   RAISE_STATUS(error, result_helper.Execute(params));
 
   PostgresType table_type;
-  RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table_type));
+  RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table_type,
+                                                       temporal_representation_));
   nanoarrow::UniqueSchema uschema;
   ArrowSchemaInit(uschema.get());
   CHECK_NA(INTERNAL, table_type.SetSchema(uschema.get(), std::string(VendorName())),
@@ -1004,6 +1011,13 @@ AdbcStatusCode PostgresConnection::Init(struct AdbcDatabase* database,
   type_resolver_ = database_->type_resolver();
   use_copy_ = database_->use_copy();
 
+  temporal_locked_ = true;
+  if (temporal_option_set_ && !type_resolver_->is_redshift()) {
+    InternalAdbcSetError(
+        error, "%s",
+        "[Redshift] temporal representation option requires a Redshift connection");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
   RAISE_ADBC(database_->Connect(&conn_, error));
 
   cancel_.reset(PQgetCancel(conn_));
@@ -1068,7 +1082,25 @@ AdbcStatusCode PostgresConnection::SetOption(const char* key, const char* value,
         error, "[libpq] Release the bound result stream before changing options");
     return ADBC_STATUS_INVALID_STATE;
   }
-  if (std::strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
+  if (std::strcmp(key, ADBC_REDSHIFT_OPTION_TEMPORAL_REPRESENTATION) == 0) {
+    if (temporal_locked_) {
+      InternalAdbcSetError(
+          error, "%s",
+          "[Redshift] temporal representation is immutable after initialization starts");
+      return ADBC_STATUS_INVALID_STATE;
+    }
+    if (!value || (std::strcmp(value, "arrow") && std::strcmp(value, "lossless"))) {
+      InternalAdbcSetError(
+          error, "%s", "[Redshift] temporal representation must be arrow or lossless");
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    temporal_representation_ =
+        std::strcmp(value, "lossless") == 0
+            ? adbc::driver::pgwire::TemporalRepresentation::kLossless
+            : adbc::driver::pgwire::TemporalRepresentation::kArrow;
+    temporal_option_set_ = true;
+    return ADBC_STATUS_OK;
+  } else if (std::strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     bool autocommit = true;
     if (std::strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {
       autocommit = true;

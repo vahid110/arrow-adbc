@@ -27,6 +27,11 @@
 extern "C" {
 #endif
 
+/// Connection option, set before initialization: "arrow" (default) or "lossless".
+/// Immutable after initialization starts. Native domain qualification remains open.
+#define ADBC_REDSHIFT_OPTION_TEMPORAL_REPRESENTATION \
+  "adbc.redshift.temporal_representation"
+
 ADBC_EXPORT
 AdbcStatusCode AdbcDriverRedshiftInit(int version, void* raw_driver,
                                       struct AdbcError* error);

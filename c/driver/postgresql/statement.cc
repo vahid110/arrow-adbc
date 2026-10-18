@@ -583,6 +583,11 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
   }
 
   ArrowError interval_error{};
+  if (type_resolver_ && PostgresType::ValidateTemporalWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
   if (type_resolver_ && PostgresType::ValidateIntervalWriteSchema(
                             *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
@@ -625,6 +630,12 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
   CHECK_NA_DETAIL(INVALID_ARGUMENT,
                   ArrowArrayStreamGetSchema(stream, schema.get(), &interval_error),
                   &interval_error, error);
+  if (type_resolver_ &&
+      PostgresType::ValidateTemporalWriteSchema(*type_resolver_, schema.get(),
+                                                &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
   if (type_resolver_ &&
       PostgresType::ValidateIntervalWriteSchema(*type_resolver_, schema.get(),
                                                 &interval_error) != NANOARROW_OK) {
@@ -838,13 +849,23 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
         &na_error, error);
     if (bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte)
       RAISE_STATUS(error, CheckUtf8Encoding(conn));
-    has_semantic_schema |= decimal.enabled || scalar.enabled() || bytes.enabled();
+    RedshiftTemporalSchema temporal;
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    RedshiftTemporalSchema::Parse(source_schema.children[i],
+                                                  type_resolver_->is_redshift(),
+                                                  &temporal, &na_error),
+                    &na_error, error);
+    has_semantic_schema |=
+        decimal.enabled || scalar.enabled() || bytes.enabled() || temporal.enabled();
     std::string declaration = pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
                       &na_error, error);
     }
     if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
+    if (temporal.enabled() && ingest_.mode != IngestMode::kAppend)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, temporal.Declaration(&declaration, &na_error),
+                      &na_error, error);
     if (bytes.enabled() && ingest_.mode != IngestMode::kAppend) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, bytes.Declaration(&declaration, &na_error),
                       &na_error, error);
@@ -961,7 +982,8 @@ AdbcStatusCode PostgresStatement::ExecuteBind(struct ArrowArrayStream* stream,
                          "[libpq] Release the bound result stream before another query");
     return ADBC_STATUS_INVALID_STATE;
   }
-  PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+  PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                             connection_->temporal_representation());
   reader.SetAutocommit(connection_->autocommit());
   reader.SetConnection(connection_, std::move(lease));
   reader.SetBind(&bind_);
@@ -1002,7 +1024,8 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
   // Text results are the portable PostgreSQL-wire path. Binary COPY is an
   // optional backend capability and remains PostgreSQL's default fast path.
   if (result_mode == adbc::driver::pgwire::QueryResultMode::kText) {
-    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                               connection_->temporal_representation());
     reader.SetVendorName(connection_->VendorName());
     RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));
     return ADBC_STATUS_OK;
@@ -1016,12 +1039,14 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
   // unsupported types before issuing the COPY query). This could be lazier
   // (i.e., executed on the first call to GetSchema() or GetNext()).
   PostgresType root_type;
-  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &root_type));
+  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &root_type,
+                                                connection_->temporal_representation()));
 
   // If there will be no columns in the result, we can also avoid COPY
   if (root_type.n_children() == 0) {
     // Could/should move the helper into the reader instead of repreparing
-    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                               connection_->temporal_representation());
     reader.SetVendorName(connection_->VendorName());
     RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));
     return ADBC_STATUS_OK;
@@ -1097,7 +1122,8 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
   RAISE_STATUS(error, helper.DescribePrepared());
 
   PostgresType output_type;
-  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &output_type));
+  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &output_type,
+                                                connection_->temporal_representation()));
 
   nanoarrow::UniqueSchema tmp;
   ArrowSchemaInit(tmp.get());
@@ -1326,7 +1352,8 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
   RAISE_STATUS(error, helper.DescribePrepared());
   PostgresType param_types;
   RAISE_STATUS(error,
-               helper.ResolveParamTypes(*connection_->type_resolver(), &param_types));
+               helper.ResolveParamTypes(*connection_->type_resolver(), &param_types,
+                                        connection_->temporal_representation()));
 
   nanoarrow::UniqueSchema tmp;
   ArrowSchemaInit(tmp.get());

@@ -227,7 +227,8 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
       // Get PostgreSQL's expected parameter types
       UNWRAP_STATUS(helper_.DescribePrepared());
       PostgresType expected_types;
-      UNWRAP_STATUS(helper_.ResolveParamTypes(*type_resolver_, &expected_types));
+      UNWRAP_STATUS(helper_.ResolveParamTypes(*type_resolver_, &expected_types,
+                                              temporal_representation_));
 
       // Reconcile Arrow schema with expected types
       UNWRAP_STATUS(bind_stream_->ReconcileWithExpectedTypes(expected_types));
@@ -273,7 +274,8 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   // Use the same per-field descriptors as ExecuteSchema/COPY, including PQfmod.
   // The resolved root is local: two same-OID fields retain independent modifiers.
   PostgresType output_type;
-  UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type));
+  UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type,
+                                           temporal_representation_));
   ArrowSchemaInit(schema_.get());
   UNWRAP_ERRNO(Internal, output_type.SetSchema(schema_.get(), vendor_name_));
   // Preserve the non-COPY reader's existing unnamed root schema policy.
@@ -374,7 +376,8 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
       UNWRAP_STATUS(helper_.Prepare());
       UNWRAP_STATUS(helper_.DescribePrepared());
       PostgresType expected_types;
-      UNWRAP_STATUS(helper_.ResolveParamTypes(*type_resolver_, &expected_types));
+      UNWRAP_STATUS(helper_.ResolveParamTypes(*type_resolver_, &expected_types,
+                                              temporal_representation_));
       UNWRAP_STATUS(bind_stream_->ReconcileWithExpectedTypes(expected_types));
     }
 

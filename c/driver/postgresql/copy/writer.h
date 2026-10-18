@@ -958,6 +958,32 @@ class PostgresCopyDurationFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+class RedshiftTemporalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftTemporalFieldWriter(RedshiftTemporalSchema source,
+                              std::optional<int32_t> target_precision)
+      : source_(source), target_precision_(target_precision) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t native;
+    NANOARROW_RETURN_NOT_OK(
+        source_.ToNative(ArrowArrayViewGetIntUnsafe(array_view_, index), &native, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTemporalSchema::CheckPrecision(native, target_precision_, error));
+    const int32_t width = source_.kind == RedshiftTemporalKind::kDate ? 4 : 8;
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, width + 4));
+    WriteUnsafe<int32_t>(buffer, width);
+    if (width == 4)
+      WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(native));
+    else
+      WriteUnsafe<int64_t>(buffer, native);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTemporalSchema source_;
+  std::optional<int32_t> target_precision_;
+};
+
 class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
  public:
   RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target)
@@ -1169,6 +1195,35 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
       PostgresType::ValidateBytesWriteSchema(type_resolver, schema, error));
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateTemporalWriteSchema(type_resolver, schema, error));
+  RedshiftTemporalSchema temporal;
+  NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::Parse(
+      schema, type_resolver.is_redshift(), &temporal, error));
+  const auto temporal_target =
+      target_type ? target_type->temporal_kind() : RedshiftTemporalKind::kNone;
+  if (temporal.enabled() ||
+      (type_resolver.is_redshift() && temporal_target != RedshiftTemporalKind::kNone)) {
+    if (schema_view.type == NANOARROW_TYPE_NA &&
+        temporal_target != RedshiftTemporalKind::kNone) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!temporal.enabled() || (target_type && temporal_target != temporal.kind))
+      return RedshiftTemporalSchema::Invalid(error, "cross-family temporal target");
+    std::optional<int32_t> target_precision;
+    if (target_type && temporal.kind != RedshiftTemporalKind::kDate) {
+      NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::Precision(
+          target_type->type_modifier(), &target_precision, error));
+      if (!target_precision)
+        return RedshiftTemporalSchema::Invalid(error,
+                                               "unknown target fractional precision");
+    }
+    *out = PostgresCopyFieldWriter::Create<RedshiftTemporalFieldWriter>(
+        array_view, temporal, target_precision);
+    return NANOARROW_OK;
+  }
 
   RedshiftDecimalSchema source_decimal;
   NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Parse(

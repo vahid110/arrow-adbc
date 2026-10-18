@@ -177,10 +177,12 @@ class PostgresType {
   // Field descriptors are copies: the global OID cache never retains a result
   // column's modifier, and OID-only parameter descriptions remain unmodified.
   PostgresType WithFieldDescriptor(
-      std::optional<int32_t> raw,
-      const adbc::driver::pgwire::BackendProfile& profile) const {
+      std::optional<int32_t> raw, const adbc::driver::pgwire::BackendProfile& profile,
+      adbc::driver::pgwire::TemporalRepresentation temporal =
+          adbc::driver::pgwire::TemporalRepresentation::kArrow) const {
     PostgresType out(*this);
     out.type_modifier_ = raw;
+    out.temporal_representation_ = temporal;
     out.redshift_descriptor_ =
         profile.kind == adbc::driver::pgwire::BackendKind::kRedshift;
     out.modifier_metadata_ = profile.DescribeTypeModifier(typname_, raw);
@@ -193,6 +195,17 @@ class PostgresType {
   std::optional<int32_t> type_modifier() const { return type_modifier_; }
 
   bool is_redshift_descriptor() const { return redshift_descriptor_; }
+  adbc::driver::pgwire::TemporalRepresentation temporal_representation() const {
+    return temporal_representation_;
+  }
+  RedshiftTemporalKind temporal_kind() const {
+    if (type_id_ == PostgresTypeId::kDate) return RedshiftTemporalKind::kDate;
+    if (type_id_ == PostgresTypeId::kTime) return RedshiftTemporalKind::kTime;
+    if (type_id_ == PostgresTypeId::kTimestamp) return RedshiftTemporalKind::kTimestamp;
+    if (type_id_ == PostgresTypeId::kTimestamptz)
+      return RedshiftTemporalKind::kTimestamptz;
+    return RedshiftTemporalKind::kNone;
+  }
   RedshiftBytesKind bytes_kind() const {
     if (type_id_ == PostgresTypeId::kBpchar) return RedshiftBytesKind::kChar;
     if (type_id_ == PostgresTypeId::kVarchar || type_id_ == PostgresTypeId::kText)
@@ -276,162 +289,184 @@ class PostgresType {
   // binary COPY representation in the output.
   ArrowErrorCode SetSchema(ArrowSchema* schema,
                            const std::string& vendor_name = "PostgreSQL") const {
-    switch (type_id_) {
-      // ---- Primitive types --------------------
-      case PostgresTypeId::kBool:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BOOL));
-        break;
-      case PostgresTypeId::kInt2:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT16));
-        break;
-      case PostgresTypeId::kInt4:
-      case PostgresTypeId::kOid:
-      case PostgresTypeId::kRegproc:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT32));
-        break;
-      case PostgresTypeId::kInt8:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
-        break;
-      case PostgresTypeId::kFloat4:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_FLOAT));
-        break;
-      case PostgresTypeId::kFloat8:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_DOUBLE));
-        break;
-      case PostgresTypeId::kCash:
-        // PostgreSQL appears to send an int64, without decimal point information
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
-        break;
+    const bool lossless_temporal =
+        redshift_descriptor_ && temporal_kind() != RedshiftTemporalKind::kNone &&
+        temporal_kind() != RedshiftTemporalKind::kDate &&
+        temporal_representation_ ==
+            adbc::driver::pgwire::TemporalRepresentation::kLossless;
+    if (lossless_temporal) {
+      NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
+      nanoarrow::UniqueBuffer metadata;
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
+      const auto name = RedshiftTemporalSchema::Extension(temporal_kind());
+      const auto value = RedshiftTemporalSchema::ExtensionMetadata(temporal_kind());
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
+          metadata.get(), ArrowCharView(kExtensionName),
+          ArrowStringView{name.data(), static_cast<int64_t>(name.size())}));
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
+          metadata.get(), ArrowCharView(kExtensionMetadata),
+          ArrowStringView{value.data(), static_cast<int64_t>(value.size())}));
+      NANOARROW_RETURN_NOT_OK(
+          ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(metadata->data)));
+    } else
+      switch (type_id_) {
+        // ---- Primitive types --------------------
+        case PostgresTypeId::kBool:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BOOL));
+          break;
+        case PostgresTypeId::kInt2:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT16));
+          break;
+        case PostgresTypeId::kInt4:
+        case PostgresTypeId::kOid:
+        case PostgresTypeId::kRegproc:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT32));
+          break;
+        case PostgresTypeId::kInt8:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
+          break;
+        case PostgresTypeId::kFloat4:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_FLOAT));
+          break;
+        case PostgresTypeId::kFloat8:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_DOUBLE));
+          break;
+        case PostgresTypeId::kCash:
+          // PostgreSQL appears to send an int64, without decimal point information
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
+          break;
 
-      // ---- Numeric/Decimal-------------------
-      case PostgresTypeId::kNumeric:
-        if (is_redshift_numeric() && numeric_precision() && numeric_scale()) {
-          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDecimal(
-              schema, NANOARROW_TYPE_DECIMAL128, *numeric_precision(), *numeric_scale()));
-        } else {
-          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
-          if (!is_redshift_numeric()) {
-            NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
+        // ---- Numeric/Decimal-------------------
+        case PostgresTypeId::kNumeric:
+          if (is_redshift_numeric() && numeric_precision() && numeric_scale()) {
+            NANOARROW_RETURN_NOT_OK(
+                ArrowSchemaSetTypeDecimal(schema, NANOARROW_TYPE_DECIMAL128,
+                                          *numeric_precision(), *numeric_scale()));
+          } else {
+            NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
+            if (!is_redshift_numeric()) {
+              NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
+            }
           }
-        }
-        break;
+          break;
 
-      // ---- Binary/string --------------------
-      case PostgresTypeId::kChar:
-      case PostgresTypeId::kBpchar:
-      case PostgresTypeId::kVarchar:
-      case PostgresTypeId::kText:
-      case PostgresTypeId::kName:
-      case PostgresTypeId::kEnum:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
-        break;
-      case PostgresTypeId::kJson:
-      case PostgresTypeId::kJsonb: {
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
-        nanoarrow::UniqueBuffer buffer;
+        // ---- Binary/string --------------------
+        case PostgresTypeId::kChar:
+        case PostgresTypeId::kBpchar:
+        case PostgresTypeId::kVarchar:
+        case PostgresTypeId::kText:
+        case PostgresTypeId::kName:
+        case PostgresTypeId::kEnum:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
+          break;
+        case PostgresTypeId::kJson:
+        case PostgresTypeId::kJsonb: {
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_STRING));
+          nanoarrow::UniqueBuffer buffer;
 
-        NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), nullptr));
-        NANOARROW_RETURN_NOT_OK(
-            ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(kExtensionName),
-                                       ArrowCharView(kJsonExtensionName)));
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data)));
-
-        break;
-      }
-      case PostgresTypeId::kBytea:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BINARY));
-        break;
-      case PostgresTypeId::kUuid: {
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetTypeFixedSize(schema, NANOARROW_TYPE_FIXED_SIZE_BINARY, 16));
-        nanoarrow::UniqueBuffer buffer;
-
-        NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), nullptr));
-        NANOARROW_RETURN_NOT_OK(
-            ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(kExtensionName),
-                                       ArrowCharView(kUuidExtensionName)));
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data)));
-
-        break;
-      }
-
-      // ---- Temporal --------------------
-      case PostgresTypeId::kDate:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_DATE32));
-        break;
-
-      case PostgresTypeId::kTime:
-        // We always return microsecond precision even if the type
-        // specifies differently
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(schema, NANOARROW_TYPE_TIME64,
-                                                           NANOARROW_TIME_UNIT_MICRO,
-                                                           /*timezone=*/nullptr));
-        break;
-
-      case PostgresTypeId::kTimestamp:
-        // We always return microsecond precision even if the type
-        // specifies differently
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetTypeDateTime(schema, NANOARROW_TYPE_TIMESTAMP,
-                                       NANOARROW_TIME_UNIT_MICRO, /*timezone=*/nullptr));
-        break;
-
-      case PostgresTypeId::kTimestamptz:
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetTypeDateTime(schema, NANOARROW_TYPE_TIMESTAMP,
-                                       NANOARROW_TIME_UNIT_MICRO, /*timezone=*/"UTC"));
-        break;
-
-      case PostgresTypeId::kInterval:
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
-        break;
-
-      case PostgresTypeId::kRedshiftIntervalYearMonth:
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
-        NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervaly2m"));
-        break;
-
-      case PostgresTypeId::kRedshiftIntervalDaySecond:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(
-            schema, NANOARROW_TYPE_DURATION, NANOARROW_TIME_UNIT_MICRO, nullptr));
-        NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervald2s"));
-        break;
-
-      // ---- Nested --------------------
-      case PostgresTypeId::kRecord:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(schema, n_children()));
-        for (int64_t i = 0; i < n_children(); i++) {
+          NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), nullptr));
           NANOARROW_RETURN_NOT_OK(
-              children_[i].SetSchema(schema->children[i], vendor_name));
+              ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(kExtensionName),
+                                         ArrowCharView(kJsonExtensionName)));
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data)));
+
+          break;
         }
-        break;
+        case PostgresTypeId::kBytea:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BINARY));
+          break;
+        case PostgresTypeId::kUuid: {
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetTypeFixedSize(schema, NANOARROW_TYPE_FIXED_SIZE_BINARY, 16));
+          nanoarrow::UniqueBuffer buffer;
 
-      case PostgresTypeId::kArray:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_LIST));
-        NANOARROW_RETURN_NOT_OK(children_[0].SetSchema(schema->children[0], vendor_name));
-        break;
+          NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), nullptr));
+          NANOARROW_RETURN_NOT_OK(
+              ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(kExtensionName),
+                                         ArrowCharView(kUuidExtensionName)));
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data)));
 
-      case PostgresTypeId::kInt2vector:
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_LIST));
-        // Postgres conceives of this as a single type, so no child is
-        // given. We need to allocate it ourselves.
-        NANOARROW_RETURN_NOT_OK(
-            ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT16));
-        break;
+          break;
+        }
 
-      case PostgresTypeId::kUserDefined:
-      default:
-        // For user-defined types or types we don't explicitly know how to deal with, we
-        // can still return the bytes postgres gives us and attach the type name as
-        // metadata
-        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BINARY));
-        NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
-        break;
-    }
+        // ---- Temporal --------------------
+        case PostgresTypeId::kDate:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_DATE32));
+          break;
+
+        case PostgresTypeId::kTime:
+          // We always return microsecond precision even if the type
+          // specifies differently
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(
+              schema, NANOARROW_TYPE_TIME64, NANOARROW_TIME_UNIT_MICRO,
+              /*timezone=*/nullptr));
+          break;
+
+        case PostgresTypeId::kTimestamp:
+          // We always return microsecond precision even if the type
+          // specifies differently
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(
+              schema, NANOARROW_TYPE_TIMESTAMP, NANOARROW_TIME_UNIT_MICRO,
+              /*timezone=*/nullptr));
+          break;
+
+        case PostgresTypeId::kTimestamptz:
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetTypeDateTime(schema, NANOARROW_TYPE_TIMESTAMP,
+                                         NANOARROW_TIME_UNIT_MICRO, /*timezone=*/"UTC"));
+          break;
+
+        case PostgresTypeId::kInterval:
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
+          break;
+
+        case PostgresTypeId::kRedshiftIntervalYearMonth:
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
+          NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervaly2m"));
+          break;
+
+        case PostgresTypeId::kRedshiftIntervalDaySecond:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(
+              schema, NANOARROW_TYPE_DURATION, NANOARROW_TIME_UNIT_MICRO, nullptr));
+          NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervald2s"));
+          break;
+
+        // ---- Nested --------------------
+        case PostgresTypeId::kRecord:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(schema, n_children()));
+          for (int64_t i = 0; i < n_children(); i++) {
+            NANOARROW_RETURN_NOT_OK(
+                children_[i].SetSchema(schema->children[i], vendor_name));
+          }
+          break;
+
+        case PostgresTypeId::kArray:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_LIST));
+          NANOARROW_RETURN_NOT_OK(
+              children_[0].SetSchema(schema->children[0], vendor_name));
+          break;
+
+        case PostgresTypeId::kInt2vector:
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_LIST));
+          // Postgres conceives of this as a single type, so no child is
+          // given. We need to allocate it ourselves.
+          NANOARROW_RETURN_NOT_OK(
+              ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT16));
+          break;
+
+        case PostgresTypeId::kUserDefined:
+        default:
+          // For user-defined types or types we don't explicitly know how to deal with, we
+          // can still return the bytes postgres gives us and attach the type name as
+          // metadata
+          NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_BINARY));
+          NANOARROW_RETURN_NOT_OK(AddPostgresTypeMetadata(schema, vendor_name));
+          break;
+      }
 
     // Don't add POSTGRESQL:type to top-level field (which is the schema)
     if (type_id_ != PostgresTypeId::kRecord || !field_name_.empty()) {
@@ -447,6 +482,10 @@ class PostgresType {
   static ArrowErrorCode ValidateDecimalWriteSchema(const PostgresTypeResolver& resolver,
                                                    const ArrowSchema* schema,
                                                    ArrowError* error);
+
+  static ArrowErrorCode ValidateTemporalWriteSchema(const PostgresTypeResolver& resolver,
+                                                    const ArrowSchema* schema,
+                                                    ArrowError* error);
 
   static ArrowErrorCode ValidateBytesWriteSchema(const PostgresTypeResolver& resolver,
                                                  const ArrowSchema* schema,
@@ -473,6 +512,8 @@ class PostgresType {
   std::optional<int32_t> type_modifier_;
   bool redshift_descriptor_ = false;
   adbc::driver::pgwire::TypeModifierMetadata modifier_metadata_;
+  adbc::driver::pgwire::TemporalRepresentation temporal_representation_ =
+      adbc::driver::pgwire::TemporalRepresentation::kArrow;
 
   static constexpr const char* kPostgresTypeKey = "ADBC:postgresql:typname";
   static constexpr const char* kTypeKey = "POSTGRESQL:type";
@@ -506,6 +547,8 @@ class PostgresType {
         append_integer("ADBC:redshift:scale", modifier_metadata_.scale));
     NANOARROW_RETURN_NOT_OK(
         append_integer("ADBC:redshift:byte_width", modifier_metadata_.byte_width));
+    NANOARROW_RETURN_NOT_OK(append_integer("ADBC:redshift:fractional_precision",
+                                           modifier_metadata_.fractional_precision));
     return ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data));
   }
 
@@ -881,15 +924,45 @@ inline ArrowErrorCode PostgresType::ValidateBytesWriteSchema(
   return validate(validate, schema, false);
 }
 
+inline ArrowErrorCode PostgresType::ValidateTemporalWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  auto validate = [&](auto&& self, const ArrowSchema* node,
+                      bool dictionary) -> ArrowErrorCode {
+    if (!node) return NANOARROW_OK;
+    RedshiftTemporalSchema temporal;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTemporalSchema::Parse(node, resolver.is_redshift(), &temporal, error));
+    if (dictionary && temporal.enabled())
+      return RedshiftTemporalSchema::Invalid(error,
+                                             "dictionary temporal writes unsupported");
+    for (int64_t i = 0; i < node->n_children; ++i)
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], dictionary));
+    return self(self, node->dictionary, true);
+  };
+  return validate(validate, schema, false);
+}
+
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
+  NANOARROW_RETURN_NOT_OK(ValidateTemporalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateDecimalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateScalarWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateBytesWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+  RedshiftTemporalSchema temporal;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftTemporalSchema::Parse(schema, resolver.is_redshift(), &temporal, error));
+  if (temporal.enabled()) {
+    const auto id = temporal.kind == RedshiftTemporalKind::kDate   ? PostgresTypeId::kDate
+                    : temporal.kind == RedshiftTemporalKind::kTime ? PostgresTypeId::kTime
+                    : temporal.kind == RedshiftTemporalKind::kTimestamp
+                        ? PostgresTypeId::kTimestamp
+                        : PostgresTypeId::kTimestamptz;
+    return resolver.Find(resolver.GetOID(id), out, error);
+  }
   RedshiftDecimalSchema decimal;
   NANOARROW_RETURN_NOT_OK(
       RedshiftDecimalSchema::Parse(schema, resolver.is_redshift(), &decimal, error));

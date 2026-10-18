@@ -32,6 +32,7 @@
 
 #include <arrow-adbc/adbc.h>
 #include <arrow-adbc/driver/postgresql.h>
+#include <arrow-adbc/driver/redshift.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <nanoarrow/nanoarrow.h>
@@ -332,6 +333,41 @@ class PostgresConnectionTest : public ::testing::Test,
  protected:
   PostgresQuirks quirks_;
 };
+
+TEST_F(PostgresConnectionTest,
+       TemporalRepresentationOptionLifecycleDoesNotChangePostgresIdentity) {
+  constexpr const char* key = ADBC_REDSHIFT_OPTION_TEMPORAL_REPRESENTATION;
+  // The ordinary initialized PostgreSQL connection cannot change this option,
+  // even to the same default value. No output identity override is provided.
+  EXPECT_THAT(AdbcConnectionSetOption(&connection, key, "arrow", &error),
+              IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+  if (error.release) error.release(&error);
+  for (const char* mode : {"arrow", "lossless"}) {
+    adbc_validation::Handle<AdbcConnection> pending;
+    ASSERT_THAT(AdbcConnectionNew(&pending.value, &error), IsOkStatus(&error));
+    ASSERT_THAT(AdbcConnectionSetOption(&pending.value, key, mode, &error),
+                IsOkStatus(&error));
+    char value[32]{};
+    size_t size = sizeof(value);
+    ASSERT_THAT(AdbcConnectionGetOption(&pending.value, key, value, &size, &error),
+                IsOkStatus(&error));
+    EXPECT_STREQ(value, mode);
+    EXPECT_THAT(AdbcConnectionSetOption(&pending.value, key, "invalid", &error),
+                IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+    if (error.release) error.release(&error);
+    EXPECT_THAT(AdbcConnectionSetOption(&pending.value, key, nullptr, &error),
+                IsStatus(ADBC_STATUS_INVALID_ARGUMENT, &error));
+    if (error.release) error.release(&error);
+    // Explicit Redshift output option on a genuine PG database fails before a
+    // connection is opened. Failed initialization also freezes its captured mode.
+    EXPECT_THAT(AdbcConnectionInit(&pending.value, &database, &error),
+                IsStatus(ADBC_STATUS_NOT_IMPLEMENTED, &error));
+    if (error.release) error.release(&error);
+    EXPECT_THAT(AdbcConnectionSetOption(&pending.value, key, mode, &error),
+                IsStatus(ADBC_STATUS_INVALID_STATE, &error));
+    if (error.release) error.release(&error);
+  }
+}
 
 TEST_F(PostgresConnectionTest, GetInfoMetadata) {
   ASSERT_THAT(AdbcConnectionNew(&connection, &error), IsOkStatus(&error));

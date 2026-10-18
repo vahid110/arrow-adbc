@@ -172,10 +172,13 @@ class PqResultHelper {
   Status Execute(const std::vector<std::string>& params = {},
                  PostgresType* param_types = nullptr);
   Status ExecuteCopy();
-  Status ResolveParamTypes(PostgresTypeResolver& type_resolver,
-                           PostgresType* param_types);
+  Status ResolveParamTypes(PostgresTypeResolver& type_resolver, PostgresType* param_types,
+                           adbc::driver::pgwire::TemporalRepresentation temporal =
+                               adbc::driver::pgwire::TemporalRepresentation::kArrow);
   Status ResolveOutputTypes(PostgresTypeResolver& type_resolver,
-                            PostgresType* result_types);
+                            PostgresType* result_types,
+                            adbc::driver::pgwire::TemporalRepresentation temporal =
+                                adbc::driver::pgwire::TemporalRepresentation::kArrow);
 
   bool HasResult() const { return result_ != nullptr; }
 
@@ -187,7 +190,9 @@ class PqResultHelper {
 
   // Resolve the exact name/OID/modifier catalog projection used by GetTableSchema.
   Status ResolveTableSchema(PostgresTypeResolver& type_resolver,
-                            PostgresType* result_types);
+                            PostgresType* result_types,
+                            adbc::driver::pgwire::TemporalRepresentation temporal =
+                                adbc::driver::pgwire::TemporalRepresentation::kArrow);
 
   int64_t AffectedRows() const;
 

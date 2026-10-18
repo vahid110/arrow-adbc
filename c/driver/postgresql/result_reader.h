@@ -39,11 +39,14 @@ class PostgresConnection;
 class PqResultArrayReader {
  public:
   PqResultArrayReader(PGconn* conn, std::shared_ptr<PostgresTypeResolver> type_resolver,
-                      std::string query)
+                      std::string query,
+                      adbc::driver::pgwire::TemporalRepresentation temporal =
+                          adbc::driver::pgwire::TemporalRepresentation::kArrow)
       : conn_(conn),
         helper_(conn, std::move(query), type_resolver->is_redshift()),
         type_resolver_(type_resolver),
-        autocommit_(false) {
+        autocommit_(false),
+        temporal_representation_(temporal) {
     ArrowErrorInit(&na_error_);
     error_ = ADBC_ERROR_INIT;
   }
@@ -91,6 +94,7 @@ class PqResultArrayReader {
   nanoarrow::UniqueSchema schema_;
   bool autocommit_;
   bool materialized_encoding_valid_ = false;
+  adbc::driver::pgwire::TemporalRepresentation temporal_representation_;
   std::string vendor_name_;
   struct AdbcError error_;
   struct ArrowError na_error_;
@@ -106,6 +110,7 @@ class PqResultArrayReader {
         schema_(std::move(other->schema_)),
         autocommit_(other->autocommit_),
         materialized_encoding_valid_(other->materialized_encoding_valid_),
+        temporal_representation_(other->temporal_representation_),
         vendor_name_(std::move(other->vendor_name_)) {
     ArrowErrorInit(&na_error_);
     error_ = ADBC_ERROR_INIT;

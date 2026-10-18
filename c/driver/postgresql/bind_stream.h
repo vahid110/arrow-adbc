@@ -162,6 +162,9 @@ struct BindStream {
                        const bool autocommit,
                        const PostgresType* ingest_targets = nullptr) {
     validate_redshift_bytes = type_resolver.is_redshift();
+    if (PostgresType::ValidateTemporalWriteSchema(type_resolver, &bind_schema.value,
+                                                  &na_error) != NANOARROW_OK)
+      return Status::InvalidArgument(na_error.message);
     require_utf8 = type_resolver.is_redshift();
     if (PostgresType::ValidateIntervalWriteSchema(type_resolver, &bind_schema.value,
                                                   &na_error) != NANOARROW_OK) {
@@ -230,10 +233,18 @@ struct BindStream {
           RedshiftBytesSchema::Parse(bind_schema->children[i],
                                      type_resolver.is_redshift(), &bytes, &na_error));
       require_utf8 |= bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte;
+      RedshiftTemporalSchema temporal;
+      UNWRAP_NANOARROW(na_error, InvalidArgument,
+                       RedshiftTemporalSchema::Parse(bind_schema->children[i],
+                                                     type_resolver.is_redshift(),
+                                                     &temporal, &na_error));
       const PostgresType* writer_target = nullptr;
       if (ingest_targets &&
           (type.type_id() == PostgresTypeId::kNumeric ||
            ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric ||
+           ((temporal.enabled() || type_resolver.is_redshift()) &&
+            (type.temporal_kind() != RedshiftTemporalKind::kNone ||
+             ingest_targets->child(i).temporal_kind() != RedshiftTemporalKind::kNone)) ||
            ((bytes.enabled() || type_resolver.is_redshift()) &&
             (type.bytes_kind() != RedshiftBytesKind::kNone ||
              ingest_targets->child(i).bytes_kind() != RedshiftBytesKind::kNone)) ||
@@ -252,7 +263,8 @@ struct BindStream {
       param_types[i] =
           writer_target && (writer_target->type_id() == PostgresTypeId::kNumeric ||
                             writer_target->scalar_kind() != RedshiftScalarKind::kNone ||
-                            writer_target->bytes_kind() != RedshiftBytesKind::kNone)
+                            writer_target->bytes_kind() != RedshiftBytesKind::kNone ||
+                            writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
               ? writer_target->oid()
               : type.oid();
       param_formats[i] = kPgBinaryFormat;

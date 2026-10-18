@@ -663,6 +663,64 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
   RedshiftBytesSchema semantic_;
 };
 
+// Closed standard PostgreSQL reference fields. These checks do not certify a
+// Redshift SQL finite/sentinel domain; native qualification remains separate.
+class RedshiftTemporalFieldReader : public PostgresCopyFieldReader {
+ public:
+  RedshiftTemporalFieldReader(RedshiftTemporalKind kind, bool lossless,
+                              std::optional<int32_t> precision)
+      : kind_(kind), lossless_(lossless), precision_(precision) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    if (size == -1) return ArrowArrayAppendNull(array, 1);
+    const int32_t width = kind_ == RedshiftTemporalKind::kDate ? 4 : 8;
+    if (size != width || data->size_bytes < width || !data->data.data)
+      return RedshiftTemporalSchema::Invalid(error,
+                                             "malformed temporal field width/body");
+    int64_t value;
+    if (width == 4) {
+      uint32_t bits;
+      std::memcpy(&bits, data->data.data, 4);
+      bits = SwapNetworkToHost(bits);
+      int32_t signed_value;
+      std::memcpy(&signed_value, &bits, 4);
+      value = signed_value;
+    } else {
+      uint64_t bits;
+      std::memcpy(&bits, data->data.data, 8);
+      bits = SwapNetworkToHost(bits);
+      std::memcpy(&value, &bits, 8);
+    }
+    NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::CheckNative(kind_, value, error));
+    if (kind_ != RedshiftTemporalKind::kDate)
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTemporalSchema::CheckPrecision(value, precision_, error));
+    if (kind_ == RedshiftTemporalKind::kDate) {
+      value += RedshiftTemporalSchema::kEpochDays;
+      if (value < INT32_MIN || value > INT32_MAX)
+        return RedshiftTemporalSchema::Invalid(error, "DATE Arrow epoch overflow");
+    } else if (!lossless_) {
+      if (kind_ == RedshiftTemporalKind::kTime) {
+        if (value == RedshiftTemporalSchema::kDayUs)
+          return RedshiftTemporalSchema::Invalid(error, "Arrow TIME excludes endofday");
+      } else {
+        if (value > INT64_MAX - RedshiftTemporalSchema::kEpochUs)
+          return RedshiftTemporalSchema::Invalid(error, "timestamp Arrow epoch overflow");
+        value += RedshiftTemporalSchema::kEpochUs;
+      }
+    }
+    NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(array, value));
+    data->data.as_uint8 += width;
+    data->size_bytes -= width;
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTemporalKind kind_;
+  bool lossless_;
+  std::optional<int32_t> precision_;
+};
+
 // Reader for Pg->Arrow conversions into a fixed-width Arrow binary type (e.g.
 // FixedSizeBinary(16) for a canonical arrow.uuid field).
 class PostgresCopyFixedSizeBinaryFieldReader : public PostgresCopyFieldReader {
@@ -1066,6 +1124,47 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     std::unique_ptr<PostgresCopyFieldReader>* out, ArrowError* error) {
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, nullptr));
+
+  if (pg_type.is_redshift_descriptor() &&
+      pg_type.temporal_kind() != RedshiftTemporalKind::kNone) {
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    ArrowSchemaView expected_view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&expected_view, expected.get(), error));
+    auto text = [](ArrowStringView value) {
+      return value.data ? std::string_view(value.data, value.size_bytes)
+                        : std::string_view{};
+    };
+    if (std::string_view(schema->format) != expected->format || schema->dictionary ||
+        schema->n_children ||
+        text(schema_view.extension_name) != text(expected_view.extension_name) ||
+        text(schema_view.extension_metadata) != text(expected_view.extension_metadata))
+      return RedshiftTemporalSchema::Invalid(error,
+                                             "read schema contradicts temporal context");
+    for (const char* key :
+         {"ADBC:redshift:sql_type", "ADBC:redshift:fractional_precision",
+          "ADBC:redshift:type_modifier"}) {
+      std::optional<std::string_view> actual, reference;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &actual, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &reference, error));
+      if (actual != reference)
+        return RedshiftTemporalSchema::Invalid(error,
+                                               "read metadata contradicts descriptor");
+    }
+    const auto precision =
+        adbc::driver::pgwire::BackendProfile::Redshift()
+            .DescribeTypeModifier(pg_type.typname(), pg_type.type_modifier())
+            .fractional_precision;
+    *out = std::make_unique<RedshiftTemporalFieldReader>(
+        pg_type.temporal_kind(),
+        pg_type.temporal_representation() ==
+            adbc::driver::pgwire::TemporalRepresentation::kLossless,
+        precision);
+    return NANOARROW_OK;
+  }
 
   switch (schema_view.type) {
     case NANOARROW_TYPE_BOOL:

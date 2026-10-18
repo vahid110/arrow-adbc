@@ -24,6 +24,7 @@
 #include <string_view>
 
 #include "redshift_decimal.h"
+#include "redshift_temporal.h"
 
 namespace adbcpq {
 
@@ -125,6 +126,10 @@ struct RedshiftScalarSchema {
     std::optional<std::string_view> family;
     NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
         schema, "ADBC:redshift:sql_type", &family, error));
+    if (view.extension_name.data &&
+        RedshiftTemporalSchema::TemporalExtension(
+            std::string_view(view.extension_name.data, view.extension_name.size_bytes)))
+      return NANOARROW_OK;
     const auto storage = Storage(view.type);
     const auto marked = family ? Canonical(*family) : RedshiftScalarKind::kNone;
     if (!redshift && marked == RedshiftScalarKind::kNone) return NANOARROW_OK;
