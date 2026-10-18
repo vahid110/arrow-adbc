@@ -57,7 +57,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C-checked UTF8,F,NQ; O-PG,T | C-checked UTF8/width,NQ | C-explicit/fixed default / C-target checked,NQ | C,F,T byte width/identity,NQ | utf8/large_utf8 + byte limit |
 | DATE | C-checked,F,NQ; O-PG,T | C-exact date32/date64,NQ | C-canonical / C-target exact,NQ | C,F identity/raw modifier,NQ | date32 |
 | TIME / TIME WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | time64(us) or closed int64 extension |
-| TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
+| TIMETZ / TIME WITH TIME ZONE | C-reference,F,NQ | C-exact reference,NQ | C-bare DDL / C-known target,NQ | C-family/known precision,F,NQ | fixed-offset struct extension, below |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us) civil or closed native-count extension |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C-checked,F,NQ; O-PG | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us, UTC) or closed native-count extension |
 | INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-DDL / target producer N | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
@@ -89,8 +89,8 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   `MakeCopyFieldReader`. Backend `kText` means non-COPY execution, not text wire
   fields. [SetSchema](../../c/driver/postgresql/postgres_type.h#L216) maps numeric
   to string with `arrow.opaque` for PostgreSQL; Redshift uses decimal128 for known
-  p/s and exact UTF-8 for unknown descriptors. TIMETZ maps to opaque binary and
-  generic PostgreSQL interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
+  p/s and exact UTF-8 for unknown descriptors. Ordinary PostgreSQL TIMETZ keeps its opaque binary fallback; Task010e3 adds the
+  explicit Redshift fixed-offset struct below. Generic PostgreSQL interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
   interval IDs and strict family readers; neither uses the PostgreSQL interval codec. Unknown bytes can be useful diagnostics without proving a native codec.
 - Modifiers: Task010c1 retains `PQfmod` per field in
   [ResolveOutputTypes](../../c/driver/postgresql/result_helper.cc), including the
@@ -130,7 +130,7 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   [interval catalog/schema/codec tests](../../c/driver/postgresql/redshift_interval_test.cc),
   [literal offline receive fixtures](../../c/driver/postgresql/redshift_interval_test_fixture.h)
   and [PyArrow C Data import](../../ci/scripts/pgwire_interval_c_data_test.py).
-  TIMETZ, native SUPER, HLLSKETCH and spatial family coverage remains pending.
+  Native TIMETZ qualification, SUPER, HLLSKETCH and spatial family coverage remain pending.
 
 The [official Python connector source](https://github.com/aws/amazon-redshift-python-driver/blob/248ffd5896c7a46bba115452dc10b8389d3ede54/redshift_connector/utils/type_utils.py)
 (at pinned commit `248ffd5896c7a46bba115452dc10b8389d3ede54`) distinguishes
@@ -199,6 +199,63 @@ qualifiers, precision, NULL/empty/sliced arrays and exact bytes. These fixtures
 are excluded from production artifacts and do not qualify native protocol,
 catalog population, SQL grammar/domain or installed Redshift target behavior.
 
+## TIMETZ fixed-offset reference contract (Task010e3)
+
+Redshift TIMETZ uses `adbc.redshift.timetz_us_offset.v1` in both existing
+Arrow/lossless connection modes. Storage is a nullable struct with exactly two
+nonnullable primitive children, in order: `time_us:int64` and
+`offset_seconds:int32`. Exact extension metadata is
+`{"version":1,"family":"TIMETZ","time_unit":"us","origin":"start_of_day","offset_unit":"s","offset_sign":"east_of_utc"}`.
+`time_us` is civil time since start of day; positive offsets are east of UTC.
+Pairs remain pairs, including end-of-day and second-resolution offsets: no
+UTC conversion, modulo-day normalization or named zone reconstruction occurs.
+Parent SQL NULL ignores child values after structural validation, and decoded
+NULLs receive 0/0 child placeholders. Valid parents require both actual children
+nonnull. Parent/relation/child offsets are each applied exactly once.
+
+Every semantic write requires the exact extension and `sql_type=TIMETZ`, plus
+explicit single-digit `fractional_precision=0..6`. Dictionaries, nesting,
+ambiguous child storage, nullable child schemas, conflicting/duplicate recognized
+metadata and unknown versions reject before Bind ownership. Unrelated application
+metadata is preserved. Missing/unsupported read precision stays diagnostic and
+read-only; adding precision cannot erase a conflicting raw modifier. The pinned
+[JDBC reference](https://github.com/aws/amazon-redshift-jdbc-driver/blob/773fa16aabbd589e9e2c93684c7ca2543e3ce31a/src/main/java/com/amazon/redshift/jdbc/TypeInfoCache.java#L800)
+recognizes raw -1 as 6 or raw 0..6; absent modifiers do not imply 6. Known read
+precision is checked, and known source and actual-target precision independently
+require exact civil-microsecond divisibility. Actual ingest targets must have
+known TIMETZ OID/family/precision even for NULL/empty sources; only genuine
+unmarked Arrow NA may use the known-target NULL route.
+
+The **unqualified fixed reference** is exactly 12 network-order bytes: signed
+int64 civil microseconds, then signed int32 seconds west of UTC. Widened sign
+inversion rejects the non-reversible INT32_MIN code. The reference civil envelope
+is inclusive 0..86,400,000,000 us and reversible offsets -2,147,483,647 through
+2,147,483,647 seconds. These are codec bounds, **not verified native SQL domains,
+infinities or endpoint facts**. An 8-byte payload is rejected rather than guessed
+or assigned a zero offset. Reader failures preserve the field cursor and prior
+logical output. TIMETZ-only staged fresh buffer allocations preserve old bytes
+and ownership on failure; all reservations precede valid-prefix bitmap backfill
+and the non-failing logical commit. No imported input is grown.
+
+Bare TIMETZ CREATE/REPLACE accepts explicit source p6. Source p0..5 rejects
+before DDL until native precision syntax is qualified. Existing-target
+CREATE_APPEND uses the bounded catalog/identifier route and actual target
+constraints, skipping unused mixed-projection declarations; missing-target
+CREATE_APPEND retains the p0..5 gate. Stable target definitions are required;
+observations reject detected changes but do not prove exclusion of every
+external DDL race. The existing single stream transaction owner is unchanged;
+caller-owned transactions are never silently rolled back. Marked TIMETZ writes
+on PostgreSQL remain unsupported, and ordinary unmarked PostgreSQL is unchanged.
+
+[Literal codecs/allocator tests](../../c/driver/postgresql/redshift_timetz_test.cc),
+[test-linked public API recorder](../../c/driver/postgresql/redshift_interval_recording_test.cc)
+and [codec-produced installed PyArrow C Data/IPC](../../ci/scripts/pgwire_timetz_c_data_test.py)
+are offline reference evidence. Real libpq TIMETZ layout (including 8/12 bytes),
+local versus UTC counts, sign/unit/offset retention, finite/calendar/sentinel
+bounds, 24:00 behavior, catalog precision and session independence remain native
+qualification gates before first release. No network producer or public backend
+identity override is introduced by these test fixtures.
+
 ## Current Redshift descriptor metadata (Task010c1)
 
 Additive UTF-8 field metadata, alongside existing `POSTGRESQL:type`, opaque and
@@ -213,8 +270,9 @@ interval-family metadata:
 
 The [pinned AWS JDBC arithmetic](https://github.com/aws/amazon-redshift-jdbc-driver/blob/773fa16aabbd589e9e2c93684c7ca2543e3ce31a/src/main/java/com/amazon/redshift/jdbc/TypeInfoCache.java#L665)
 is reference evidence, not a captured native descriptor. Unsupported encodings
-keep raw diagnostics without fabricated defaults. Interval/temporal precision,
-qualifiers, VARBYTE and other modifier meanings remain unknown. PostgreSQL's
+keep raw diagnostics without fabricated defaults. Additional family-specific
+reference contracts are documented separately; unqualified native modifier
+meanings remain qualification gates. PostgreSQL's
 public schema metadata policy stays unchanged. Task010c2 uses these descriptors for decimal128 reads; unknown Redshift numeric
 modifiers keep exact UTF-8 text with DECIMAL identity and no opaque label.
 
@@ -226,7 +284,8 @@ conditions cap intermediate/final results at 37. Native boundary qualification
 remains open. [Character results](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html)
 may reach 16M bytes despite narrower stored-column limits. GetObjects emits known
 numeric precision/scale/radix or character column-size/octet-length; unknown
-values remain null. CREATE/append validation is a separate future writer task.
+values remain null. CREATE/append validation follows the separate semantic writer
+contracts below.
 
 ## Decimal reference reads (Task010c2)
 
@@ -585,10 +644,13 @@ must be reviewed before implementation; an unresolved representation blocks rele
   families with connection-local Arrow/lossless contexts, exact binding, known
   precision checks and target-aware ingest. Native wire/domain/sentinel/calendar
   and precision DDL gates remain open.
-- **010e2 implemented, final local validation/review pending:** both interval families,
+- **010e2 locally integrated 35584f5, independent FULL approval and 24 validation steps passed:** both interval families,
   all 13 qualifier identities and precision 0..6, exact reference writes/DDL and
   raw diagnostic catalog observation. Native target producer mapping remains open.
-- **Prepared successors, not dispatched here:** TIMETZ; native SUPER and lossless extension/protocol decisions;
+- **010e3 implemented, final local FULL validation/review pending:** explicit TIMETZ fixed-offset
+  struct, checked reference codecs, source/actual-target precision and bare DDL.
+  Native layout/domain/offset/precision qualification remains open.
+- **Prepared successors, not dispatched here:** native SUPER and lossless extension/protocol decisions;
   HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
   these phases; no arbitrary future phase number implies completion or authority.
 - **Final all-type qualification:** complete the 21-row read/bind/create/append/

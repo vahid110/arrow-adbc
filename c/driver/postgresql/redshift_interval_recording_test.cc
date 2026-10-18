@@ -103,7 +103,8 @@ PGresult* Query(const char* query) {
   if (q.find("SELECT cls.oid FROM") != std::string::npos)
     return Rows(1, recording.exists ? std::vector<std::vector<const char*>>{{"12345"}}
                                     : std::vector<std::vector<const char*>>{});
-  if (q.find("SELECT attr.attname, attr.atttypid") != std::string::npos) {
+  if (q.find("SELECT attr.attname, attr.atttypid") != std::string::npos ||
+      q.find("SELECT attname, atttypid, atttypmod") != std::string::npos) {
     if (!recording.exists) return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
     if (recording.timetz_target) {
       const auto raw =

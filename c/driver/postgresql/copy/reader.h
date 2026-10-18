@@ -716,7 +716,11 @@ class RedshiftTimetzFieldReader : public PostgresCopyFieldReader {
       return RedshiftTimetzSchema::Invalid(error,
                                            "output struct children/length disagree");
     auto* bitmap = ArrowArrayValidityBitmap(array);
-    if ((bitmap->size_bits != 0 && bitmap->size_bits != array->length) ||
+    if (bitmap->buffer.capacity_bytes < bitmap->buffer.size_bytes ||
+        (bitmap->buffer.capacity_bytes > 0 && !bitmap->buffer.data) ||
+        (!bitmap->buffer.data &&
+         (bitmap->size_bits != 0 || bitmap->buffer.size_bytes != 0)) ||
+        (bitmap->size_bits != 0 && bitmap->size_bits != array->length) ||
         bitmap->size_bits < 0 ||
         bitmap->buffer.size_bytes !=
             bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||

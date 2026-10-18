@@ -97,7 +97,8 @@ struct RedshiftTimetzSchema {
     NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, schema, error));
     if (!sql || *sql != "TIMETZ" || !name || *name != kName || !metadata ||
         *metadata != kMetadata || view.type != NANOARROW_TYPE_STRUCT ||
-        schema->n_children != 2 || schema->dictionary)
+        schema->n_children != 2 || schema->dictionary ||
+        (schema->flags & ~static_cast<int64_t>(ARROW_FLAG_NULLABLE)))
       return Invalid(error, "extension/family/version/struct conflict");
     const char* child_names[] = {"time_us", "offset_seconds"};
     for (int child = 0; child < 2; ++child) {
@@ -106,7 +107,7 @@ struct RedshiftTimetzSchema {
       NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&child_view, value, error));
       if (!value->name || std::string_view(value->name) != child_names[child] ||
           child_view.type != (child == 0 ? NANOARROW_TYPE_INT64 : NANOARROW_TYPE_INT32) ||
-          (value->flags & ARROW_FLAG_NULLABLE) || value->n_children || value->dictionary)
+          value->flags != 0 || value->n_children || value->dictionary)
         return Invalid(error, "primitive child name/order/type/nullability conflict");
       NANOARROW_RETURN_NOT_OK(ValidateKeys(value, true, error));
     }

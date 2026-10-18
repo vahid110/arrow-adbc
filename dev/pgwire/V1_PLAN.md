@@ -64,12 +64,16 @@ is a native/release gate. Task010e1 implements DATE/TIME/TIMESTAMP/TIMESTAMPTZ
 with field-local Arrow/lossless modes, checked units/epochs and source/target
 precision (locally integrated 7fc46fa; independent FULL review and all 22
 validation steps passed). Task010e2 supplies versioned interval contracts for all
-13 qualifiers and exact reference codecs/DDL; final local validation/review is
-pending. Native interval constraint producers remain unqualified, blocking actual
+13 qualifiers and exact reference codecs/DDL (locally integrated 35584f5;
+independent FULL approval and all 24 serial validation steps passed).
+Task010e3 implements the fixed-offset TIMETZ struct/reference codec, explicit
+source precision, actual-target precision checks and bounded bare declarations;
+final local FULL validation/review is pending. Native interval constraint
+producers remain unqualified, blocking actual
 target writes even for NULL/empty input. Native temporal endpoints,
 sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
 Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
-native character/binary boundaries, TIMETZ, SUPER, HLL and spatial
+native character/binary boundaries, TIMETZ layout/domain/offset/precision, SUPER, HLL and spatial
 work remain open before
 separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap

@@ -62,10 +62,13 @@ Current state only; history is in git and PR descriptions.
   target-aware ingest (locally integrated 7fc46fa; independent FULL review and all 22
   validation steps passed). Task010e2 adds closed interval qualifier/precision
   schemas, exact reference reads/writes/DDL and bounded raw target observations;
-  final local validation/review is pending. Native interval target constraint
-  producers remain unqualified and actual-target writes fail closed. Synthetic/local PostgreSQL
+  locally integrated 35584f5 after independent FULL approval and all 24 serial
+  validation steps. Native interval target constraint producers remain unqualified
+  and actual-target writes fail closed. Task010e3 adds an explicit fixed-offset
+  TIMETZ struct, checked reference reads/writes, source/target precision and
+  bare declaration handling; final local FULL validation/review is pending. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.
-  Native temporal wire/domain/precision and character/binary boundaries, TIMETZ,
+  Native temporal wire/domain/precision and character/binary boundaries, TIMETZ native layout/domain/offset/precision,
   interval native wire/domain/catalog/qualifier qualification, SUPER,
   HLL and spatial work remain
   required before Task009. No paid operation is performed or authorized here.

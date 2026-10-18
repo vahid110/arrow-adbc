@@ -144,7 +144,7 @@ TEST(RedshiftTimetzTest, ClosedSchemaAndReadUnknownPrecisionNeverBecomeWriteDefa
       EXPECT_FALSE(cached.type_modifier());
       EXPECT_FALSE(cached.is_redshift_timetz());
     }
-  for (int change = 0; change < 11; ++change) {
+  for (int change = 0; change < 13; ++change) {
     nanoarrow::UniqueSchema schema;
     ASSERT_EQ(testing::TimetzWriteSchema(schema.get()), 0);
     auto* field = schema->children[0];
@@ -179,6 +179,8 @@ TEST(RedshiftTimetzTest, ClosedSchemaAndReadUnknownPrecisionNeverBecomeWriteDefa
       ASSERT_EQ(ArrowSchemaAllocateDictionary(field), 0);
       ArrowSchemaInitFromType(field->dictionary, NANOARROW_TYPE_INT32);
     }
+    if (change == 11) field->flags |= ARROW_FLAG_DICTIONARY_ORDERED;
+    if (change == 12) field->children[0]->flags |= ARROW_FLAG_MAP_KEYS_SORTED;
     EXPECT_NE(PostgresType::ValidateTemporalWriteSchema(*resolver, schema.get(), nullptr),
               0)
         << change;
@@ -218,6 +220,8 @@ TEST(RedshiftTimetzTest, StrictMalformedFieldsPrecisionAndSignPreserveReaderStat
     TimetzCodec codec;
     ASSERT_EQ(codec.Init(p), 0);
     EXPECT_EQ(codec.Read(good) == 0, p == 6);
+    // A separate exact one-second vector is valid at every declared p.
+    ASSERT_EQ(codec.Read(testing::NumericHex("00000000000f42400000001e")), 0);
   }
 }
 struct AllocationFailure {
@@ -377,6 +381,14 @@ TEST(RedshiftTimetzTest, IndependentSourceTargetPrecisionAndKnownTargetNullValid
       nanoarrow::UniqueBuffer bytes;
       EXPECT_EQ(writer->Write(bytes.get(), 0, nullptr) == 0, source >= 3 && target >= 3);
       EXPECT_EQ(bytes->size_bytes, source >= 3 && target >= 3 ? 16 : 0);
+      nanoarrow::UniqueArray exact;
+      ASSERT_EQ(testing::TimetzWriteBatch(schema.get(), exact.get(), {{{1000000, 30}}},
+                                          nullptr),
+                0);
+      ASSERT_EQ(ArrowArrayViewSetArray(view.get(), exact.get(), nullptr), 0);
+      bytes->size_bytes = 0;
+      ASSERT_EQ(writer->Write(bytes.get(), 0, nullptr), 0);
+      EXPECT_EQ(bytes->size_bytes, 16);
     }
   for (auto raw : {std::optional<int32_t>{}, std::optional<int32_t>{999},
                    std::optional<int32_t>{3}}) {
@@ -471,6 +483,50 @@ TEST(RedshiftTimetzTest, UnalignedWireAndMalformedOutputDoNotMutateLogicalState)
   EXPECT_NE(RedshiftTimetzSchema::Reserve(buffer.get(), 1, nullptr), 0);
   buffer->size_bytes = 0;
   buffer->capacity_bytes = 0;
+}
+TEST(RedshiftTimetzTest,
+     ExistingBitmapGrowthFailurePreservesPrefixAndInitializesNewTail) {
+  for (int fail_at = 1; fail_at <= 3; ++fail_at) {
+    AllocationFailure failure;
+    failure.fail = false;
+    {
+      auto allocation = failure.allocator();
+      TimetzCodec codec;
+      ASSERT_EQ(codec.Init(6, &allocation), 0);
+      for (int row = 0; row < 7; ++row)
+        ASSERT_EQ(codec.Read(testing::NumericHex("00000000000003e90000001e")), 0);
+      ASSERT_EQ(codec.Read("", -1), 0);
+      auto* bitmap = ArrowArrayValidityBitmap(codec.array.get());
+      ASSERT_EQ(bitmap->size_bits, 8);
+      ASSERT_EQ(bitmap->buffer.size_bytes, 1);
+      EXPECT_EQ(bitmap->buffer.data[0], 0x7f);
+      bitmap->buffer.capacity_bytes = bitmap->buffer.size_bytes;
+      for (int child = 0; child < 2; ++child) {
+        auto* buffer = ArrowArrayBuffer(codec.array->children[child], 1);
+        buffer->capacity_bytes = buffer->size_bytes;
+      }
+      failure.calls = 0;
+      failure.fail_at = fail_at;
+      failure.fail = true;
+      EXPECT_EQ(codec.Read("", -1), ENOMEM);
+      EXPECT_EQ(codec.array->length, 8);
+      EXPECT_EQ(codec.array->null_count, 1);
+      EXPECT_EQ(bitmap->size_bits, 8);
+      EXPECT_EQ(bitmap->buffer.size_bytes, 1);
+      EXPECT_EQ(bitmap->buffer.data[0], 0x7f);
+      EXPECT_EQ(codec.array->children[0]->length, 8);
+      EXPECT_EQ(codec.array->children[1]->length, 8);
+      failure.fail = false;
+      ASSERT_EQ(codec.Read(testing::NumericHex("00000000000003e90000001e")), 0);
+      EXPECT_EQ(bitmap->size_bits, 9);
+      EXPECT_EQ(bitmap->buffer.size_bytes, 2);
+      EXPECT_EQ(bitmap->buffer.data[0], 0x7f);
+      EXPECT_EQ(bitmap->buffer.data[1], 1);
+      EXPECT_EQ(codec.array->length, 9);
+      EXPECT_EQ(codec.array->null_count, 1);
+    }
+    EXPECT_EQ(failure.allocations, failure.frees);
+  }
 }
 }  // namespace
 }  // namespace adbcpq
