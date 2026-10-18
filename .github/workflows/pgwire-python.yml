@@ -31,6 +31,7 @@ on:
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
+      - "ci/scripts/pgwire_temporal_public_test.py"
       - "python/adbc_driver_manager/**"
       - "python/adbc_driver_redshift/**"
       - "c/driver/postgresql/**"
@@ -54,6 +55,7 @@ on:
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
+      - "ci/scripts/pgwire_temporal_public_test.py"
       - "python/adbc_driver_manager/**"
       - "python/adbc_driver_redshift/**"
       - "c/driver/postgresql/**"
@@ -188,6 +190,8 @@ jobs:
           python -B ci/scripts/pgwire_scalar_public_test.py \
             --driver "$library" --uri "$ADBC_POSTGRESQL_TEST_URI"
           python -B ci/scripts/pgwire_bytes_public_test.py \
+            --driver "$library" --uri "$ADBC_POSTGRESQL_TEST_URI"
+          python -B ci/scripts/pgwire_temporal_public_test.py \
             --driver "$library" --uri "$ADBC_POSTGRESQL_TEST_URI"
 
       - name: Installed wheel qualification (local PostgreSQL plumbing, NOT Redshift)
