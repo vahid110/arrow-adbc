@@ -25,8 +25,10 @@
 
 #include <gtest/gtest.h>
 
+#include "bind_stream.h"
 #include "copy/reader.h"
 #include "copy/writer.h"
+#include "driver/framework/utility.h"
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_scalar_test_fixture.h"
 
@@ -196,6 +198,35 @@ TEST(RedshiftScalarTest, FloatWidthsExtremaSubnormalsAndSignedZeroUseLiteralWire
                         (uint32_t{raw[2]} << 8) | uint32_t{raw[3]};
   EXPECT_EQ(bits & 0x7f800000U, 0x7f800000U);
   EXPECT_NE(bits & 0x007fffffU, 0U);
+}
+
+TEST(RedshiftScalarTest, NullIngestParametersUseActualTargetOidInsteadOfTextFallback) {
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::ScalarResolver(BackendProfile::Redshift(), &resolver), 0);
+  for (int col = 0; col < 6; col++) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(testing::ScalarSchema(schema.get(), NANOARROW_TYPE_NA), 0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(
+        testing::ScalarBatch<int64_t>(schema.get(), array.get(), {std::nullopt}, nullptr),
+        0);
+    nanoarrow::UniqueArrayStream stream;
+    adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+    BindStream bind;
+    bind.SetBind(stream.get());
+    ASSERT_TRUE(bind.Begin([] { return adbc::driver::Status::Ok(); }).ok());
+    PostgresType field;
+    ASSERT_EQ(resolver->Find(testing::kScalarOids[col], &field, nullptr), 0);
+    PostgresType target(PostgresTypeId::kRecord);
+    target.AppendChild("amount",
+                       field.WithFieldDescriptor(-1, BackendProfile::Redshift()));
+    // No SQL/network is needed for scalar parameter selection. The existing
+    // production writer and actual destination OID are selected in one call.
+    ASSERT_TRUE(bind.SetParamTypes(nullptr, *resolver, false, &target).ok());
+    ASSERT_EQ(bind.param_types.size(), 1);
+    EXPECT_EQ(bind.param_types[0], testing::kScalarOids[col]);
+    EXPECT_EQ(bind.param_formats[0], kPgBinaryFormat);
+  }
 }
 
 TEST(RedshiftScalarTest, CanonicalDescriptorIdentityLeavesUnknownQualifiersUnknown) {

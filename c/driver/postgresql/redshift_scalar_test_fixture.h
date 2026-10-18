@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "redshift_decimal_test_fixture.h"
+#include "redshift_numeric_test_fixture.h"
 #include "type_modifier_test_fixture.h"
 
 namespace adbcpq::testing {
@@ -45,7 +46,7 @@ inline ArrowErrorCode ScalarResolver(const adbc::driver::pgwire::BackendProfile&
     NANOARROW_RETURN_NOT_OK(
         (*out)->Insert({kScalarOids[i], kScalarNames[i], receive[i], 0, 0, 0}, nullptr));
   }
-  return NANOARROW_OK;
+  return (*out)->Insert({74007, "text", "textrecv", 0, 0, 0}, nullptr);
 }
 
 inline ArrowErrorCode ScalarSchema(ArrowSchema* schema, ArrowType storage,
@@ -78,5 +79,50 @@ inline ArrowErrorCode ScalarBatch(ArrowSchema* schema, ArrowArray* array,
     NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(array));
   }
   return ArrowArrayFinishBuildingDefault(array, error);
+}
+// Independent standard PostgreSQL binary scalar reference fields, never captured
+// Redshift traffic. Codec-produced Arrow arrays are imported by installed PyArrow.
+inline ArrowErrorCode ScalarFixture(int batch, ArrowArray* array, ArrowSchema* schema,
+                                    ArrowError* error) {
+  if (batch < 0 || batch > 7) return EINVAL;
+  const char* fields[6][6] = {
+      {"8000", "80000000", "8000000000000000", "ff7fffff", "ffefffffffffffff", "00"},
+      {"7fff", "7fffffff", "7fffffffffffffff", "7f7fffff", "7fefffffffffffff", "01"},
+      {"0000", "00000000", "0000000000000000", "80000000", "8000000000000000", "00"},
+      {"0001", "00000001", "0000000000000001", "00000001", "0000000000000001", "01"},
+      {"ffff", "ffffffff", "ffffffffffffffff", "7f800000", "fff0000000000000", "00"},
+      {"0002", "00000002", "0000000000000002", "7fc00000", "7ff8000000000000", "01"}};
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(
+      ScalarResolver(adbc::driver::pgwire::BackendProfile::Redshift(), &resolver));
+  PqResultHelper query(nullptr, "");
+  PGresult* result = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  if (!result) return ENOMEM;
+  query.SetResult(result);
+  PGresAttDesc attrs[6] = {};
+  for (int col = 0; col < 6; col++) {
+    attrs[col].name = const_cast<char*>(kScalarNames[col]);
+    attrs[col].typid = kScalarOids[col];
+    attrs[col].atttypmod = -1;
+    attrs[col].format = 1;
+  }
+  if (!PQsetResultAttrs(result, 6, attrs)) return ENOMEM;
+  const int rows = batch == 2 ? 0 : (batch >= 3 ? 1 : (batch == 1 ? 2 : 7));
+  for (int row = 0; row < rows; row++) {
+    const bool null = batch == 3 || row == 6;
+    const int reference = batch == 1 ? (row == 0 ? 5 : 3) : row;
+    for (int col = 0; col < 6; col++) {
+      const char* hex = null ? "" : fields[reference][col];
+      if (batch == 4 && col == 5) hex = "02";
+      if (batch == 5 && col == 5) hex = "0100";
+      if (batch == 6 && col == 0) hex = "80";
+      if (batch == 7 && col == 0) hex = "";
+      const auto bytes = NumericHex(hex);
+      if (!PQsetvalue(result, row, col, null ? nullptr : const_cast<char*>(bytes.data()),
+                      null ? -1 : static_cast<int>(bytes.size())))
+        return ENOMEM;
+    }
+  }
+  return FixtureFromQuery(query, resolver, array, schema, error);
 }
 }  // namespace adbcpq::testing

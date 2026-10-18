@@ -47,12 +47,12 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 
 | SQL column type and aliases (21 entries) | Native read | Bind | Create / append | Metadata | Recommended representation |
 |---|---|---|---|---|---|
-| SMALLINT / INT2 | C,O-PG,T | C,O-PG | C / C | C-name | int16 |
-| INTEGER / INT / INT4 | C,O-PG,T | C,O-PG,T | C / C,T | C-name,T | int32 |
-| BIGINT / INT8 | C,O-PG,T,L | C,O-PG,L | C,L / C,L | C-name,L | int64 |
+| SMALLINT / INT2 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | int16 |
+| INTEGER / INT / INT4 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | int32 |
+| BIGINT / INT8 | C,O-PG,T,L | C-checked,NQ; prior L | C-canonical / C-target-checked,NQ; prior L | C-canonical name,NQ; prior L | int64 |
 | DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-exact128/256/marked-text,NQ | C-explicit-p/s / C-target-exact,NQ | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
-| REAL / FLOAT4 | C,O-PG,T | C,O-PG | C / C | C-name | float32 |
-| DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T | C,O-PG | C / C | C-name | float64 |
+| REAL / FLOAT4 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float32 |
+| DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C,F byte width; NQ | utf8 + CHAR width/identity |
 | VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C,O-PG,T | C,O-PG | C-defaults / C,T | C,F,T byte width; NQ | utf8/large_utf8 + byte limit |
 | DATE | C,O-PG,T | C-date32,O-PG | C / C | C-name | date32 |
@@ -62,7 +62,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C,O-PG | C,O-PG | C / C | C-name; precision N | timestamp(us, UTC), server-retained instant |
 | INTERVAL YEAR TO MONTH | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; qualifier N | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | C,F,NQ | explicitly rejected | rejected / rejected | C,F family; precision N | duration(us) + interval family |
-| BOOLEAN / BOOL | C,O-PG,T | C,O-PG | C / C | C-name | bool |
+| BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
 | HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
 | VARBYTE / VARBINARY / BINARY VARYING | C-alias,O-PG,T | C-binary,NQ | C-lookup / C | C-name; length N | binary/large_binary |
@@ -99,20 +99,22 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   ordered catalog columns through the same backend interpretation. OID-only
   parameters retain canonical family but no inferred precision/scale/width.
 - Binding: [BindStream::SetParamTypes](../../c/driver/postgresql/bind_stream.h#L144)
-  normally derives binary parameter OIDs/writers from Arrow; only Arrow NA uses
-  inferred expected types. Existing PostgreSQL `arrow.json` mapping is not SUPER.
+  derives parameter types from Arrow or explicit canonical semantic metadata;
+  Arrow NA can use inferred expected types. Known decimal/scalar ingest targets
+  select matching binary writers and parameter OIDs together. Existing PostgreSQL `arrow.json` mapping is not SUPER.
   Opaque readback is not safely round-trippable. TIME32/DATE64 map to candidate DB
   types but lack matching writer cases; TIME64 accepts only microseconds.
 - Ingest: [CREATE mapping](../../c/driver/postgresql/statement.cc#L743) calls
   [sql_type_name](../../c/driver/postgresql/postgres_type.h#L200) without modifiers:
   text widths and CHAR identity are lost. Task010c3 adds explicit decimal(p,s)
   and actual target descriptors to both COPY and prepared INSERT decimal writers;
-  other prepared parameters keep their Arrow-derived types. A read alias does
+  Task010c4 extends this to the six primitive numeric/boolean families. Other
+  prepared parameters keep their Arrow-derived types. A read alias does
   not prove correct VARBYTE DDL/parameter identity.
   The staged CSV helper is not selected by the supported ingest path.
-- Scalar hazards: [writer.h](../../c/driver/postgresql/copy/writer.h#L170) uses
-  narrowing casts; timestamp nanoseconds divide by 1000, as do generic interval
-  nanoseconds. Reject overflow/nonrepresentable fractions, not silent wrapping or
+- Remaining scalar hazards: Task010c4 guards Redshift integer/float narrowing;
+  unmarked PostgreSQL retains its previous conversion policy. Timestamp
+  nanoseconds divide by 1000, as do generic interval nanoseconds. Reject overflow/nonrepresentable fractions, not silent wrapping or
   truncation. Timestamp reader epoch overflow already errors; full Redshift range,
   TIME 24:00 and timezone semantics still need explicit acceptance.
 - Tests: [RedshiftSmokeTest](../../c/driver/postgresql/redshift_test.cc#L387) declares
@@ -223,6 +225,35 @@ original error; issuing ROLLBACK alone is not evidence of cleanup. Production pu
 Bind/stream/catalog/DDL/COPY tests, a prepared INSERT seam and consumer-exported
 C Data writer checks provide local evidence only. Native libpq/Redshift boundaries,
 independent review and final platform CI remain qualification gates.
+
+## Primitive scalar contract (Task010c4)
+
+SMALLINT/INTEGER/BIGINT, REAL/DOUBLE PRECISION and BOOLEAN carry canonical
+`ADBC:redshift:sql_type` identity across result, schema, catalog and OID-only
+parameter descriptions. GetObjects uses the same canonical names for these six
+Redshift families; original CREATE alias spelling and unknown qualifiers are not
+invented. Ordinary PostgreSQL metadata remains unchanged.
+
+Redshift Arrow primitive inputs use checked source and actual-target widths;
+explicit canonical metadata opts into the same contract on PostgreSQL. Signed
+and unsigned integer endpoints are checked before casting, including unsigned64's
+high bit. Within-family integral narrowing accepts only fitting values. Float32
+narrowing checks finite bounds before casting and rejects inexact values, including
+underflow; widening is exact. Signed zero, NaN and signed infinities have numeric
+semantics, without a NaN payload promise. Integer/float/boolean cross-family
+coercions and semantic dictionaries reject; unmarked PG string dictionaries retain
+their previous behavior. Arrow null is accepted for a known supported target.
+
+Validated schema identity renders canonical DDL before replacement; known append
+fields select matching destination OID and binary layout together. OID-only SQL
+parameters preserve the offered value; an application-written CAST may round.
+Redshift boolean binary reads accept only byte0/1 and reject malformed/truncated
+fields before appending. Integer/float reads retain their native fixed widths.
+The existing whole-stream INSERT transaction owner and cleanup uncertainty signal
+remain shared with C3; caller-owned work stays caller-owned. Runtime value errors
+may follow DDL, so no stronger table-replacement atomicity is promised. Native
+Redshift range, subnormal retention and alias/protocol qualification remain open;
+local PostgreSQL/codec/installed-consumer tests are separate evidence.
 
 ## Recommended lossless contract and acceptance
 
@@ -357,11 +388,14 @@ must be reviewed before implementation; an unresolved representation blocks rele
   unknown modifiers keep exact decimal text. Strict finite base-10000 reference
   fields pass through the production reader and C Data import tests. Native
   Redshift/libpq format/boundary qualification remains pending.
-- **010c3 implemented, local validation/review pending:** explicit decimal DDL,
+- **010c3 locally integrated d04f2d2, review/native/installed validation passed:** explicit decimal DDL,
   bounded exact decimal/marked-text binding, actual target-aware append and owned
   rollback uncertainty handling. Final platform CI is deferred until development ends.
-- **010c successors:** other scalar/character/temporal value/write gaps and native
-  protocol/boundary evidence; no all-type completion claim.
+- **010c4 implemented, final local validation/review pending:** checked primitive
+  scalar conversions, canonical identity/DDL, exact known-target append and strict
+  boolean wire reads. Final platform CI follows development.
+- **010c successors:** character/temporal value/write gaps, interval writes and
+  native protocol/boundary evidence; no all-type completion claim.
 - **010d:** native SUPER plus supported-size binding/ingest, with the extension/
   protocol decisions above; a mixed projection must work without user query rewrites.
 - **010e:** HLLSKETCH and spatial native codecs/semantic contracts, split if needed;

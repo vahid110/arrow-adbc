@@ -53,10 +53,12 @@ unknowns retained (PR23 merged; offline CI passed). Task010c2 adds known-p/s
 decimal128 reads and strict exact-text unknowns with reference codec/C Data tests
 (PR24 merged; offline CI passed). Task010c3 adds explicit legal decimal DDL,
 exact decimal128/256 and DECIMAL-text binding, target-aware append and owned
-rollback uncertainty handling; local validation/review is pending. Final platform
-CI follows development under the human's local-first workflow.
+rollback uncertainty handling (locally integrated d04f2d2; independent review and
+serial native/installed validation passed). Task010c4 adds checked integer/float/
+boolean read/bind/target-aware ingest and canonical identity; final local validation/
+review is pending. Platform CI follows the human's local-first workflow.
 Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
-scalar/temporal value/write gaps, SUPER, HLL and spatial work remain open before
+character/temporal value/write gaps, SUPER, HLL and spatial work remain open before
 separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer

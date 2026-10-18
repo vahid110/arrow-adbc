@@ -22,6 +22,7 @@
 #include "copy/writer.h"
 #include "redshift_interval_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
+#include "redshift_scalar_test_fixture.h"
 #include "type_modifier_test_fixture.h"
 
 #if defined(_WIN32)
@@ -51,33 +52,21 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftDecimalFixture(int batch,
   return adbcpq::testing::DecimalFixture(batch, array, schema, &error);
 }
 
-// Borrow real consumer-exported C Data, run the production parameter writer, and
-// return its field bytes through C Data. Target p/s == 0 means an OID-only SQL
-// parameter; positive p/s describe a synthetic catalog fixture, never a live DB.
-extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftDecimalWriteFixture(
-    ArrowArray* input, ArrowSchema* input_schema, int precision, int scale,
-    ArrowArray* array, ArrowSchema* schema) {
-  if (!input || !input_schema || !array || !schema || precision < 0 || precision > 38 ||
-      scale < 0 || scale > 37 || scale > precision)
-    return EINVAL;
+namespace {
+int ExportParameterWire(ArrowArray* input, ArrowSchema* input_schema,
+                        const adbcpq::PostgresTypeResolver& resolver,
+                        const adbcpq::PostgresType* target, ArrowArray* array,
+                        ArrowSchema* schema) {
+  if (!input || !input_schema || !array || !schema) return EINVAL;
   ArrowError error{};
   nanoarrow::UniqueArrayView view;
   NANOARROW_RETURN_NOT_OK(ArrowArrayViewInitFromSchema(view.get(), input_schema, &error));
   if (view->storage_type != NANOARROW_TYPE_STRUCT || view->n_children != 1) return EINVAL;
   NANOARROW_RETURN_NOT_OK(ArrowArrayViewSetArray(view.get(), input, &error));
-  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
-  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
-  NANOARROW_RETURN_NOT_OK(adbcpq::testing::ModifierResolver(profile, &resolver));
-  adbcpq::PostgresType target;
-  if (precision) {
-    NANOARROW_RETURN_NOT_OK(
-        resolver->Find(adbcpq::testing::kNumericOid, &target, &error));
-    target = target.WithFieldDescriptor(4 + (precision << 16) + scale, profile);
-  }
   std::unique_ptr<adbcpq::PostgresCopyFieldWriter> writer;
-  NANOARROW_RETURN_NOT_OK(
-      adbcpq::MakeCopyFieldWriter(input_schema->children[0], view->children[0], *resolver,
-                                  precision ? &target : nullptr, &writer, false, &error));
+  NANOARROW_RETURN_NOT_OK(adbcpq::MakeCopyFieldWriter(input_schema->children[0],
+                                                      view->children[0], resolver, target,
+                                                      &writer, false, &error));
   nanoarrow::UniqueSchema output_schema;
   ArrowSchemaInit(output_schema.get());
   NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(output_schema.get(), 1));
@@ -105,4 +94,51 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftDecimalWriteFixture(
   ArrowArrayMove(output.get(), array);
   ArrowSchemaMove(output_schema.get(), schema);
   return NANOARROW_OK;
+}
+}  // namespace
+
+// Borrow consumer-exported C Data, execute the production parameter writer,
+// and export actual field bytes. These are synthetic target/catalog fixtures.
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftDecimalWriteFixture(
+    ArrowArray* input, ArrowSchema* input_schema, int precision, int scale,
+    ArrowArray* array, ArrowSchema* schema) {
+  if (precision < 0 || precision > 38 || scale < 0 || scale > 37 || scale > precision)
+    return EINVAL;
+  ArrowError error{};
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(adbcpq::testing::ModifierResolver(profile, &resolver));
+  adbcpq::PostgresType target;
+  if (precision) {
+    NANOARROW_RETURN_NOT_OK(
+        resolver->Find(adbcpq::testing::kNumericOid, &target, &error));
+    target = target.WithFieldDescriptor(4 + (precision << 16) + scale, profile);
+  }
+  return ExportParameterWire(input, input_schema, *resolver,
+                             precision ? &target : nullptr, array, schema);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftScalarWriteFixture(
+    ArrowArray* input, ArrowSchema* input_schema, int target_kind, ArrowArray* array,
+    ArrowSchema* schema) {
+  if (target_kind < 0 || target_kind > 6) return EINVAL;
+  ArrowError error{};
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  NANOARROW_RETURN_NOT_OK(adbcpq::testing::ScalarResolver(profile, &resolver));
+  adbcpq::PostgresType target;
+  if (target_kind) {
+    NANOARROW_RETURN_NOT_OK(
+        resolver->Find(adbcpq::testing::kScalarOids[target_kind - 1], &target, &error));
+    target = target.WithFieldDescriptor(-1, profile);
+  }
+  return ExportParameterWire(input, input_schema, *resolver,
+                             target_kind ? &target : nullptr, array, schema);
+}
+
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftScalarFixture(int batch,
+                                                                 ArrowArray* array,
+                                                                 ArrowSchema* schema) {
+  ArrowError error{};
+  return adbcpq::testing::ScalarFixture(batch, array, schema, &error);
 }

@@ -18,6 +18,8 @@
 """Import real codec-produced C Data. Offline protocol fixtures, never live evidence."""
 
 import ctypes
+import math
+import struct
 import sys
 import unittest
 from decimal import Decimal
@@ -236,6 +238,16 @@ class IntervalCDataTest(unittest.TestCase):
             )
 
     def encode_decimal(self, arrow_type, values, target=(0, 0), metadata=None):
+        return self.encode_parameter(
+            arrow_type, values, self.decimal_write, target, metadata
+        )
+
+    def encode_scalar(self, arrow_type, values, target=0, metadata=None):
+        return self.encode_parameter(
+            arrow_type, values, self.scalar_write, (target,), metadata
+        )
+
+    def encode_parameter(self, arrow_type, values, produce, target, metadata):
         field = pa.field("amount", arrow_type, metadata=metadata)
         batch = pa.RecordBatch.from_arrays(
             [pa.array(values, type=arrow_type)], schema=pa.schema([field])
@@ -246,7 +258,7 @@ class IntervalCDataTest(unittest.TestCase):
             ctypes.addressof(input_array), ctypes.addressof(input_schema)
         )
         try:
-            code = self.decimal_write(
+            code = produce(
                 ctypes.byref(input_array),
                 ctypes.byref(input_schema),
                 *target,
@@ -344,6 +356,155 @@ class IntervalCDataTest(unittest.TestCase):
             self.assertNotEqual(code, 0)
             self.assertIsNone(actual)
 
+    def test_scalar_reader_c_data_extrema_subnormals_nulls_and_metadata(self):
+        expected_ints = [
+            [-32768, 32767, 0, 1, -1, 2],
+            [-2147483648, 2147483647, 0, 1, -1, 2],
+            [-(2**63), 2**63 - 1, 0, 1, -1, 2],
+        ]
+        expected_float = [
+            [
+                -float.fromhex("0x1.fffffep+127"),
+                float.fromhex("0x1.fffffep+127"),
+                -0.0,
+                float.fromhex("0x1p-149"),
+                math.inf,
+                math.nan,
+            ],
+            [
+                -float.fromhex("0x1.fffffffffffffp+1023"),
+                float.fromhex("0x1.fffffffffffffp+1023"),
+                -0.0,
+                float.fromhex("0x1p-1074"),
+                -math.inf,
+                math.nan,
+            ],
+        ]
+        families = [
+            b"SMALLINT",
+            b"INTEGER",
+            b"BIGINT",
+            b"REAL",
+            b"DOUBLE PRECISION",
+            b"BOOLEAN",
+        ]
+        schema = None
+        for batch_id, rows in [
+            (0, [0, 1, 2, 3, 4, 5, None]),
+            (1, [5, 3]),
+            (2, []),
+            (3, [None]),
+        ]:
+            c_array, c_schema = ArrowArray(), ArrowSchema()
+            self.assertEqual(
+                self.scalar_produce(
+                    batch_id, ctypes.byref(c_array), ctypes.byref(c_schema)
+                ),
+                0,
+            )
+            batch = pa.RecordBatch._import_from_c(
+                ctypes.addressof(c_array), ctypes.addressof(c_schema)
+            )
+            if schema is None:
+                schema = batch.schema
+            else:
+                self.assertTrue(schema.equals(batch.schema, check_metadata=True))
+            self.assertEqual(
+                batch.schema.types,
+                [
+                    pa.int16(),
+                    pa.int32(),
+                    pa.int64(),
+                    pa.float32(),
+                    pa.float64(),
+                    pa.bool_(),
+                ],
+            )
+            for col in range(3):
+                self.assertEqual(
+                    batch.column(col).to_pylist(),
+                    [None if row is None else expected_ints[col][row] for row in rows],
+                )
+            for col in (3, 4):
+                actual = batch.column(col).to_pylist()
+                for value, row in zip(actual, rows):
+                    if row is None:
+                        self.assertIsNone(value)
+                    elif math.isnan(expected_float[col - 3][row]):
+                        self.assertTrue(math.isnan(value))
+                    else:
+                        self.assertEqual(value, expected_float[col - 3][row])
+                        if row == 2:
+                            self.assertEqual(
+                                struct.pack(">d", value).hex(), "8000000000000000"
+                            )
+            self.assertEqual(
+                batch.column(5).to_pylist(),
+                [None if row is None else bool(row % 2) for row in rows],
+            )
+            for col, family in enumerate(families):
+                metadata = batch.schema.field(col).metadata
+                self.assertEqual(metadata[b"ADBC:redshift:sql_type"], family)
+                self.assertEqual(metadata[b"ADBC:redshift:type_modifier"], b"-1")
+                for key in (b"precision", b"scale", b"byte_width"):
+                    self.assertNotIn(b"ADBC:redshift:" + key, metadata)
+        for malformed in (4, 5, 6, 7):
+            c_array, c_schema = ArrowArray(), ArrowSchema()
+            self.assertNotEqual(
+                self.scalar_produce(
+                    malformed, ctypes.byref(c_array), ctypes.byref(c_schema)
+                ),
+                0,
+            )
+            self.assertFalse(c_array.release)
+            self.assertFalse(c_schema.release)
+
+    def test_consumer_scalar_writers_match_literal_bytes_and_reject_loss(self):
+        cases = [
+            (pa.int64(), -32768, 1, "000000028000"),
+            (pa.int64(), 32767, 1, "000000027fff"),
+            (pa.int64(), -2147483648, 2, "0000000480000000"),
+            (pa.int64(), 2147483647, 2, "000000047fffffff"),
+            (pa.uint64(), 2**63 - 1, 3, "000000087fffffffffffffff"),
+            (pa.int64(), -(2**63), 3, "000000088000000000000000"),
+            (pa.float64(), 1.25, 4, "000000043fa00000"),
+            (pa.float64(), -0.0, 4, "0000000480000000"),
+            (pa.float64(), float.fromhex("0x1p-149"), 4, "0000000400000001"),
+            (pa.float64(), math.inf, 4, "000000047f800000"),
+            (pa.float64(), -math.inf, 4, "00000004ff800000"),
+            (pa.float32(), -0.0, 5, "000000088000000000000000"),
+            (pa.float64(), float.fromhex("0x1p-1074"), 5, "000000080000000000000001"),
+            (pa.bool_(), True, 6, "0000000101"),
+            (pa.bool_(), False, 6, "0000000100"),
+        ]
+        for arrow_type, value, target, wire in cases:
+            for values in ([value, None], [], [None]):
+                code, actual = self.encode_scalar(arrow_type, values, target)
+                self.assertEqual(code, 0)
+                self.assertEqual(
+                    actual, [None if x is None else bytes.fromhex(wire) for x in values]
+                )
+        code, actual = self.encode_scalar(pa.null(), [None], 6)
+        self.assertEqual(code, 0)
+        self.assertEqual(actual, [None])
+        for arrow_type, values, target, metadata in [
+            (pa.uint64(), [42, 2**63], 0, None),
+            (pa.uint64(), [2**64 - 1], 0, None),
+            (pa.int64(), [12, 32768], 1, None),
+            (pa.int64(), [-32769], 1, None),
+            (pa.float64(), [1.25, 1.1], 4, None),
+            (pa.float64(), [float.fromhex("0x1.fffffffffffffp+1023")], 4, None),
+            (pa.float64(), [float.fromhex("0x1p-1074")], 4, None),
+            (pa.float64(), [1.0], 3, None),
+            (pa.int64(), [1], 4, None),
+            (pa.bool_(), [True], 3, None),
+            (pa.float64(), [1.1], 5, {b"ADBC:redshift:sql_type": b"REAL"}),
+            (pa.int64(), [32768], 3, {b"ADBC:redshift:sql_type": b"SMALLINT"}),
+        ]:
+            code, actual = self.encode_scalar(arrow_type, values, target, metadata)
+            self.assertNotEqual(code, 0)
+            self.assertIsNone(actual)
+
 
 if __name__ == "__main__":
     library = ctypes.CDLL(sys.argv.pop(1))
@@ -374,4 +535,18 @@ if __name__ == "__main__":
         ctypes.POINTER(ArrowSchema),
     ]
     IntervalCDataTest.decimal_write.restype = ctypes.c_int
+    IntervalCDataTest.scalar_produce = staticmethod(library.AdbcRedshiftScalarFixture)
+    IntervalCDataTest.scalar_produce.argtypes = IntervalCDataTest.produce.argtypes
+    IntervalCDataTest.scalar_produce.restype = ctypes.c_int
+    IntervalCDataTest.scalar_write = staticmethod(
+        library.AdbcRedshiftScalarWriteFixture
+    )
+    IntervalCDataTest.scalar_write.argtypes = [
+        ctypes.POINTER(ArrowArray),
+        ctypes.POINTER(ArrowSchema),
+        ctypes.c_int,
+        ctypes.POINTER(ArrowArray),
+        ctypes.POINTER(ArrowSchema),
+    ]
+    IntervalCDataTest.scalar_write.restype = ctypes.c_int
     unittest.main(verbosity=2)

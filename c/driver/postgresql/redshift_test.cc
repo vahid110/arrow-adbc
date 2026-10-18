@@ -40,6 +40,7 @@
 #include "driver/framework/utility.h"
 #include "driver/pgwire/libpq_raii.h"
 #include "redshift_decimal_test_fixture.h"
+#include "redshift_scalar_test_fixture.h"
 #include "type_discovery.h"
 #include "validation/adbc_validation_util.h"
 
@@ -208,6 +209,113 @@ TEST(ParameterizedDecimalInsertTest, WholeStreamRollbackAndCallerTransactionOwne
   ASSERT_TRUE(restored.Execute().ok());
   ASSERT_EQ(restored.NumRows(), 1);
   EXPECT_EQ(restored.Row(0)[0].value(), "9.99");
+}
+
+TEST(ParameterizedScalarInsertTest, ActualTargetWidthsLossChecksAndTransactionOwnership) {
+  const char* uri = std::getenv("ADBC_POSTGRESQL_TEST_URI");
+  if (!uri) {
+    GTEST_SKIP() << "ADBC_POSTGRESQL_TEST_URI is not configured";
+  }
+  adbc::driver::pgwire::UniqueConnection connection(PQconnectdb(uri));
+  ASSERT_EQ(PQstatus(connection.get()), CONNECTION_OK);
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(
+      adbcpq::DiscoverPostgresTypes(
+          connection.get(), adbc::driver::pgwire::BackendProfile::PostgreSQL(), &resolver)
+          .ok());
+  adbcpq::PqResultHelper setup(
+      connection.get(),
+      "CREATE TEMP TABLE adbc_scalar_prepared_int(amount SMALLINT); INSERT INTO "
+      "adbc_scalar_prepared_int VALUES(7); "
+      "CREATE TEMP TABLE adbc_scalar_prepared_real(amount REAL); INSERT INTO "
+      "adbc_scalar_prepared_real VALUES(2.5)");
+  ASSERT_TRUE(setup.Execute().ok());
+  for (bool floating : {false, true}) {
+    const char* table =
+        floating ? "adbc_scalar_prepared_real" : "adbc_scalar_prepared_int";
+    adbcpq::PqResultHelper catalog(
+        connection.get(),
+        "SELECT attname,atttypid,atttypmod FROM pg_attribute WHERE attrelid=$1::regclass "
+        "AND attnum>0 AND NOT attisdropped ORDER BY attnum");
+    ASSERT_TRUE(catalog.Execute({table}).ok());
+    adbcpq::PostgresType target;
+    ASSERT_TRUE(catalog.ResolveTableSchema(*resolver, &target).ok());
+    auto execute = [&](bool owned, size_t batch_rows,
+                       int64_t* affected) -> adbc::driver::Status {
+      nanoarrow::UniqueSchema schema;
+      ArrowError error{};
+      if (adbcpq::testing::ScalarSchema(
+              schema.get(), floating ? NANOARROW_TYPE_DOUBLE : NANOARROW_TYPE_INT64,
+              floating ? "DOUBLE PRECISION" : "BIGINT"))
+        return adbc::driver::Status::Internal("scalar test schema");
+      std::vector<ArrowArray> batches(2);
+      ArrowErrorCode result;
+      if (floating) {
+        result = adbcpq::testing::ScalarBatch<double>(
+            schema.get(), &batches[0],
+            std::vector<std::optional<double>>(batch_rows, 1.25), &error);
+        if (!result)
+          result = adbcpq::testing::ScalarBatch<double>(schema.get(), &batches[1], {1.1},
+                                                        &error);
+      } else {
+        result = adbcpq::testing::ScalarBatch<int64_t>(
+            schema.get(), &batches[0],
+            std::vector<std::optional<int64_t>>(batch_rows, 12), &error);
+        if (!result)
+          result = adbcpq::testing::ScalarBatch<int64_t>(schema.get(), &batches[1],
+                                                         {32768}, &error);
+      }
+      if (result) {
+        for (auto& batch : batches)
+          if (batch.release) batch.release(&batch);
+        return adbc::driver::Status::Internal("scalar test batch");
+      }
+      nanoarrow::UniqueArrayStream stream;
+      adbc_validation::MakeStream(stream.get(), schema.get(), std::move(batches));
+      adbcpq::BindStream bind;
+      bind.SetBind(stream.get());
+      auto status = bind.Begin([] { return adbc::driver::Status::Ok(); });
+      if (!status.ok()) return status;
+      return bind.ExecutePreparedRows(connection.get(), table, "amount", *resolver, owned,
+                                      batch_rows, affected, &target);
+    };
+    for (size_t batch_rows : {size_t{1}, size_t{16}}) {
+      int64_t affected = -1;
+      const auto status = execute(true, batch_rows, &affected);
+      ASSERT_FALSE(status.ok());
+      AdbcError error = ADBC_ERROR_INIT;
+      EXPECT_NE(status.ToAdbc(&error), ADBC_STATUS_OK);
+      ASSERT_NE(error.message, nullptr);
+      EXPECT_THAT(error.message, ::testing::HasSubstr("Invalid scalar write"));
+      if (error.release) error.release(&error);
+      EXPECT_EQ(affected, 0);
+      EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_IDLE);
+      adbcpq::PqResultHelper verify(
+          connection.get(),
+          std::string("SELECT count(*)::text, min(amount)::text FROM ") + table);
+      ASSERT_TRUE(verify.Execute().ok());
+      EXPECT_EQ(verify.Row(0)[0].value(), "1");
+      EXPECT_EQ(verify.Row(0)[1].value(), floating ? "2.5" : "7");
+    }
+    adbcpq::PqResultHelper begin(
+        connection.get(), std::string("BEGIN; INSERT INTO ") + table + " VALUES(77)");
+    ASSERT_TRUE(begin.Execute().ok());
+    int64_t affected = -1;
+    EXPECT_FALSE(execute(false, 1, &affected).ok());
+    EXPECT_EQ(PQtransactionStatus(connection.get()), PQTRANS_INTRANS);
+    EXPECT_EQ(affected,
+              1);  // This earlier INSERT remains pending in the caller's transaction.
+    adbcpq::PqResultHelper pending(connection.get(),
+                                   std::string("SELECT count(*)::text FROM ") + table);
+    ASSERT_TRUE(pending.Execute().ok());
+    EXPECT_EQ(pending.Row(0)[0].value(), "3");
+    adbcpq::PqResultHelper rollback(connection.get(), "ROLLBACK");
+    ASSERT_TRUE(rollback.Execute().ok());
+    adbcpq::PqResultHelper restored(connection.get(),
+                                    std::string("SELECT count(*)::text FROM ") + table);
+    ASSERT_TRUE(restored.Execute().ok());
+    EXPECT_EQ(restored.Row(0)[0].value(), "1");
+  }
 }
 
 TEST(ParameterizedInsertTest, RollsBackWholeBindAcrossSqlBatches) {
