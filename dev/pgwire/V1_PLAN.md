@@ -32,36 +32,24 @@ unbenchmarked speed superiority. ODBCPP remains the ODBC product/connectivity
 SDK; a duplicate ODBCPP ADBC adapter, Arrow integration and packaging are
 not scheduled without a concrete unmet need and a new product decision.
 
-V1 keeps task006's boto3 IAM helper thin, caller-owned and replaceable: no native
-C++ auth framework, extra auth methods, federation/Identity Center, shared
-credential cache or background refresh. Task007 documentation is complete
-(PR #12), as are Task008a/b/c (PRs #13/#14/#15). Task008c adds the reviewed finite
-SSM admission and explicit-dispatch runner for installed C/Python IAM payloads,
-with authenticated source/artifact/resource checks and mandatory independent host
-cleanup. See [the executable host handoff](qualification-live.md). PR #16 repaired
-pre-OIDC preparation; PR #17 repaired immutable OIDC trust validation. The next
-dispatch passed preflight/STS but failed workgroup creation on conflicting API
-fields (repaired in PR #18). The next created-compute attempt stopped before
-admission; original resource-gate status is unrecorded and cleanup SQL failed on
-unsupported STV access. Physical teardown was separately verified. The successor
-adds bounded readiness observation, static diagnostics, terminal-aware SQL
-cancellation and a supported SYS observer with strict visibility proof before
-admission and at cleanup. Original receipts/counters/budgets remain; further host
-authority requires coordinator/human resolution, with no retry from this repair.
-PR #19's initial review requested strict deadlines around slow reads and fresh
-same-run status/provenance before admission; its reviewed repair is merged,
-preserving the failed review/CI evidence. The separately approved replacement
-run `38933278088` passed bootstrap/SYS visibility but exact claim authorization
-failed before driver payloads. Independent full teardown is verified; the original
-namespace uncertainty and immutable singleton admission remain evidence. Task008d
-adds a versioned retained-action claim policy, explicit operation scopes, durable
-host reservation and static consumer receipts. Its initial review found pre-store
-reservation and receipt-fsync deadline gaps; the successor retains a canonical
-host journal and checks effect clocks after persistence. Offline repair requires
-independent review/CI and grants no further paid authority.
-Offline success is not live qualification: one exact merged-head batch and verified dedicated
-resource/secret/IAM teardown remain required. The human publication gate remains;
-this roadmap grants no additional spend, tag or publication authority.
+V1 keeps Task006's caller-owned boto3 IAM helper thin; no native auth framework
+or extra auth methods. Task007 docs and Task008a/b/c/d are merged. The installed
+C archive/Linux x86-64 wheel temporary-IAM batch
+[39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470)
+passed on `3460c541914560a91872e4417c4c3b4ccbb81df0`, with independently verified
+full physical/managed-secret/IAM teardown. Its int64/query/parameter/metadata/
+ingest scope is complete; original helper uncertainty and prior failure receipts
+remain immutable, and actual billing is not reconciled.
+
+The human reprioritized **all 21 Redshift SQL table types before first release**
+on 2026-10-18. [Task010's evidence matrix and representation proposals](REDSHIFT_TYPES.md)
+separate read, bind, create, append and metadata; the passed batch is not all-type
+qualification. Task010a is this bounded source audit/docs contract. Next proposed
+code scope is both interval families' native read/schema/metadata, then scalar/
+modifier gaps, SUPER, HLL and spatial work, and separately authorized qualification.
+Task009 publication and shared-auth work follow that milestone. This roadmap
+grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer
+remain paused. No release-ready claim is made.
 
 ## Already true (do not redo)
 
@@ -83,18 +71,20 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 004b | Release hardening before the first real tag (PR #4 review): build binaries with the release version instead of `1.13.0-SNAPSHOT`; no vcpkg cache restore on tag runs; load-test the manifest on one macOS and one Windows runner; "Load by name" section in the package READMEs; run the release dry run when `pgwire-package.yml` changes; stricter semver regex; reproducible archives (fixed mtimes, `gzip -n`) or drop the claim. Human: tag ruleset limiting who may create `redshift-v*` tags (repo setting). | Merged, dry run green |
 | 005 | Python package `adbc_driver_redshift`, mirroring `python/adbc_driver_postgresql` (DBAPI `connect()`, bundled library, entrypoint `AdbcDriverRedshiftInit`): one Linux x86-64 wheel (`py3-none-linux_x86_64`) built and tested in CI (`PgWire Python`), linked against the system libpq. | Wheel built, installed and tested against PostgreSQL rejection + packaged import |
 | 005b | Portable wheels mirroring upstream's `ci/scripts/python_wheel_*` scripts: Linux x64/arm64 (manylinux, static libpq via vcpkg plus auditwheel), macOS x64/arm64 (delocate), Windows x64; wheels attached to the draft release; wheel version mapped from the `redshift-v*` tag (`SETUPTOOLS_SCM_PRETEND_VERSION`). | Wheels built for all targets and import/rejection-tested on each |
-| 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Offline implementation done (PR #11); live check deferred to a separately human-authorized qualification batch |
+| 006 | IAM authentication without native AWS SDK: a documented recipe for temporary credentials (`GetCredentials` / `GetClusterCredentials`) and an optional Python helper (boto3 extra) that builds the URI. | Merged (PR #11); Serverless temporary-IAM path qualified in run 39138655470; provisioned-cluster helper remains offline-only |
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
 | 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
 | 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Done (PR #14), offline only; original unsigned gate stays closed |
-| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#19); failed replacement claim authorization physically torn down; actual client batch still required |
-| 008d | Versioned exact-claim IAM contract, explicit nonce admission scopes, immutable host reservation and static consumer diagnostics. | Offline repair; independent review/CI pending; prior one-attempt authority spent, no live authority |
-| 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Pending: reviewed/green Task008c, dedicated host-issued admission, one green bounded batch and independently verified full teardown |
+| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#19); installed client batch and independent teardown completed in run 39138655470 |
+| 008d | Versioned exact-claim IAM contract, explicit nonce admission scopes, immutable host reservation and static consumer diagnostics. | Merged (PR #20); corrected operation qualified and fully torn down; retained one-use evidence, no retry authority |
+| 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Complete within run 39138655470 scope; int64/query/params/IAM and full teardown, not all types or APIs |
+| 010a | Full21-type source audit, separate operation evidence and first-release representation/acceptance contract. | Docs/audit only; review/CI pending; [type contract](REDSHIFT_TYPES.md) |
+| 010 | Complete all 21 Redshift table types before release: bounded interval, scalar/modifier, SUPER, HLL/spatial implementation and installed-artifact qualification phases. | Acceptance: every operation is proven or explicitly bounded/rejected, native reads require no user rewrites, unresolved representations closed; separate finite live authority required |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 
 ## Explicitly after v1
 
-After v1 qualification, the shared-auth direction is the **same existing ODBCPP
+After the all-type first-release milestone, the shared-auth direction is the **same existing ODBCPP
 AuthCore/optional provider implementation** consumed by ODBC and independently
 built ADBC as a second-consumer proof, without an ODBCPP connectivity dependency.
 Use private interfaces until that proof establishes the contract; public stable
@@ -103,7 +93,8 @@ federation are deferred. This does not resume parked ODBCPP AUTH or prove extern
 commercial demand. See the [shared-auth boundaries and proof requirements](../../docs/source/driver/pgwire-development.md#shared-auth-after-v1-qualification).
 No implementation or automatic successor is authorized by this direction.
 
-Staged S3 `COPY`/`UNLOAD`, `SUPER`/spatial mapping beyond text, atomic Redshift
+General staged S3 `COPY`/`UNLOAD`, atomic Redshift
 replace ingest, remaining timezone bound-query cleanup edges (output-schema failure injection, cleanup-SQL failure,
 concurrent use), deterministic lost-reply injection. Each needs a concrete user
-need before it is scheduled.
+need before it is scheduled. Type-specific large-value transport requirements
+identified by Task010 are release decisions, not a blanket type deferral.

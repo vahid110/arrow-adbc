@@ -27,58 +27,29 @@ Current state only; history is in git and PR descriptions.
   004b (release hardening, PR #8), 005 (Python package, PR #7),
   005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11),
   007 (user documentation, PR #12), 008a (offline isolation contract, PR #13).
-- Task 006 merged:
-  helper `adbc_driver_redshift.iam` with `build_uri` and
-  `fetch_{serverless,cluster}_credentials` (injectable clients, offline
-  tests), `iam` extra (`boto3>=1.28`), recipe in `c/driver/postgresql/REDSHIFT.md`
-  and `python/adbc_driver_redshift/README.md`; offline tests only, live
-  IAM check deferred to next authorized batch.
-- Task008b (PR #14) is merged: installed C/Python private-input clients,
-  bounded process cleanup and no-AWS plumbing checks; the original synthetic/
-  unsigned admission gates remain closed.
-- Task008c (PR #15) merged the explicit-dispatch SSM admission/one-shot claim path,
-  authenticated merged-head artifact provenance, actual installed IAM payloads,
-  exact owned ingress cleanup, and a finite host bootstrap/observer/teardown
-  helper. See [the host handoff](qualification-live.md). This is offline-tested
-  implementation, **not a completed Redshift live qualification**. Dedicated
-  resources, exact-head review/green CI, host issuance, one successful batch and
-  independent cleanup/secret/IAM teardown observations remain required.
-  PR #16 repaired load-only installed evidence separately from the mandatory
-  admitted execution window, with real prepare-to-consumer regressions. The next
-  dispatch passed installed preflight but failed OIDC: the retained role and host
-  validator pinned a legacy subject while this repository issues immutable IDs.
-  PR #17 pinned the exact immutable subject; the next run passed preflight/STS
-  but `CreateWorkgroup` rejected conflicting scaling/pricing request fields.
-  PR #18 repaired that request. Run `38920727258` then created dedicated compute
-  but stopped at the post-usage resource gate (exact earlier status unrecorded);
-  cleanup SQL failed on unsupported STV access, then cancellation masked that
-  failure. The successor adds bounded readiness observation, static failure
-  receipts, terminal-aware cancellation and a supported cross-user SYS observer
-  before admission and at cleanup. Original receipts remain spent; further host
-  authority requires coordinator/human resolution after review.
-  PR #19's first head `f10b26670` required independent deadline/fresh-run repairs;
-  its [cancelled Dev run](https://github.com/vahid110/arrow-adbc/actions/runs/38923832691)
-  remains evidence. PR #19 merged the reviewed deadline/fresh-run repair.
-  The separately approved replacement run `38933278088` passed installed preflight,
-  OIDC, host bootstrap and the supported SYS observer, then exact claim creation
-  failed AccessDenied before any driver payload. Host post-failure observer proved
-  zero fixtures/sessions. Fresh independent physical/secret/IAM teardown is
-  verified; the original namespace-removal uncertainty remains evidence.
-  Task008d adds the versioned exact-claim policy, explicit nonce scopes, immutable
-  host reservation and static consumer first-failure receipts with policy-enforcing
-  offline tests. Its first review on `370b1310d` found missing local durability when
-  SSM never stored a reservation and deadline crossings during receipt fsync; that
-  failed head/reproductions remain evidence. The successor adds a canonical host
-  attempt journal and fresh post-persistence effect clocks; independent review/CI
-  remain required. The old singleton admission
-  stays immutable version 1; all prior attempt authority is spent. No external
-  resources or CI role remain and this repair grants no live authority.
-  AO stays paused; Task009 publication stays paused.
+- Task006 IAM helper and Task008a/b/c/d (PRs #11, #13–#20) are merged.
+  Installed C archive and Linux x86-64 wheel temporary-IAM qualification passed
+  [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470)
+  on `3460c541914560a91872e4417c4c3b4ccbb81df0`: query, parameters, int64
+  metadata/create+append/roundtrip and Python invalid-replace preservation.
+  Independent full physical/managed-secret/IAM teardown is verified. The helper's
+  original namespace-removal uncertainty and all earlier failures remain separate
+  immutable evidence; operation parameters/guard are retained. Actual billing is
+  not reconciled. See [the finite host contract](qualification-live.md) and
+  [merged PR20](https://github.com/vahid110/arrow-adbc/pull/20).
+- Task010 is now the first-release priority: **all 21 Redshift table types**, not
+  SUPER alone. [The source audit/type contract](REDSHIFT_TYPES.md) separates native
+  read, bind, create, append and metadata evidence. The passed live batch proves
+  its narrow int64 scope, not all-type support or release readiness. Proposed next
+  implementation: both interval families' native read/schema/metadata; remaining
+  scalar/modifier, SUPER, HLL and spatial work stays required before Task009.
+  Task010a is docs/audit only, pending review/CI. This PR contains no driver
+  implementation or paid operation. AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
   offline; only the coordinator operates the authorized dedicated host path.
-- Native matrices: `PgWire Native Daily` is dispatched every 24 hours on
-  `feature/pgwire-core-redshift`.
+- AO/timer and automatic daily dispatch remain paused. The coordinator may
+  manually dispatch Native Daily; this update changes no workflow enablement.
 
 ## Known issues
 
@@ -88,7 +59,11 @@ Current state only; history is in git and PR descriptions.
   This does not authorize shared-resource reuse. The isolated installed-wheel batch now exercises the equivalent
   128-byte/case-collision replace rejection and unchanged schema/row assertions
   inside its owned fixture; the original named/global gtest is not dispatched.
-  This behavior remains unqualified until the admitted live batch passes.
+  The isolated equivalent passed in run 39138655470; this does not claim the
+  original named/global gtest ran.
+- Original [PR19 cancelled CI evidence](https://github.com/vahid110/arrow-adbc/actions/runs/38923832691)
+  and [PR20 review failures/repairs](https://github.com/vahid110/arrow-adbc/pull/20)
+  remain retained alongside the failed live attempts below.
 - `Integration` and other unrelated Apache workflows are disabled
   in this fork.
 
@@ -128,3 +103,4 @@ remain. Actual compute costs await reconciliation; no further attempt is authori
 | 2026-10-16 | [38916730017](https://github.com/vahid110/arrow-adbc/actions/runs/38916730017) | `5e3afc8653e39eaf099c5cb91ea9be21b386adb6` | preflight/STS passed; `CreateWorkgroup` rejected simultaneous pricing target and scaling autonomics fields; owned partial resources independently removed, no admission/claim/SQL | 0.00 compute |
 | 2026-10-16 | [38920727258](https://github.com/vahid110/arrow-adbc/actions/runs/38920727258) | `36b786d1c569c0f0c727c70dcc06995d0b31a173` | created dedicated resources; post-usage gate failed with original response status unrecorded; cleanup SQL FAILED on STV access and cancellation masked error; independent physical teardown later verified, no admission/claim/client batch | pending |
 | 2026-10-16 | [38933278088](https://github.com/vahid110/arrow-adbc/actions/runs/38933278088) | `44bc188350125045e42a8b65e1fc1dc7820e3683` | installed preflight/OIDC/bootstrap/SYS proof passed; exact claim PutParameter denied before driver payload; claim absent, supported post-failure observer zero; independent full physical/secret/IAM teardown verified, original namespace uncertainty retained | pending |
+| 2026-10-18 | [39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470) | `3460c541914560a91872e4417c4c3b4ccbb81df0` | installed C/Linux-wheel temporary-IAM query/params/int64 metadata/create+append passed; independent full physical/secret/IAM teardown verified separately from original helper namespace uncertainty; all-types qualification remains pending | not reconciled |
