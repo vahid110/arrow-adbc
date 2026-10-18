@@ -208,7 +208,7 @@ TEST(RedshiftIntervalTest, RejectsIncompatibleReaderStorageUnitsAndFamilies) {
 }
 
 TEST(RedshiftIntervalTest, ReadbackFamilyCannotFallThroughToGenericWriter) {
-  for (const auto profile : {BackendProfile::Redshift(), BackendProfile::PostgreSQL()}) {
+  for (const auto& profile : {BackendProfile::Redshift(), BackendProfile::PostgreSQL()}) {
     PostgresTypeResolver resolver(profile);
     ASSERT_EQ(resolver.Insert({1186, "interval", "interval_recv", 0, 0, 0}, nullptr), 0);
     for (const auto id : {PostgresTypeId::kRedshiftIntervalYearMonth,
@@ -227,8 +227,9 @@ TEST(RedshiftIntervalTest, ReadbackFamilyCannotFallThroughToGenericWriter) {
       const int expected = resolver.is_redshift() ? ENOTSUP : NANOARROW_OK;
       EXPECT_EQ(PostgresType::FromSchema(resolver, schema.get(), &write_type, &error),
                 expected);
-      if (!resolver.is_redshift())
+      if (!resolver.is_redshift()) {
         EXPECT_EQ(write_type.type_id(), PostgresTypeId::kInterval);
+      }
     }
   }
 }
