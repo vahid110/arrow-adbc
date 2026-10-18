@@ -460,8 +460,14 @@ class TemporalPublicPythonTest(unittest.TestCase):
             source = pa.RecordBatchReader.from_batches(
                 data.schema, [data.slice(0, 1), data.slice(1)]
             )
-            with self.assertRaises(adm.Error):
-                self.ingest("adbc_e1_python_caller", "append", source, True)
+            # Prepared INSERT validates each offered value before its query.
+            # A later client conversion failure leaves earlier rows and the
+            # caller's own work in that caller-owned transaction.
+            with adm.AdbcStatement(self.connection) as stmt:
+                stmt.set_sql_query("INSERT INTO adbc_e1_python_caller VALUES($1)")
+                stmt.bind_stream(source)
+                with self.assertRaises(adm.Error):
+                    stmt.execute_update()
             self.assertEqual(
                 self.query(
                     "SELECT encode(time_send(amount),'hex') AS wire FROM "
@@ -469,6 +475,24 @@ class TemporalPublicPythonTest(unittest.TestCase):
                 ),
                 [{"wire": "00000000000003e8"}, {"wire": "00000000001e8480"}],
             )
+            self.connection.rollback()
+        finally:
+            self.connection.set_autocommit(True)
+        self.assertEqual(
+            self.query("SELECT count(*) AS n FROM adbc_e1_python_caller"), [{"n": 0}]
+        )
+        # PostgreSQL COPY is a different transport: CopyFail aborts the caller
+        # transaction, and the driver must not roll back that caller's work.
+        self.connection.set_autocommit(False)
+        try:
+            self.execute("INSERT INTO adbc_e1_python_caller VALUES(TIME '00:00:02')")
+            source = pa.RecordBatchReader.from_batches(
+                data.schema, [data.slice(0, 1), data.slice(1)]
+            )
+            with self.assertRaises(adm.Error):
+                self.ingest("adbc_e1_python_caller", "append", source, True)
+            with self.assertRaises(adm.Error):
+                self.query("SELECT 42 AS blocked_until_caller_rollback")
             self.connection.rollback()
         finally:
             self.connection.set_autocommit(True)
