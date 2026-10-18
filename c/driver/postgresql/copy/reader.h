@@ -253,6 +253,30 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
   }
 };
 
+// Redshift YEAR TO MONTH's reference receive format contains only signed months.
+// This is distinct from PostgreSQL's 16-byte interval. The supported offline
+// reference contract is documented in dev/pgwire/REDSHIFT_TYPES.md.
+class RedshiftIntervalYearMonthFieldReader : public PostgresCopyFieldReader {
+ public:
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
+                      ArrowError* error) override {
+    if (field_size_bytes == -1) return ArrowArrayAppendNull(array, 1);
+    if (field_size_bytes != 4) {
+      ArrowErrorSet(error, "Expected Redshift YEAR TO MONTH field with 4 bytes, found %d",
+                    static_cast<int>(field_size_bytes));
+      return EINVAL;
+    }
+    int32_t months;
+    NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &months, error));
+    const int32_t days = 0;
+    const int64_t nanos = 0;
+    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &months, sizeof(months)));
+    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &days, sizeof(days)));
+    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &nanos, sizeof(nanos)));
+    return AppendValid(array);
+  }
+};
+
 // Reader for Intervals
 class PostgresCopyIntervalFieldReader : public PostgresCopyFieldReader {
  public:
@@ -1099,8 +1123,19 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
       }
+    case NANOARROW_TYPE_DURATION:
+      if (pg_type.type_id() == PostgresTypeId::kRedshiftIntervalDaySecond &&
+          schema_view.time_unit == NANOARROW_TIME_UNIT_MICRO) {
+        *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>();
+        return NANOARROW_OK;
+      }
+      return ErrorCantConvert(error, pg_type, schema_view);
+
     case NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO:
       switch (pg_type.type_id()) {
+        case PostgresTypeId::kRedshiftIntervalYearMonth:
+          *out = std::make_unique<RedshiftIntervalYearMonthFieldReader>();
+          return NANOARROW_OK;
         case PostgresTypeId::kInterval: {
           *out = std::make_unique<PostgresCopyIntervalFieldReader>();
           return NANOARROW_OK;

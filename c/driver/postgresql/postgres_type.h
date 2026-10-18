@@ -26,6 +26,8 @@
 
 #include <nanoarrow/nanoarrow.hpp>
 
+#include "driver/pgwire/backend.h"
+
 namespace adbcpq {
 
 // An enum of the types available in most Postgres pg_type tables
@@ -59,6 +61,8 @@ enum class PostgresTypeId {
   kInt4,
   kInt8,
   kInterval,
+  kRedshiftIntervalYearMonth,
+  kRedshiftIntervalDaySecond,
   kJson,
   kJsonb,
   kJsonpath,
@@ -322,6 +326,18 @@ class PostgresType {
             ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
         break;
 
+      case PostgresTypeId::kRedshiftIntervalYearMonth:
+        NANOARROW_RETURN_NOT_OK(
+            ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO));
+        NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervaly2m"));
+        break;
+
+      case PostgresTypeId::kRedshiftIntervalDaySecond:
+        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(
+            schema, NANOARROW_TYPE_DURATION, NANOARROW_TIME_UNIT_MICRO, nullptr));
+        NANOARROW_RETURN_NOT_OK(AddRedshiftIntervalMetadata(schema, "intervald2s"));
+        break;
+
       // ---- Nested --------------------
       case PostgresTypeId::kRecord:
         NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(schema, n_children()));
@@ -363,6 +379,12 @@ class PostgresType {
     return NANOARROW_OK;
   }
 
+  // Read-only vendor families must not fall through to a generic storage writer.
+  // Also checks nested/dictionary fields before binding takes ownership or runs SQL.
+  static ArrowErrorCode ValidateIntervalWriteSchema(const PostgresTypeResolver& resolver,
+                                                    const ArrowSchema* schema,
+                                                    ArrowError* error);
+
   static ArrowErrorCode FromSchema(const PostgresTypeResolver& resolver,
                                    ArrowSchema* schema, PostgresType* out,
                                    ArrowError* error);
@@ -381,6 +403,16 @@ class PostgresType {
   static constexpr const char* kJsonExtensionName = "arrow.json";
   static constexpr const char* kUuidExtensionName = "arrow.uuid";
   static constexpr const char* kExtensionMetadata = "ARROW:extension:metadata";
+
+  ArrowErrorCode AddRedshiftIntervalMetadata(ArrowSchema* schema,
+                                             const char* family) const {
+    nanoarrow::UniqueBuffer buffer;
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), schema->metadata));
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
+        buffer.get(), ArrowCharView("ADBC:redshift:interval_family"),
+        ArrowCharView(family)));
+    return ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data));
+  }
 
   ArrowErrorCode AddTypeMetadata(ArrowSchema* schema) const {
     const char* typname =
@@ -448,7 +480,13 @@ class PostgresTypeResolver {
     uint32_t class_oid;
   };
 
-  PostgresTypeResolver() : base_(AllBase()) {}
+  explicit PostgresTypeResolver(adbc::driver::pgwire::BackendProfile profile =
+                                    adbc::driver::pgwire::BackendProfile::PostgreSQL())
+      : profile_(profile), base_(AllBase()) {}
+
+  bool is_redshift() const {
+    return profile_.kind == adbc::driver::pgwire::BackendKind::kRedshift;
+  }
 
   // Place a resolved copy of a PostgresType with the appropriate oid in type_out
   // if NANOARROW_OK is returned or place a null-terminated error message into error
@@ -517,6 +555,19 @@ class PostgresTypeResolver {
       base = result->second;
     }
 
+    // The family is identified by the authenticated backend and catalog name,
+    // never by a fixed OID or by PostgreSQL's generic interval receive function.
+    switch (profile_.IntervalFamily(item.typname)) {
+      case adbc::driver::pgwire::CatalogIntervalFamily::kYearMonth:
+        base = PostgresType(PostgresTypeId::kRedshiftIntervalYearMonth);
+        break;
+      case adbc::driver::pgwire::CatalogIntervalFamily::kDaySecond:
+        base = PostgresType(PostgresTypeId::kRedshiftIntervalDaySecond);
+        break;
+      default:
+        break;
+    }
+
     PostgresType type = base.WithPgTypeInfo(item.oid, item.typname);
 
     switch (base.type_id()) {
@@ -581,6 +632,7 @@ class PostgresTypeResolver {
   }
 
  private:
+  adbc::driver::pgwire::BackendProfile profile_;
   std::unordered_map<uint32_t, PostgresType> mapping_;
   // We can't use PostgresTypeId as an unordered map key because there is no
   // built-in hasher for an enum on gcc 4.8 (i.e., R 3.6 on Windows).
@@ -617,9 +669,42 @@ class PostgresTypeResolver {
   }
 };
 
+inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  if (schema == nullptr) return NANOARROW_OK;
+  ArrowStringView family{};
+  NANOARROW_RETURN_NOT_OK(ArrowMetadataGetValue(
+      schema->metadata, ArrowCharView("ADBC:redshift:interval_family"), &family));
+  // Every value of the vendor marker is read-only, including unknown family names.
+  bool unsupported = family.data != nullptr;
+  ArrowSchemaView view{};
+  if (resolver.is_redshift() && ArrowSchemaViewInit(&view, schema, nullptr) == 0) {
+    // Metadata stripping must not authorize PostgreSQL's 16-byte interval writer.
+    unsupported |= view.type == NANOARROW_TYPE_DURATION ||
+                   view.type == NANOARROW_TYPE_INTERVAL_MONTHS ||
+                   view.type == NANOARROW_TYPE_INTERVAL_DAY_TIME ||
+                   view.type == NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO;
+  }
+  if (unsupported) {
+    ArrowErrorSet(
+        error, "[Redshift] Interval parameter binding and ingestion are not implemented");
+    return ENOTSUP;
+  }
+  for (int64_t i = 0; i < schema->n_children; i++) {
+    NANOARROW_RETURN_NOT_OK(
+        ValidateIntervalWriteSchema(resolver, schema->children[i], error));
+  }
+  if (schema->dictionary) {
+    NANOARROW_RETURN_NOT_OK(
+        ValidateIntervalWriteSchema(resolver, schema->dictionary, error));
+  }
+  return NANOARROW_OK;
+}
+
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
+  NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
@@ -896,6 +981,10 @@ static inline const char* PostgresTyprecv(PostgresTypeId type_id) {
 
 static inline const char* PostgresTypname(PostgresTypeId type_id) {
   switch (type_id) {
+    case PostgresTypeId::kRedshiftIntervalYearMonth:
+      return "intervaly2m";
+    case PostgresTypeId::kRedshiftIntervalDaySecond:
+      return "intervald2s";
     case PostgresTypeId::kAclitem:
       return "aclitem";
     case PostgresTypeId::kAnyarray:

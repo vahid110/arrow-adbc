@@ -44,9 +44,12 @@ remain immutable, and actual billing is not reconciled.
 The human reprioritized **all 21 Redshift SQL table types before first release**
 on 2026-10-18. [Task010's evidence matrix and representation proposals](REDSHIFT_TYPES.md)
 separate read, bind, create, append and metadata; the passed batch is not all-type
-qualification. Task010a is this bounded source audit/docs contract. Next proposed
-code scope is both interval families' native read/schema/metadata, then scalar/
-modifier gaps, SUPER, HLL and spatial work, and separately authorized qualification.
+qualification. Task010a source audit/docs is merged (PR #21). Task010b implements
+both interval families' native read/schema/family metadata with strict offline
+reference fixtures, codec-produced C/Python C Data checks and unsupported-write
+guards (review/CI pending). Actual libpq-path qualification and interval writes/
+qualifier metadata remain open, followed by scalar/modifier gaps, SUPER, HLL and
+spatial work, and separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer
 remain paused. No release-ready claim is made.

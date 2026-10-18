@@ -143,6 +143,10 @@ struct BindStream {
 
   Status SetParamTypes(PGconn* pg_conn, const PostgresTypeResolver& type_resolver,
                        const bool autocommit) {
+    if (PostgresType::ValidateIntervalWriteSchema(type_resolver, &bind_schema.value,
+                                                  &na_error) != NANOARROW_OK) {
+      return Status::NotImplemented(na_error.message);
+    }
     param_types.resize(bind_schema->n_children);
     param_values.resize(bind_schema->n_children);
     param_lengths.resize(bind_schema->n_children);

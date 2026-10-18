@@ -78,6 +78,8 @@ struct TableTypeMapping {
   std::string_view relkind;
 };
 
+enum class CatalogIntervalFamily { kNone, kYearMonth, kDaySecond };
+
 struct TypeReceiveAlias {
   std::string_view vendor_receive;
   std::string_view canonical_receive;
@@ -116,6 +118,15 @@ struct BackendProfile {
       if (table_types[i].name == type_name) return &table_types[i];
     }
     return nullptr;
+  }
+
+  // Redshift's two catalog families have distinct receive layouts. PostgreSQL
+  // catalog entries with the same names remain ordinary unknown/user-defined types.
+  constexpr CatalogIntervalFamily IntervalFamily(std::string_view typname) const {
+    if (kind != BackendKind::kRedshift) return CatalogIntervalFamily::kNone;
+    if (typname == "intervaly2m") return CatalogIntervalFamily::kYearMonth;
+    if (typname == "intervald2s") return CatalogIntervalFamily::kDaySecond;
+    return CatalogIntervalFamily::kNone;
   }
 
   constexpr std::string_view CanonicalTypeReceive(std::string_view vendor_receive) const {

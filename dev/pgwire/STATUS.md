@@ -40,11 +40,14 @@ Current state only; history is in git and PR descriptions.
 - Task010 is now the first-release priority: **all 21 Redshift table types**, not
   SUPER alone. [The source audit/type contract](REDSHIFT_TYPES.md) separates native
   read, bind, create, append and metadata evidence. The passed live batch proves
-  its narrow int64 scope, not all-type support or release readiness. Proposed next
-  implementation: both interval families' native read/schema/metadata; remaining
-  scalar/modifier, SUPER, HLL and spatial work stays required before Task009.
-  Task010a is docs/audit only, pending review/CI. This PR contains no driver
-  implementation or paid operation. AO/timer and Task009 publication remain paused.
+  its narrow int64 scope, not all-type support or release readiness. Task010a
+  source audit/docs is merged (PR #21). Task010b adds distinct catalog-driven
+  interval read/schema/family metadata, strict reference-format codecs, C/Python
+  C Data tests and unsupported-write guards; independent review/CI are pending.
+  These generated offline fixtures do not qualify the actual Redshift/libpq path.
+  Interval writes/qualifiers, scalar/modifier, SUPER, HLL and spatial work remains
+  required before Task009. No paid operation is performed or authorized here.
+  AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
   offline; only the coordinator operates the authorized dedicated host path.
