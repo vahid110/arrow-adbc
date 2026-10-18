@@ -781,9 +781,10 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     }
   }
 
-  // Only these temporal sources need to distinguish existing CREATE_APPEND
-  // from CREATE: unqualified precision syntax must never erase a requested p.
-  bool append_existing_temporal = false;
+  // Interval constraints and temporal precision need an existing-vs-new
+  // distinction: unused CREATE declarations must not erase append semantics.
+  bool append_existing_semantic = false;
+  bool interval_create_append = false;
   if (ingest_.mode == IngestMode::kCreateAppend) {
     bool requires_existing = false;
     for (int64_t i = 0; i < source_schema.n_children; ++i) {
@@ -796,6 +797,14 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                       &na_error, error);
       requires_existing |=
           temporal.enabled() && temporal.precision && *temporal.precision < 6;
+      RedshiftIntervalSchema interval;
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftIntervalSchema::Parse(source_schema.children[i],
+                                                    type_resolver_->is_redshift(),
+                                                    &interval, &na_error),
+                      &na_error, error);
+      interval_create_append |= interval.enabled();
+      requires_existing |= interval.enabled();
     }
     if (requires_existing) {
       std::string target = ingest_.target;
@@ -835,7 +844,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
         InternalAdbcSetError(error, "[libpq] Ambiguous CREATE_APPEND target");
         return ADBC_STATUS_INVALID_DATA;
       }
-      append_existing_temporal = exists.NumRows() == 1;
+      append_existing_semantic = exists.NumRows() == 1;
     }
   }
 
@@ -854,7 +863,9 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       // The replacement DROP is deferred until column mapping succeeds.
       break;
     case IngestMode::kCreateAppend:
-      create += "IF NOT EXISTS ";
+      // An absent interval target uses plain CREATE; a concurrent appearance
+      // errors instead of silently replacing the requested declaration.
+      if (!interval_create_append) create += "IF NOT EXISTS ";
       break;
   }
   create += *escaped_table;
@@ -913,21 +924,27 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                                                   type_resolver_->is_redshift(),
                                                   &temporal, &na_error),
                     &na_error, error);
-    has_semantic_schema |=
-        decimal.enabled || scalar.enabled() || bytes.enabled() || temporal.enabled();
+    RedshiftIntervalSchema interval;
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    RedshiftIntervalSchema::Parse(source_schema.children[i],
+                                                  type_resolver_->is_redshift(),
+                                                  &interval, &na_error),
+                    &na_error, error);
+    has_semantic_schema |= decimal.enabled || scalar.enabled() || bytes.enabled() ||
+                           temporal.enabled() || interval.enabled();
     std::string declaration = pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend &&
-        !append_existing_temporal) {
+        !append_existing_semantic) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
                       &na_error, error);
     }
     if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
     if (temporal.enabled() && ingest_.mode != IngestMode::kAppend &&
-        !append_existing_temporal)
+        !append_existing_semantic)
       CHECK_NA_DETAIL(INVALID_ARGUMENT, temporal.Declaration(&declaration, &na_error),
                       &na_error, error);
     if (bytes.enabled() && ingest_.mode != IngestMode::kAppend &&
-        !append_existing_temporal) {
+        !append_existing_semantic) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, bytes.Declaration(&declaration, &na_error),
                       &na_error, error);
       // PostgreSQL has BYTEA without a width declaration. Keep the explicit
@@ -935,10 +952,15 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       if (!type_resolver_->is_redshift() && bytes.kind == RedshiftBytesKind::kVarbyte)
         declaration = "BYTEA";
     }
+    if (interval.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      interval.constraint.Declaration(&declaration, &na_error), &na_error,
+                      error);
     create += " " + declaration;
   }
 
-  if (ingest_.mode == IngestMode::kAppend || append_existing_temporal) {
+  if (ingest_.mode == IngestMode::kAppend || append_existing_semantic) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {

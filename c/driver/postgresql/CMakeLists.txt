@@ -198,6 +198,7 @@ if(ADBC_BUILD_TESTS)
                 metadata_test.cc
                 postgres_type_test.cc
                 redshift_interval_test.cc
+                redshift_interval_write_test.cc
                 type_modifier_test.cc
                 redshift_numeric_test.cc
                 redshift_decimal_test.cc

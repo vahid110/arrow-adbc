@@ -1182,6 +1182,29 @@ class PostgresCopyTimestampFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+// Redshift's reference interval parameters have no generic PostgreSQL body.
+class RedshiftIntervalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftIntervalFieldWriter(RedshiftIntervalSchema source,
+                              std::optional<RedshiftIntervalConstraint> target)
+      : source_(std::move(source)), target_(std::move(target)) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t native;
+    NANOARROW_RETURN_NOT_OK(source_.ToNative(array_view_, index, &native, error));
+    if (target_) NANOARROW_RETURN_NOT_OK(target_->CheckValue(native, error));
+    const bool months = source_.constraint.family == RedshiftIntervalFamily::kYearMonth;
+    // Reserve before emitting length/body: all value checks precede mutation.
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, months ? 8 : 12));
+    NANOARROW_RETURN_NOT_OK(WriteChecked<int32_t>(buffer, months ? 4 : 8, error));
+    if (months) return WriteChecked<int32_t>(buffer, static_cast<int32_t>(native), error);
+    return WriteChecked<int64_t>(buffer, native, error);
+  }
+
+ private:
+  RedshiftIntervalSchema source_;
+  std::optional<RedshiftIntervalConstraint> target_;
+};
+
 static inline ArrowErrorCode MakeCopyFieldWriter(
     struct ArrowSchema* schema, struct ArrowArrayView* array_view,
     const PostgresTypeResolver& type_resolver, const PostgresType* target_type,
@@ -1198,6 +1221,36 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
 
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateTemporalWriteSchema(type_resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateIntervalWriteSchema(type_resolver, schema, error));
+  RedshiftIntervalSchema interval;
+  NANOARROW_RETURN_NOT_OK(RedshiftIntervalSchema::Parse(
+      schema, type_resolver.is_redshift(), &interval, error));
+  const auto interval_target =
+      target_type ? target_type->interval_family() : RedshiftIntervalFamily::kNone;
+  if (interval.enabled() ||
+      (type_resolver.is_redshift() && interval_target != RedshiftIntervalFamily::kNone)) {
+    std::optional<RedshiftIntervalConstraint> target;
+    if (target_type) {
+      if (interval_target == RedshiftIntervalFamily::kNone)
+        return RedshiftIntervalConstraint::Invalid(error, "cross-family actual target");
+      target = target_type->interval_constraint();
+      if (target->family != interval_target)
+        return RedshiftIntervalConstraint::Invalid(
+            error, "target context and OID family conflict");
+      NANOARROW_RETURN_NOT_OK(target->RequireKnown(error));
+    }
+    // Genuine unmarked NA is only safe after validating this actual target.
+    if (schema_view.type == NANOARROW_TYPE_NA && target && !interval.enabled()) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!interval.enabled() || (target && interval.constraint.family != target->family))
+      return RedshiftIntervalConstraint::Invalid(error, "cross-family actual target");
+    *out = PostgresCopyFieldWriter::Create<RedshiftIntervalFieldWriter>(array_view,
+                                                                        interval, target);
+    return NANOARROW_OK;
+  }
   RedshiftTemporalSchema temporal;
   NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::Parse(
       schema, type_resolver.is_redshift(), &temporal, error));

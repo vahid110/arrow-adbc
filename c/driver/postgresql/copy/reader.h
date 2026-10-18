@@ -271,28 +271,48 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
   bool strict_;
 };
 
-// Redshift YEAR TO MONTH's reference receive format contains only signed months.
-// This is distinct from PostgreSQL's 16-byte interval. The supported offline
-// reference contract is documented in dev/pgwire/REDSHIFT_TYPES.md.
-class RedshiftIntervalYearMonthFieldReader : public PostgresCopyFieldReader {
+// Reference4/8-byte interval fields. No native sentinel/domain claim is implied.
+class RedshiftIntervalFieldReader : public PostgresCopyFieldReader {
  public:
-  ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
+  explicit RedshiftIntervalFieldReader(RedshiftIntervalConstraint constraint)
+      : constraint_(std::move(constraint)) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes == -1) return ArrowArrayAppendNull(array, 1);
-    if (field_size_bytes != 4) {
-      ArrowErrorSet(error, "Expected Redshift YEAR TO MONTH field with 4 bytes, found %d",
-                    static_cast<int>(field_size_bytes));
-      return EINVAL;
+    if (size == -1) return ArrowArrayAppendNull(array, 1);
+    const bool months = constraint_.family == RedshiftIntervalFamily::kYearMonth;
+    const int32_t width = months ? 4 : 8;
+    if (size != width || data->size_bytes < width || !data->data.data)
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "invalid/truncated interval field");
+    int64_t value;
+    if (months) {
+      uint32_t bits;
+      std::memcpy(&bits, data->data.data, 4);
+      bits = SwapNetworkToHost(bits);
+      int32_t signed_value;
+      std::memcpy(&signed_value, &bits, 4);
+      value = signed_value;
+    } else {
+      uint64_t bits;
+      std::memcpy(&bits, data->data.data, 8);
+      bits = SwapNetworkToHost(bits);
+      std::memcpy(&value, &bits, 8);
     }
-    int32_t months;
-    NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &months, error));
-    const int32_t days = 0;
-    const int64_t nanos = 0;
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &months, sizeof(months)));
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &days, sizeof(days)));
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &nanos, sizeof(nanos)));
-    return AppendValid(array);
+    NANOARROW_RETURN_NOT_OK(constraint_.CheckValue(value, error));
+    if (months) {
+      ArrowInterval interval{};
+      ArrowIntervalInit(&interval, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO);
+      interval.months = static_cast<int32_t>(value);
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInterval(array, &interval));
+    } else
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(array, value));
+    data->data.as_uint8 += width;
+    data->size_bytes -= width;
+    return NANOARROW_OK;
   }
+
+ private:
+  RedshiftIntervalConstraint constraint_;
 };
 
 // Reader for Intervals
@@ -1125,6 +1145,41 @@ static inline ArrowErrorCode MakeCopyFieldReader(
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, nullptr));
 
+  if (pg_type.interval_family() != RedshiftIntervalFamily::kNone) {
+    auto constraint = pg_type.interval_constraint();
+    if (constraint.family != pg_type.interval_family())
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "read context and OID family conflict");
+    NANOARROW_RETURN_NOT_OK(constraint.Validate(error));
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    RedshiftIntervalSchema actual;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftIntervalSchema::Parse(schema, true, &actual, error, true));
+    if (std::string_view(schema->format) != expected->format)
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "read storage contradicts context");
+    for (const char* key :
+         {"ADBC:redshift:interval_family", "ADBC:redshift:sql_type",
+          "ADBC:redshift:interval_contract_version",
+          "ADBC:redshift:interval_constraint_state", "ADBC:redshift:interval_qualifier",
+          "ADBC:redshift:fractional_precision", "ADBC:redshift:type_modifier",
+          "ADBC:redshift:interval_raw_type", "ADBC:redshift:interval_raw_precision",
+          "ADBC:redshift:interval_raw_datetime_precision"}) {
+      std::optional<std::string_view> value, reference;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &value, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &reference, error));
+      if (value != reference)
+        return RedshiftIntervalConstraint::Invalid(error,
+                                                   "read metadata contradicts context");
+    }
+    *out = std::make_unique<RedshiftIntervalFieldReader>(constraint);
+    return NANOARROW_OK;
+  }
+
   if (pg_type.is_redshift_descriptor() &&
       pg_type.temporal_kind() != RedshiftTemporalKind::kNone) {
     nanoarrow::UniqueSchema expected;
@@ -1393,16 +1448,12 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_DURATION:
       if (pg_type.type_id() == PostgresTypeId::kRedshiftIntervalDaySecond &&
           schema_view.time_unit == NANOARROW_TIME_UNIT_MICRO) {
-        *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>();
-        return NANOARROW_OK;
+        return ErrorCantConvert(error, pg_type, schema_view);
       }
       return ErrorCantConvert(error, pg_type, schema_view);
 
     case NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO:
       switch (pg_type.type_id()) {
-        case PostgresTypeId::kRedshiftIntervalYearMonth:
-          *out = std::make_unique<RedshiftIntervalYearMonthFieldReader>();
-          return NANOARROW_OK;
         case PostgresTypeId::kInterval: {
           *out = std::make_unique<PostgresCopyIntervalFieldReader>();
           return NANOARROW_OK;

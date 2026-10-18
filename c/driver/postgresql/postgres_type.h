@@ -30,6 +30,7 @@
 #include "driver/pgwire/backend.h"
 #include "redshift_bytes.h"
 #include "redshift_decimal.h"
+#include "redshift_interval.h"
 #include "redshift_scalar.h"
 
 namespace adbcpq {
@@ -182,6 +183,7 @@ class PostgresType {
           adbc::driver::pgwire::TemporalRepresentation::kArrow) const {
     PostgresType out(*this);
     out.type_modifier_ = raw;
+    out.interval_constraint_ = {};
     out.temporal_representation_ = temporal;
     out.redshift_descriptor_ =
         profile.kind == adbc::driver::pgwire::BackendKind::kRedshift;
@@ -205,6 +207,23 @@ class PostgresType {
     if (type_id_ == PostgresTypeId::kTimestamptz)
       return RedshiftTemporalKind::kTimestamptz;
     return RedshiftTemporalKind::kNone;
+  }
+  RedshiftIntervalFamily interval_family() const {
+    if (type_id_ == PostgresTypeId::kRedshiftIntervalYearMonth)
+      return RedshiftIntervalFamily::kYearMonth;
+    if (type_id_ == PostgresTypeId::kRedshiftIntervalDaySecond)
+      return RedshiftIntervalFamily::kDaySecond;
+    return RedshiftIntervalFamily::kNone;
+  }
+  RedshiftIntervalConstraint interval_constraint() const {
+    auto out = interval_constraint_;
+    if (out.family == RedshiftIntervalFamily::kNone) out.family = interval_family();
+    return out;
+  }
+  PostgresType WithIntervalConstraint(RedshiftIntervalConstraint constraint) const {
+    PostgresType out(*this);
+    out.interval_constraint_ = std::move(constraint);
+    return out;
   }
   RedshiftBytesKind bytes_kind() const {
     if (type_id_ == PostgresTypeId::kBpchar) return RedshiftBytesKind::kChar;
@@ -511,6 +530,7 @@ class PostgresType {
   std::vector<PostgresType> children_;
   std::optional<int32_t> type_modifier_;
   bool redshift_descriptor_ = false;
+  RedshiftIntervalConstraint interval_constraint_;
   adbc::driver::pgwire::TypeModifierMetadata modifier_metadata_;
   adbc::driver::pgwire::TemporalRepresentation temporal_representation_ =
       adbc::driver::pgwire::TemporalRepresentation::kArrow;
@@ -524,11 +544,15 @@ class PostgresType {
   static constexpr const char* kExtensionMetadata = "ARROW:extension:metadata";
 
   ArrowErrorCode AddFieldMetadata(ArrowSchema* schema) const {
-    if (!redshift_descriptor_) return NANOARROW_OK;
+    if (!redshift_descriptor_ && interval_family() == RedshiftIntervalFamily::kNone)
+      return NANOARROW_OK;
     nanoarrow::UniqueBuffer buffer;
     NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), schema->metadata));
-    if (!modifier_metadata_.sql_type.empty()) {
-      const auto family = modifier_metadata_.sql_type;
+    const auto family =
+        interval_family() != RedshiftIntervalFamily::kNone
+            ? std::string_view(RedshiftIntervalConstraint::SqlName(interval_family()))
+            : modifier_metadata_.sql_type;
+    if (!family.empty()) {
       NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
           buffer.get(), ArrowCharView("ADBC:redshift:sql_type"),
           ArrowStringView{family.data(), static_cast<int64_t>(family.size())}));
@@ -554,11 +578,35 @@ class PostgresType {
 
   ArrowErrorCode AddRedshiftIntervalMetadata(ArrowSchema* schema,
                                              const char* family) const {
+    const auto c = interval_constraint();
+    if (c.family != interval_family()) return EINVAL;
+    NANOARROW_RETURN_NOT_OK(c.Validate(nullptr));
     nanoarrow::UniqueBuffer buffer;
     NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), schema->metadata));
-    NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
-        buffer.get(), ArrowCharView("ADBC:redshift:interval_family"),
-        ArrowCharView(family)));
+    auto append = [&](const char* key, std::string_view value) {
+      return ArrowMetadataBuilderAppend(
+          buffer.get(), ArrowCharView(key),
+          ArrowStringView{value.data(), static_cast<int64_t>(value.size())});
+    };
+    NANOARROW_RETURN_NOT_OK(append("ADBC:redshift:interval_family", family));
+    NANOARROW_RETURN_NOT_OK(append("ADBC:redshift:interval_contract_version", "1"));
+    NANOARROW_RETURN_NOT_OK(append("ADBC:redshift:interval_constraint_state",
+                                   RedshiftIntervalConstraint::StateName(c.state)));
+    if (c.qualifier != RedshiftIntervalQualifier::kNone)
+      NANOARROW_RETURN_NOT_OK(
+          append("ADBC:redshift:interval_qualifier",
+                 RedshiftIntervalConstraint::QualifierName(c.qualifier)));
+    if (c.precision)
+      NANOARROW_RETURN_NOT_OK(
+          append("ADBC:redshift:fractional_precision", std::to_string(*c.precision)));
+    if (c.raw_type)
+      NANOARROW_RETURN_NOT_OK(append("ADBC:redshift:interval_raw_type", *c.raw_type));
+    if (c.raw_precision)
+      NANOARROW_RETURN_NOT_OK(
+          append("ADBC:redshift:interval_raw_precision", *c.raw_precision));
+    if (c.raw_datetime_precision)
+      NANOARROW_RETURN_NOT_OK(append("ADBC:redshift:interval_raw_datetime_precision",
+                                     *c.raw_datetime_precision));
     return ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data));
   }
 
@@ -838,34 +886,26 @@ class PostgresTypeResolver {
 
 inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
     const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
-  if (schema == nullptr) return NANOARROW_OK;
-  ArrowStringView family{};
-  NANOARROW_RETURN_NOT_OK(ArrowMetadataGetValue(
-      schema->metadata, ArrowCharView("ADBC:redshift:interval_family"), &family));
-  // Every value of the vendor marker is read-only, including unknown family names.
-  bool unsupported = family.data != nullptr;
-  ArrowSchemaView view{};
-  if (resolver.is_redshift() && ArrowSchemaViewInit(&view, schema, nullptr) == 0) {
-    // Metadata stripping must not authorize PostgreSQL's 16-byte interval writer.
-    unsupported |= view.type == NANOARROW_TYPE_DURATION ||
-                   view.type == NANOARROW_TYPE_INTERVAL_MONTHS ||
-                   view.type == NANOARROW_TYPE_INTERVAL_DAY_TIME ||
-                   view.type == NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO;
-  }
-  if (unsupported) {
-    ArrowErrorSet(
-        error, "[Redshift] Interval parameter binding and ingestion are not implemented");
-    return ENOTSUP;
-  }
-  for (int64_t i = 0; i < schema->n_children; i++) {
+  auto validate = [&](auto&& self, const ArrowSchema* node,
+                      bool nested) -> ArrowErrorCode {
+    if (!node) return NANOARROW_OK;
+    RedshiftIntervalSchema interval;
     NANOARROW_RETURN_NOT_OK(
-        ValidateIntervalWriteSchema(resolver, schema->children[i], error));
-  }
-  if (schema->dictionary) {
-    NANOARROW_RETURN_NOT_OK(
-        ValidateIntervalWriteSchema(resolver, schema->dictionary, error));
-  }
-  return NANOARROW_OK;
+        RedshiftIntervalSchema::Parse(node, resolver.is_redshift(), &interval, error));
+    if (interval.enabled() && nested)
+      return RedshiftIntervalConstraint::Invalid(
+          error, "nested/dictionary interval semantics unsupported");
+    ArrowSchemaView view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, node, error));
+    for (int64_t i = 0; i < node->n_children; ++i) {
+      // One relation struct contains flat fields; descendants of a field are nested.
+      const bool child_nested =
+          nested || node != schema || view.type != NANOARROW_TYPE_STRUCT;
+      NANOARROW_RETURN_NOT_OK(self(self, node->children[i], child_nested));
+    }
+    return self(self, node->dictionary, true);
+  };
+  return validate(validate, schema, false);
 }
 
 inline ArrowErrorCode PostgresType::ValidateDecimalWriteSchema(
@@ -952,6 +992,15 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
   NANOARROW_RETURN_NOT_OK(ValidateBytesWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+  RedshiftIntervalSchema interval;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftIntervalSchema::Parse(schema, resolver.is_redshift(), &interval, error));
+  if (interval.enabled()) {
+    const auto id = interval.constraint.family == RedshiftIntervalFamily::kYearMonth
+                        ? PostgresTypeId::kRedshiftIntervalYearMonth
+                        : PostgresTypeId::kRedshiftIntervalDaySecond;
+    return resolver.Find(resolver.GetOID(id), out, error);
+  }
   RedshiftTemporalSchema temporal;
   NANOARROW_RETURN_NOT_OK(
       RedshiftTemporalSchema::Parse(schema, resolver.is_redshift(), &temporal, error));

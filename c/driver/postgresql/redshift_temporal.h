@@ -104,6 +104,12 @@ struct RedshiftTemporalSchema {
         RedshiftDecimalSchema::Metadata(schema, "ARROW:extension:name", &name, error));
     NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
         schema, "ADBC:redshift:fractional_precision", &precision, error));
+    // Interval qualifiers reuse fractional_precision under their own closed contract.
+    std::optional<std::string_view> interval_family;
+    NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
+        schema, "ADBC:redshift:interval_family", &interval_family, error));
+    if (interval_family || (family && family->starts_with("INTERVAL")))
+      return NANOARROW_OK;
     const auto marked = family ? Canonical(*family) : RedshiftTemporalKind::kNone;
     const bool temporal_extension = name && TemporalExtension(*name);
     RedshiftTemporalKind storage = RedshiftTemporalKind::kNone;

@@ -194,9 +194,14 @@ struct BindStream {
     for (size_t i = 0; i < bind_field_writers.size(); i++) {
       PostgresType type;
 
-      // Handle NA type by using expected parameter type from PostgreSQL
-      if (has_expected_types && bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
-          i < static_cast<size_t>(expected_param_types.n_children())) {
+      // Genuine NA ingest uses the actual interval OID; the writer factory must
+      // still validate its known constraint before selecting the null writer.
+      if (ingest_targets && type_resolver.is_redshift() &&
+          bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
+          ingest_targets->child(i).interval_family() != RedshiftIntervalFamily::kNone) {
+        type = ingest_targets->child(i);
+      } else if (has_expected_types && bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
+                 i < static_cast<size_t>(expected_param_types.n_children())) {
         const auto& expected_type = expected_param_types.child(i);
         // If PostgreSQL couldn't infer a concrete type (e.g., SELECT $1), don't
         // force an "expected" type; fall back to Arrow-derived mapping.
@@ -238,9 +243,18 @@ struct BindStream {
                        RedshiftTemporalSchema::Parse(bind_schema->children[i],
                                                      type_resolver.is_redshift(),
                                                      &temporal, &na_error));
+      RedshiftIntervalSchema interval;
+      UNWRAP_NANOARROW(na_error, InvalidArgument,
+                       RedshiftIntervalSchema::Parse(bind_schema->children[i],
+                                                     type_resolver.is_redshift(),
+                                                     &interval, &na_error));
       const PostgresType* writer_target = nullptr;
       if (ingest_targets &&
-          (type.type_id() == PostgresTypeId::kNumeric ||
+          (((interval.enabled() || type_resolver.is_redshift()) &&
+            (type.interval_family() != RedshiftIntervalFamily::kNone ||
+             ingest_targets->child(i).interval_family() !=
+                 RedshiftIntervalFamily::kNone)) ||
+           type.type_id() == PostgresTypeId::kNumeric ||
            ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric ||
            ((temporal.enabled() || type_resolver.is_redshift()) &&
             (type.temporal_kind() != RedshiftTemporalKind::kNone ||
@@ -261,10 +275,12 @@ struct BindStream {
                               /*disable_decimal_fast_path=*/false, &na_error));
 
       param_types[i] =
-          writer_target && (writer_target->type_id() == PostgresTypeId::kNumeric ||
-                            writer_target->scalar_kind() != RedshiftScalarKind::kNone ||
-                            writer_target->bytes_kind() != RedshiftBytesKind::kNone ||
-                            writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
+          writer_target &&
+                  (writer_target->interval_family() != RedshiftIntervalFamily::kNone ||
+                   writer_target->type_id() == PostgresTypeId::kNumeric ||
+                   writer_target->scalar_kind() != RedshiftScalarKind::kNone ||
+                   writer_target->bytes_kind() != RedshiftBytesKind::kNone ||
+                   writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
               ? writer_target->oid()
               : type.oid();
       param_formats[i] = kPgBinaryFormat;

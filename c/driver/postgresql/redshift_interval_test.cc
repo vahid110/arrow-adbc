@@ -88,9 +88,15 @@ TEST(RedshiftIntervalTest, MixedQueryAndTableColumnSchemasAgreeWithoutInventedMo
               item.second == 0 ? "intervaly2m" : "intervald2s");
     ArrowMetadataReader metadata;
     ASSERT_EQ(ArrowMetadataReaderInit(&metadata, table_column->metadata), 0);
-    // Only semantic family + existing type-name metadata, no invented typmod,
-    // qualifier, fractional precision, or canonical extension claim.
-    EXPECT_EQ(metadata.remaining_keys, 2);
+    // Canonical family/version + explicit unknown constraint state, never a
+    // fabricated qualifier/precision or native typmod interpretation.
+    EXPECT_EQ(metadata.remaining_keys, 5);
+    ArrowStringView state{};
+    ASSERT_EQ(ArrowMetadataGetValue(
+                  table_column->metadata,
+                  ArrowCharView("ADBC:redshift:interval_constraint_state"), &state),
+              0);
+    EXPECT_EQ(std::string_view(state.data, state.size_bytes), "unknown");
   }
   EXPECT_STREQ(schema->children[0]->format, "tin");
   EXPECT_STREQ(schema->children[1]->format, "tDu");
@@ -253,7 +259,7 @@ TEST(RedshiftIntervalTest,
   ASSERT_EQ(
       ArrowSchemaSetMetadata(schema.get(), reinterpret_cast<const char*>(metadata->data)),
       0);
-  EXPECT_EQ(PostgresType::FromSchema(resolver, schema.get(), &type, &error), ENOTSUP);
+  EXPECT_EQ(PostgresType::FromSchema(resolver, schema.get(), &type, &error), EINVAL);
 }
 
 TEST(RedshiftIntervalTest, NestedAndDictionaryIntervalsAreReadOnly) {

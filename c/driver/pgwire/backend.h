@@ -163,6 +163,10 @@ struct BackendProfile {
       // qualification remains open. Missing OID-only modifiers stay unknown.
       if (raw && (*raw == -1 || (*raw >= 0 && *raw <= 6)))
         out.fractional_precision = *raw == -1 ? 6 : *raw;
+    } else if (typname == "intervaly2m" || typname == "intervald2s") {
+      out.sql_type =
+          typname == "intervaly2m" ? "INTERVAL YEAR TO MONTH" : "INTERVAL DAY TO SECOND";
+      // No qualified native qualifier/precision producer exists yet. Raw only.
     } else if (typname == "numeric" || typname == "decimal") {
       out.sql_type = "DECIMAL";
       if (!raw || *raw < 4) return out;

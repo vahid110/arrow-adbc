@@ -120,7 +120,9 @@ adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetada
     if (RedshiftScalarSchema::Canonical(metadata.sql_type) != RedshiftScalarKind::kNone ||
         RedshiftBytesSchema::Canonical(metadata.sql_type) != RedshiftBytesKind::kNone ||
         RedshiftTemporalSchema::Canonical(metadata.sql_type) !=
-            RedshiftTemporalKind::kNone) {
+            RedshiftTemporalKind::kNone ||
+        profile.IntervalFamily(*xdbc.xdbc_type_name) !=
+            adbc::driver::pgwire::CatalogIntervalFamily::kNone) {
       xdbc.xdbc_type_name = metadata.sql_type;
     }
     if (metadata.fractional_precision)
