@@ -283,7 +283,10 @@ class GitHub:
         return item
 
 
-def prepare(github, directory, interpreter, c_id, wheel_id):
+def prepare(github, directory, interpreter, c_id, wheel_id, *, nonce):
+    from pgwire_qualification_policy import admission_name
+
+    admission_name(nonce)
     source, run = github.context()
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=False)
@@ -296,6 +299,7 @@ def prepare(github, directory, interpreter, c_id, wheel_id):
         address.version == 4 and address.is_global, "runner public IPv4 unavailable"
     )
     admission = {
+        "nonce": nonce,
         "review": github.review(source),
         "runner_cidr": str(address) + "/32",
         "source_sha": source,
@@ -398,6 +402,7 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--c-artifact", required=True, type=int)
     parser.add_argument("--python-artifact", required=True, type=int)
+    parser.add_argument("--nonce", required=True)
     args = parser.parse_args()
     try:
         prepare(
@@ -406,6 +411,7 @@ def main():
             sys.executable,
             args.c_artifact,
             args.python_artifact,
+            nonce=args.nonce,
         )
         print(
             "Exact merged-head artifacts installed and load-verified; "

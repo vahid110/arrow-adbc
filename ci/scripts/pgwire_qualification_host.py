@@ -28,10 +28,10 @@ import hashlib
 import io
 import json
 import os
+import stat
 import sys
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 from pgwire_qualification import file_sha
@@ -40,7 +40,6 @@ from pgwire_qualification_live import (
     KINDS,
     NAME,
     OIDC_SUBJECT,
-    PARAMETER,
     REF,
     REGION,
     REPOSITORY,
@@ -56,14 +55,30 @@ from pgwire_qualification_live import (
     validate,
 )
 from pgwire_qualification_manifest import PROTECTED, SHA, Rejected, digest, require
+from pgwire_qualification_policy import (
+    admission_name,
+    checked_template,
+    host_attempt_name,
+    initial_policy,
+    operation_prefix,
+    runtime_policy,
+)
 from pgwire_qualification_prepare import GitHub, parse_json
 
 OWNER = f"arn:aws:iam::{ACCOUNT}:role/adbc-provisioner"
+HOST_UID = 502  # Fixed qualification host account: vahidsbr.
+OPERATION_DIRECTORY = Path(
+    "/Users/vahidsbr/.local/state/adbc-redshift/workflow/"
+    "live-qualification-20261016/host-operation-attempts"
+)
 INITIAL_POLICY = "adbc-qualification-initial"
 RUN_POLICY = "adbc-qualification-20261016-runtime"
 ROLE_NAME = "adbc-isolated-qualification-ci"
 FAILURE_STAGES = {
     "preflight-verification": "PREFLIGHT",
+    "operation-inventory": "OPERATION_INVENTORY",
+    "host-guard-attempted": "HOST_GUARD",
+    "host-reservation-attempted": "HOST_RESERVATION",
     "initial-role-verification": "INITIAL_ROLE",
     "initial-role-verified": "INITIAL_ROLE",
     "create-namespace-attempted": "CREATE_NAMESPACE",
@@ -80,6 +95,11 @@ FAILURE_STAGES = {
     "admission-issued": "CI_COMPLETION",
 }
 FAILURE_REASONS = {
+    "operation inventory is existing or incomplete": "OPERATION_SPENT_OR_UNKNOWN",
+    "operation already locally spent": "LOCAL_OPERATION_SPENT",
+    "unsafe host operation directory": "LOCAL_GUARD_IDENTITY",
+    "operation nonce mismatch": "OPERATION_NONCE",
+    "runtime template is not the versioned contract": "POLICY_TEMPLATE",
     "workgroup not ready": "WORKGROUP_NOT_READY",
     "workgroup ownership mismatch": "WORKGROUP_OWNERSHIP",
     "namespace ownership mismatch": "NAMESPACE_OWNERSHIP",
@@ -110,31 +130,77 @@ def failure_reason(error):
     )
 
 
-INITIAL_POLICY_DOCUMENT = {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "Identity",
-            "Effect": "Allow",
-            "Action": ["sts:GetCallerIdentity"],
-            "Resource": "*",
-        },
-        {
-            "Sid": "ReadSingleAdmission",
-            "Effect": "Allow",
-            "Action": ["ssm:GetParameter"],
-            "Resource": f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter" + PARAMETER,
-        },
-    ],
-}
-
-
 class Host:
-    def __init__(self, aws, github, receipt, *, clock=time.time, pause=time.sleep):
+    def __init__(
+        self,
+        aws,
+        github,
+        receipt,
+        *,
+        clock=time.time,
+        pause=time.sleep,
+        _attempt_directory=None,
+    ):
         self.aws, self.github, self.path = aws, github, Path(receipt)
         self.clock, self.pause = clock, pause
         self.state = None
         self.deadline = 0
+        # Constructor-only offline seam; production CLI/environment cannot move
+        # the guard or select another host identity.
+        self._attempt_directory = _attempt_directory
+
+    def acquire_operation(self, record):
+        directory = (
+            OPERATION_DIRECTORY
+            if self._attempt_directory is None
+            else Path(self._attempt_directory)
+        )
+        uid = HOST_UID if self._attempt_directory is None else os.getuid()
+        require(
+            directory.is_absolute() and os.getuid() == uid,
+            "unsafe host operation directory",
+        )
+        directory.mkdir(mode=0o700, exist_ok=True)
+        require(
+            directory.resolve(strict=True) == directory,
+            "unsafe host operation directory",
+        )
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor = os.open(directory, flags)
+        try:
+            observed = os.fstat(descriptor)
+            require(
+                stat.S_ISDIR(observed.st_mode)
+                and observed.st_uid == uid
+                and stat.S_IMODE(observed.st_mode) == 0o700,
+                "unsafe host operation directory",
+            )
+            self.check_deadline()
+            try:
+                attempt = os.open(
+                    record["nonce"] + ".json",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o400,
+                    dir_fd=descriptor,
+                )
+            except FileExistsError:
+                raise Rejected("operation already locally spent") from None
+            # Never remove or replace this entry, even after partial write or
+            # fsync failure. Existing bytes/remote absence never authorize reuse.
+            with os.fdopen(attempt, "w") as stream:
+                json.dump(record, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(descriptor)
+            # Also commit a newly created directory's entry in its parent.
+            parent = os.open(directory.parent, flags)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            os.close(descriptor)
+        self.check_deadline()
 
     def save(self):
         # Replace atomically; preserve attempted calls even when replies are lost.
@@ -352,7 +418,7 @@ class Host:
             "PolicyDocument"
         ]
         require(
-            observed == INITIAL_POLICY_DOCUMENT,
+            observed == initial_policy(self.state["nonce"]),
             "initial CI policy exceeds exact admission read",
         )
         self.state["initial_policy_sha256"] = digest(observed)
@@ -368,31 +434,8 @@ class Host:
         require(
             file_sha(template) == expected_sha, "unreviewed runtime policy template"
         )
-        cutoff = datetime.fromtimestamp(
-            self.state["admission"]["window"]["teardown_deadline"], timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        encoded = Path(template).read_text()
-        for name, value in {
-            "EXACT_OWNED_WG": self.state["created"]["workgroup"],
-            "EXACT_OWNED_NS": self.state["created"]["namespace"],
-            "EXACT_OWNED_SG": self.state["created"]["security_group"],
-            "EXACT_RUN_ID": str(self.state["run_id"]),
-            "EXACT_CUTOFF": cutoff,
-        }.items():
-            encoded = encoded.replace(name, value)
-        require(
-            "EXACT_" not in encoded and self.state["nonce"] in encoded,
-            "runtime policy binding incomplete",
-        )
-        policy = parse_json(encoded)
-        cutoff = datetime.fromtimestamp(
-            self.state["admission"]["window"]["teardown_deadline"], timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for statement in policy["Statement"]:
-            if statement["Effect"] == "Allow":
-                statement.setdefault("Condition", {}).setdefault("DateLessThan", {})[
-                    "aws:CurrentTime"
-                ] = cutoff
+        checked_template(template, expected_sha)
+        policy = runtime_policy(self.state["admission"])
         self.state["runtime_policy"] = policy
         self.state["runtime_policy_template_sha256"] = expected_sha
         self.state["attempted"].append("runtime_policy")
@@ -461,6 +504,7 @@ class Host:
             "run_id": run,
             "started_at": int(started),
             "deadline": int(self.deadline),
+            "host_attempt": "NOT_ATTEMPTED",
             "attempted": [],
             "created": {},
             "external_teardown": "required",
@@ -472,6 +516,28 @@ class Host:
             self.phase("preflight-verification")
             self.check_deadline()
             preflight = self.preflight(preflight_id, run, source)
+            self.check_deadline()
+            require(preflight["nonce"] == nonce, "operation nonce mismatch")
+            checked_template(policy_template, policy_sha256)
+            self.phase("operation-inventory")
+            self.check_deadline()
+            inventory = self.aws["ssm"].describe_parameters(
+                ParameterFilters=[
+                    {
+                        "Key": "Name",
+                        "Option": "BeginsWith",
+                        "Values": [operation_prefix(nonce)],
+                    }
+                ],
+                MaxResults=50,
+            )
+            require(
+                type(inventory) is dict
+                and "NextToken" not in inventory
+                and type(inventory.get("Parameters")) is list
+                and inventory["Parameters"] == [],
+                "operation inventory is existing or incomplete",
+            )
             self.check_deadline()
             # Reject broad initial authority before any resource can be created.
             self.phase("initial-role-verification")
@@ -498,6 +564,42 @@ class Host:
                 )["SecurityGroups"],
                 "dedicated security group already exists",
             )
+            self.check_deadline()
+            # This immutable reservation wins before any provisioning. A lost
+            # reply is spent, never read back or retried as authorization.
+            reservation = {
+                "version": 1,
+                "source_sha": source,
+                "run_id": run,
+                "nonce": nonce,
+                "policy_sha256": policy_sha256,
+                "deadline": self.state["deadline"],
+            }
+            self.state["host_guard"] = "ATTEMPTED_UNKNOWN"
+            self.phase("host-guard-attempted")
+            self.check_deadline()
+            self.acquire_operation(reservation)
+            self.state["host_guard"] = "ACQUIRED"
+            self.save()
+            self.check_deadline()
+            self.state["host_attempt"] = "ATTEMPTED_UNKNOWN"
+            self.phase("host-reservation-attempted")
+            self.check_deadline()
+            reservation_reply = self.aws["ssm"].put_parameter(
+                Name=host_attempt_name(nonce),
+                Type="String",
+                Tier="Standard",
+                Overwrite=False,
+                Value=json.dumps(reservation, sort_keys=True),
+            )
+            self.check_deadline()
+            require(
+                reservation_reply.get("Version") == 1,
+                "host reservation is not immutable version one",
+            )
+            self.state["host_attempt"] = "CREATED"
+            self.save()
+            self.check_deadline()
             tags = [{"key": TAG, "value": nonce}]
             for kind, create in (
                 (
@@ -608,7 +710,7 @@ class Host:
                 },
                 "cleanup": {"owner": OWNER, "observer": OWNER},
             }
-            validate(admission, source=source, run=run, now=now)
+            validate(admission, source=source, run=run, now=now, nonce=nonce)
             self.state["admission"] = admission
             self.save()
             self.phase("initial-resource-verification")
@@ -644,7 +746,7 @@ class Host:
             self.phase("admission-write-attempted")
             self.check_deadline(admission["window"]["admit_before"])
             self.aws["ssm"].put_parameter(
-                Name=PARAMETER,
+                Name=admission_name(nonce),
                 Value=json.dumps(admission, sort_keys=True, separators=(",", ":")),
                 Type="String",
                 Tier="Standard",
@@ -673,7 +775,16 @@ class Host:
             self.save()
         finally:
             try:
-                self.cleanup()
+                if (
+                    not self.state["attempted"]
+                    and self.state["host_attempt"] != "CREATED"
+                ):
+                    # A duplicate/uncertain reservation owns no resources or
+                    # shared workflow cancellation. Preserve it without effects.
+                    self.state["external_teardown"] = "not-started"
+                    self.save()
+                else:
+                    self.cleanup()
             except BaseException:
                 failed = True
                 self.state["external_teardown"] = (

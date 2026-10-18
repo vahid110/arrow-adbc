@@ -26,14 +26,61 @@ three-signature proposal only for this one finite, dedicated batch.
 
 ## Trust and finite controls
 
-The host authenticates as `adbc-provisioner` in account `385207570137`. It issues
-one Standard String (at most 4 KB), version 1, without overwrite:
-`/adbc/qualification/20261016/admission`. The reviewed host owns issuance; CI can
-read only that parameter and create only its exact nonce/run claim. CI cannot
-issue/delete/overwrite admissions or claims. Policy must explicitly deny
-`ssm:PutParameter` when the **String** condition `ssm:Overwrite` equals `true`.
-A failed or uncertain claim is spent/unknown and must never authorize a retry.
-Retain admissions, claims, host receipts and original failures as evidence.
+The host authenticates as `adbc-provisioner` in account `385207570137`. The old
+singleton `/adbc/qualification/20261016/admission` remains immutable version 1
+historical evidence. The current path never reads, writes, deletes or reuses it.
+A separately human-authorized operation supplies one explicit lowercase 64-hex
+ownership nonce; no failure generates a replacement nonce or spending authority.
+Workflow input, authenticated installed preflight, initial CI read policy, host
+issuance, consumer and runtime policy all bind that same nonce.
+
+Within `/adbc/qualification/20261016/operations/<nonce>/`, the host first requires
+one complete, empty, value-free `DescribeParameters` response for the exact prefix;
+any parameter, missing list or pagination token rejects the operation. After
+checking the versioned template, authenticated preflight, exact initial role and
+deadline, it first creates an exclusive immutable nonce-named local attempt journal
+in `/Users/vahidsbr/.local/state/adbc-redshift/workflow/live-qualification-20261016/host-operation-attempts`
+under fixed host UID 502 (`vahidsbr`). Production has no CLI/environment relocation;
+only offline tests inject a directory through the constructor. The directory must
+be owned by this UID, mode 0700 and without symlink redirection. Exclusive/no-follow
+creation, file/directory/parent fsync all precede SSM. Partial writes, sync errors,
+connection failures before SSM stores anything, changed receipts, working directories
+and fresh processes cannot reuse an existing journal. Never remove/reset/read its
+bytes as authorization. Host migration requires explicit requalification; copying
+spent journals or selecting a new location grants no authority.
+
+Only then does the host atomically create `host-attempt` as a Standard String,
+version 1, `Overwrite=False`, before provisioning. The reservation holds only fixed nonsecret
+source/run/nonce/template-hash/original-deadline metadata. An attempted write or
+lost reply is spent: no retry, readback as authorization, reset or deletion. A
+second receipt path or concurrent invocation cannot reauthorize provisioning.
+A loser with no provisioning attempts performs no teardown or workflow cancellation.
+
+The host then publishes `admission` (Standard String, at most 4 KB, version 1,
+without overwrite). CI reads only that exact admission and creates only
+`claim-<run>` in the same scope. It cannot read/write the host reservation or issue,
+delete or overwrite admissions/claims. The reviewed runtime contract is
+`ci/scripts/pgwire_qualification_policy.json`, bound to exact owned IDs, nonce,
+run and cutoff; the helper rejects a different template or hash before provisioning.
+It retains the same 14 CI actions. Follow AWS's documented
+[scoped Allow plus explicit overwrite Deny](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-policy-conditions.html):
+claim Allow has no `ssm:Overwrite=false` condition, and a scoped Deny uses
+**StringEquals** `ssm:Overwrite=true`. Simulation proves missing/false/true context
+behavior; the actual failed service authorization context was not exposed.
+Failed/interrupted/uncertain mutations never authorize retry. Retain all SSM
+reservations/admissions/claims, host receipts and original failures.
+
+The fixed consumer receipt records only closed stage/reason enums, exact source,
+run, operation nonce and available admission hash, plus claim/ingress uncertainty.
+It distinguishes installed entrypoint probes from each payload's NOT_STARTED,
+STARTED_UNKNOWN and PASSED state. Claim denial is `CLAIM_ACCESS_DENIED` before
+any ingress, credential or payload call. Cleanup cannot replace the first failure;
+existing receipts are preserved. Every effect refreshes its applicable deadline
+after durable receipt persistence; child remaining time is computed after its
+attempted mark. An invocation skipped by that final time gate stays NOT_STARTED;
+STARTED_UNKNOWN is conservative, not proof of actual child execution. Expired
+query/admission clocks do not block exact owned ingress cleanup. No exception text
+or child/SDK payload is logged.
 
 The compact v2 record binds the exact merged source, original PR/review/check
 receipt, live run, immutable artifact IDs, payload/inventory/C-client/CA hashes,
@@ -81,7 +128,7 @@ Data API and tears down dedicated resources even when CI fails.
 Run only after the reviewed Task008c head is merged and its applicable CI is green.
 The worker and reviewer must stay offline. Use only the already authorized host
 profile; do not modify global profiles, the OIDC provider, VPC or subnet settings.
-The host attempts/receipts for failed runs `38916730017` and `38920727258` remain
+The host attempts/receipts for failed runs `38916730017`, `38920727258` and `38933278088` remain
 spent evidence; this offline repair does not authorize another host invocation. The
 coordinator must resolve further authority with the human before a new attempt.
 
@@ -89,9 +136,11 @@ coordinator must resolve further authority with the human before a new attempt.
    `ci/scripts/pgwire_qualification_live.py` and the installed wheel's
    `python/adbc_driver_redshift/adbc_driver_redshift/iam.py`. Narrow to the exact
    API operations below; exclude unused provisioned-cluster/KMS/secret-value APIs.
-   Prepare and independently review the runtime template with placeholders
+   Generate the host lifecycle baseline separately from
+   `ci/scripts/pgwire_qualification_host.py`; its admin operations are not CI grants.
+   Independently review the versioned runtime asset/hash and its bindings
    `EXACT_OWNED_WG`, `EXACT_OWNED_NS`, `EXACT_OWNED_SG`, `EXACT_RUN_ID`,
-   `EXACT_CUTOFF`, and the exact ownership nonce. Every Allow expires at cutoff.
+   `EXACT_OPERATION_NONCE` and `EXACT_CUTOFF`. Every Allow expires at cutoff.
 2. Before dispatch, the coordinator freshly authenticates repository metadata:
    `GET /repos/vahid110/arrow-adbc` must return owner ID `5770674` and repository
    ID `1363017696`; `GET /repos/vahid110/arrow-adbc/actions/oidc/customization/sub`
@@ -118,11 +167,13 @@ coordinator must resolve further authority with the human before a new attempt.
    `sts:GetCallerIdentity` on `"*"` (Sid `Identity`) and `ssm:GetParameter`
    on the exact admission ARN (Sid `ReadSingleAdmission`), with no other actions
    or managed policies. The exact approved JSON document is pinned in
-   `INITIAL_POLICY_DOCUMENT`; incomplete/paginated IAM inventories are rejected. No DB/ingress grant
+   `pgwire_qualification_policy.initial_policy(approved_nonce)`;
+   incomplete/paginated IAM inventories are rejected. No DB/ingress grant
    exists yet. Preserve role creation ownership and trust/policy receipts.
 3. Dispatch `.github/workflows/pgwire-qualification-live.yml` explicitly at the
    exact merged integration SHA, supplying that SHA and the successful same-SHA
-   C archive and Python wheel artifact IDs from the normal package/Python runs.
+   C archive and Python wheel artifact IDs from the normal package/Python runs,
+   and `operation_nonce` from the separate approved operation inputs.
    No source driver rebuild is needed. The runner authenticates downloads,
    installs bytes, compiles its tiny C client and probes both Redshift entrypoints
    before OIDC. The uploaded `qualification-preflight-<run>` contains nonsecret
@@ -138,7 +189,7 @@ coordinator must resolve further authority with the human before a new attempt.
      --receipt /absolute/evidence/host-receipt.json \
      --preflight-artifact-id PRECISE_PREFLIGHT_ID --run-id LIVE_RUN_ID \
      --source-sha MERGED_SHA --nonce OWNERSHIP_NONCE \
-     --policy-template /absolute/evidence/runtime-policy-template.json \
+     --policy-template ci/scripts/pgwire_qualification_policy.json \
      --policy-template-sha256 REVIEWED_TEMPLATE_SHA256
    ```
 
@@ -194,7 +245,7 @@ coordinator must resolve further authority with the human before a new attempt.
    using **DescribeSecret only**, then remove the exact owned initial inline
    policy and CI role using `DeleteRolePolicy`, `DeleteRole`, and fresh
    `GetRole` absence. Record all resource/rule/usage/secret/role readbacks and
-   SQL/session outcomes. Retain SSM admission/claim and local evidence. A helper
+   SQL/session outcomes. Retain SSM reservation/admission/claim and local evidence. A helper
    success still requires these final secret/IAM readbacks before declaring
    complete teardown. No release/tag/PyPI action is part of this procedure.
 
@@ -209,7 +260,9 @@ no overwrite); Serverless `GetWorkgroup`, `GetNamespace`, `GetUsageLimit`,
 IAM support remain region constrained; DB/ingress grants use exact returned IDs.
 CI gets no Data API, Secrets Manager, provisioning, deletion or role authority.
 
-Host helper additionally: Serverless `CreateNamespace`, `CreateWorkgroup`,
+Host helper additionally: SSM `DescribeParameters` (value-free exact operation
+prefix, existing host authority only) and `PutParameter` for the immutable host
+reservation/admission; Serverless `CreateNamespace`, `CreateWorkgroup`,
 `CreateUsageLimit`, `ListUsageLimits`, `DeleteUsageLimit`, `DeleteWorkgroup`,
 `DeleteNamespace`; EC2 `CreateSecurityGroup`, dependent `CreateTags`,
 `DeleteSecurityGroup`; Data API `ExecuteStatement`, `DescribeStatement`,

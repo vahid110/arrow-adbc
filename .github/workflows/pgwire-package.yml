@@ -41,6 +41,7 @@ on:
     paths:
       - ".github/workflows/pgwire-package.yml"
       - "ci/scripts/pgwire_qualification*.py"
+      - "ci/scripts/pgwire_qualification_policy.json"
       - "c/driver/postgresql/**"
       - "c/driver/pgwire/**"
       - "c/driver_manager/**"
@@ -54,6 +55,7 @@ on:
     paths:
       - ".github/workflows/pgwire-package.yml"
       - "ci/scripts/pgwire_qualification*.py"
+      - "ci/scripts/pgwire_qualification_policy.json"
       - "c/driver/postgresql/**"
       - "c/driver/pgwire/**"
       - "c/driver_manager/**"

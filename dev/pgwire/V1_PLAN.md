@@ -49,8 +49,16 @@ cancellation and a supported SYS observer with strict visibility proof before
 admission and at cleanup. Original receipts/counters/budgets remain; further host
 authority requires coordinator/human resolution, with no retry from this repair.
 PR #19's initial review requested strict deadlines around slow reads and fresh
-same-run status/provenance before admission; the batched repair requires
-independent exact-head re-review and CI, preserving the failed review/CI evidence.
+same-run status/provenance before admission; its reviewed repair is merged,
+preserving the failed review/CI evidence. The separately approved replacement
+run `38933278088` passed bootstrap/SYS visibility but exact claim authorization
+failed before driver payloads. Independent full teardown is verified; the original
+namespace uncertainty and immutable singleton admission remain evidence. Task008d
+adds a versioned retained-action claim policy, explicit operation scopes, durable
+host reservation and static consumer receipts. Its initial review found pre-store
+reservation and receipt-fsync deadline gaps; the successor retains a canonical
+host journal and checks effect clocks after persistence. Offline repair requires
+independent review/CI and grants no further paid authority.
 Offline success is not live qualification: one exact merged-head batch and verified dedicated
 resource/secret/IAM teardown remain required. The human publication gate remains;
 this roadmap grants no additional spend, tag or publication authority.
@@ -79,7 +87,8 @@ x64/arm64, Debian x64, macOS x64/arm64, Windows x64/arm64).
 | 007 | User documentation: install (C, Python), connect (password, IAM recipe), type mapping, support matrix, known limitations, OSS positioning and approved shared-auth roadmap. | Done (PR #12) |
 | 008a | Offline isolated-resource admission contract, installed-artifact preflight and fake-only rehearsal; retire shared-target dispatch. | Done (PR #13); live admission stays closed pending externally verified dedicated evidence |
 | 008b | Installed C/Python private-input clients, no-AWS plumbing CI and machine-readable external admission handoff. | Done (PR #14), offline only; original unsigned gate stays closed |
-| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#18); readiness/observer repair pending review. Failed created-compute attempt physically torn down; further host authority requires coordinator/human resolution; actual client batch still required |
+| 008c | Executable finite SSM admission, authenticated installed-artifact runner and host lifecycle. | Merged (PRs #15–#19); failed replacement claim authorization physically torn down; actual client batch still required |
+| 008d | Versioned exact-claim IAM contract, explicit nonce admission scopes, immutable host reservation and static consumer diagnostics. | Offline repair; independent review/CI pending; prior one-attempt authority spent, no live authority |
 | 008 | Release qualification live batch: installed wheel + installed C archive on Ubuntu x64 against Redshift (query, params, metadata, ingest, IAM). | Pending: reviewed/green Task008c, dedicated host-issued admission, one green bounded batch and independently verified full teardown |
 | 009 | Release candidate: version number, changelog, draft release. **Human approves publication** (GitHub Release; PyPI only if approved). | Human sign-off |
 

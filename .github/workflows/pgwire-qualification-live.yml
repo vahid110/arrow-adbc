@@ -25,6 +25,10 @@ on:
       - ".github/workflows/pgwire-qualification-live.yml"
   workflow_dispatch:
     inputs:
+      operation_nonce:
+        description: Exact root-approved 64-hex ownership nonce for a new operation
+        required: true
+        type: string
       source_sha:
         description: Exact reviewed merged integration SHA with all applicable CI green
         required: true
@@ -69,6 +73,7 @@ jobs:
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
+      OPERATION_NONCE: ${{ inputs.operation_nonce }}
       EXPECTED_SHA: ${{ inputs.source_sha }}
       C_ARTIFACT_ID: ${{ inputs.c_artifact_id }}
       PYTHON_ARTIFACT_ID: ${{ inputs.python_artifact_id }}
@@ -84,6 +89,7 @@ jobs:
           test "$GITHUB_RUN_ATTEMPT" = 1
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$OPERATION_NONCE" =~ ^[0-9a-f]{64}$ ]]
           [[ "$C_ARTIFACT_ID" =~ ^[0-9]+$ ]]
           [[ "$PYTHON_ARTIFACT_ID" =~ ^[0-9]+$ ]]
       - name: Install consumer dependencies without AWS credentials
@@ -94,7 +100,7 @@ jobs:
           "$RUNNER_TEMP/qualification-venv/bin/python" -m pip install 'boto3==1.42.97' 'pyarrow>=14.0.1' adbc-driver-manager
       - name: Authenticate, install and load exact merged-head artifacts before OIDC
         run: |
-          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_prepare.py             "$RUNNER_TEMP/qualification" --c-artifact "$C_ARTIFACT_ID"             --python-artifact "$PYTHON_ARTIFACT_ID"
+          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_prepare.py             "$RUNNER_TEMP/qualification" --c-artifact "$C_ARTIFACT_ID"             --python-artifact "$PYTHON_ARTIFACT_ID" --nonce "$OPERATION_NONCE"
       - name: Publish nonsecret preflight for host admission issuance
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -115,7 +121,7 @@ jobs:
           mask-aws-account-id: true
       - name: Await immutable host admission and run one bounded private-input batch
         run: |
-          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_live.py             "$RUNNER_TEMP/qualification/paths.json" --output "$RUNNER_TEMP/qualification/result.json"
+          "$RUNNER_TEMP/qualification-venv/bin/python" -B ci/scripts/pgwire_qualification_live.py             "$RUNNER_TEMP/qualification/paths.json" --output "$RUNNER_TEMP/qualification/result.json" --nonce "$OPERATION_NONCE"
       - name: Publish only the fixed nonsecret qualification receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
