@@ -50,7 +50,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | SMALLINT / INT2 | C,O-PG,T | C,O-PG | C / C | C-name | int16 |
 | INTEGER / INT / INT4 | C,O-PG,T | C,O-PG,T | C / C,T | C-name,T | int32 |
 | BIGINT / INT8 | C,O-PG,T,L | C,O-PG,L | C,L / C,L | C-name,L | int64 |
-| DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-decimal,O-PG | C-defaults / C | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
+| DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-exact128/256/marked-text,NQ | C-explicit-p/s / C-target-exact,NQ | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
 | REAL / FLOAT4 | C,O-PG,T | C,O-PG | C / C | C-name | float32 |
 | DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T | C,O-PG | C / C | C-name | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C,F byte width; NQ | utf8 + CHAR width/identity |
@@ -105,10 +105,10 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   types but lack matching writer cases; TIME64 accepts only microseconds.
 - Ingest: [CREATE mapping](../../c/driver/postgresql/statement.cc#L743) calls
   [sql_type_name](../../c/driver/postgresql/postgres_type.h#L200) without modifiers:
-  decimal(p,s), text widths and CHAR identity are lost. Redshift
-  [ExecutePreparedRows](../../c/driver/postgresql/bind_stream.h#L535) uses Arrow-derived
-  parameter types, not the COPY target-type writers, even when append discovered
-  a target. A read alias does not prove correct VARBYTE DDL/parameter identity.
+  text widths and CHAR identity are lost. Task010c3 adds explicit decimal(p,s)
+  and actual target descriptors to both COPY and prepared INSERT decimal writers;
+  other prepared parameters keep their Arrow-derived types. A read alias does
+  not prove correct VARBYTE DDL/parameter identity.
   The staged CSV helper is not selected by the supported ingest path.
 - Scalar hazards: [writer.h](../../c/driver/postgresql/copy/writer.h#L170) uses
   narrowing casts; timestamp nanoseconds divide by 1000, as do generic interval
@@ -185,8 +185,41 @@ text allocation. PostgreSQL's existing public schema/reader stays unchanged.
 Literal reference vectors, actual normal/bound/empty PostgreSQL plumbing and
 codec-produced C Data/PyArrow decimals are offline evidence, **not captured
 Redshift traffic**. Native precision19 coefficient limits, scale37/38 boundaries
-and actual libpq protocol qualification remain open; decimal DDL/binds/append
-are unchanged and remain separate first-release work.
+and actual libpq protocol qualification remain open. Task010c3's write contract
+below is independently bounded; offline PostgreSQL execution is not Redshift proof.
+
+## Decimal write contract (Task010c3)
+
+Arrow decimal128/256 with precision1..38 and scale0..precision through38 uses
+bounded exact coefficient validation and PostgreSQL base-10000 serialization.
+Raw coefficients must fit the declared precision, including signed extrema;
+a small value does not make a decimal256 schema with precision76 supported.
+An explicit `ADBC:redshift:sql_type=DECIMAL` opts into the same contract on either
+backend; ordinary unmarked PostgreSQL schemas retain their existing behavior.
+Marked UTF-8 uses ASCII `[+-]?[0-9]+(\.[0-9]+)?`, at most80 bytes and38 fractional
+digits, with no exponent, whitespace or nonfinite values. Unknown-p/s values
+must fit38 coefficient digits (redundant fractional zeroes may be removed to fit).
+Supplied precision/scale must be paired, legal and consistent with physical Arrow
+storage and any supported raw modifier. Unknown p/s never supplies CREATE defaults.
+
+CREATE/REPLACE/CREATE_APPEND validates and renders `DECIMAL(p,s)` before destructive
+SQL: p1..38, s0..min(p,37). APPEND aligns actual name/OID/modifier catalog fields,
+including reordered/subset fields, and permits only exact target rescaling with
+precision/range checks; stored precision19 additionally checks signed64 coefficient
+bounds. Decimal128/256, DECIMAL-marked text and Arrow null are accepted numeric
+ingest sources; unmarked text, integer and float inputs reject on Redshift numeric
+targets. OID-only SQL parameters preserve the offered exact value; application
+CASTs may intentionally round. Incompatible/unknown numeric targets reject.
+
+Schema rejection precedes replacement DDL. Runtime value failures may follow DDL;
+no Redshift table-replacement atomicity is promised. The existing prepared stream
+transaction owner rolls back owned INSERT batches on late failure. Caller-owned
+transactions retain earlier work for the caller to resolve. A failed owned rollback
+now signals cleanup uncertainty and retires the connection while retaining the
+original error; issuing ROLLBACK alone is not evidence of cleanup. Production public
+Bind/stream/catalog/DDL/COPY tests, a prepared INSERT seam and consumer-exported
+C Data writer checks provide local evidence only. Native libpq/Redshift boundaries,
+independent review and final platform CI remain qualification gates.
 
 ## Recommended lossless contract and acceptance
 
@@ -317,12 +350,15 @@ must be reviewed before implementation; an unresolved representation blocks rele
   bounded Redshift schema/GetObjects metadata, including normal/bound/empty query
   readers and OID-only parameter identity. Synthetic descriptor/C Data and local
   PostgreSQL regressions cover the actual parser/consumer seams.
-- **010c2 implemented, review/CI pending:** known numeric p/s selects decimal128;
+- **010c2 merged (PR24), offline CI passed:** known numeric p/s selects decimal128;
   unknown modifiers keep exact decimal text. Strict finite base-10000 reference
   fields pass through the production reader and C Data import tests. Native
-  Redshift/libpq format/boundary qualification and all writes remain pending.
-- **010c successors:** scalar/decimal/temporal value/write gaps, native-format
-  evidence, faithful DDL/target-aware append, legal declaration bounds and loss checks.
+  Redshift/libpq format/boundary qualification remains pending.
+- **010c3 implemented, local validation/review pending:** explicit decimal DDL,
+  bounded exact decimal/marked-text binding, actual target-aware append and owned
+  rollback uncertainty handling. Final platform CI is deferred until development ends.
+- **010c successors:** other scalar/character/temporal value/write gaps and native
+  protocol/boundary evidence; no all-type completion claim.
 - **010d:** native SUPER plus supported-size binding/ingest, with the extension/
   protocol decisions above; a mixed projection must work without user query rewrites.
 - **010e:** HLLSKETCH and spatial native codecs/semantic contracts, split if needed;

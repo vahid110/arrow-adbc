@@ -48,9 +48,12 @@ Current state only; history is in git and PR descriptions.
   across query/schema/catalog/parameter paths (PR23 merged; offline CI passed).
   Task010c2 adds descriptor-driven decimal128 reads or exact UTF-8 for unknown
   modifiers, with strict finite base-10000 reference decoding and codec-produced
-  C Data/PyArrow tests; review/CI pending. Writes are unchanged. Synthetic descriptors and local PostgreSQL
-  plumbing do not qualify the actual Redshift/libpq path.
-  Interval writes/qualifiers, scalar/modifier, SUPER, HLL and spatial work remains
+  C Data/PyArrow tests (PR24 merged; offline CI passed). Task010c3 implements
+  explicit decimal DDL, bounded exact binding and target-aware append, including
+  DECIMAL-marked text and owned rollback uncertainty; local validation/review is
+  pending. Synthetic descriptors and local PostgreSQL plumbing do not qualify the
+  actual Redshift/libpq path; final platform CI is deferred by the local-first workflow.
+  Interval writes/qualifiers, other scalar/modifier, SUPER, HLL and spatial work remains
   required before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;

@@ -51,9 +51,12 @@ guards (PR #22 merged; offline CI passed). Task010c1 adds per-field modifiers an
 bounded numeric/character schema/catalog metadata, with parameter identity and
 unknowns retained (PR23 merged; offline CI passed). Task010c2 adds known-p/s
 decimal128 reads and strict exact-text unknowns with reference codec/C Data tests
-(review/CI pending); writes stay unchanged.
+(PR24 merged; offline CI passed). Task010c3 adds explicit legal decimal DDL,
+exact decimal128/256 and DECIMAL-text binding, target-aware append and owned
+rollback uncertainty handling; local validation/review is pending. Final platform
+CI follows development under the human's local-first workflow.
 Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
-scalar/decimal value/write gaps, SUPER, HLL and spatial work remain open before
+scalar/temporal value/write gaps, SUPER, HLL and spatial work remain open before
 separately authorized installed-artifact qualification.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer

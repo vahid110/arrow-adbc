@@ -1423,6 +1423,41 @@ TEST_F(PostgresStatementTest, DecimalSemanticParametersUseNumericOidThroughBothB
 }
 
 TEST_F(PostgresStatementTest,
+       DecimalParametersRespectExplicitSqlAndUnmarkedPostgresText) {
+  for (bool marked : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteSchema(schema.get(), NANOARROW_TYPE_STRING, 0,
+                                                  0, marked),
+              0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(adbcpq::testing::DecimalWriteBatch(schema.get(), array.get(), {"1.2345"},
+                                                 nullptr),
+              0);
+    ASSERT_THAT(
+        AdbcStatementSetSqlQuery(
+            &statement,
+            "SELECT pg_typeof($1)::text, $1::text, CAST($1 AS NUMERIC(10,2))::text",
+            &error),
+        IsOkStatus(&error));
+    ASSERT_THAT(AdbcStatementBind(&statement, array.get(), schema.get(), &error),
+                IsOkStatus(&error));
+    adbc_validation::StreamReader output;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &output.stream.value,
+                                          &output.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    ASSERT_NO_FATAL_FAILURE(output.Next());
+    ASSERT_EQ(output.array->length, 1);
+    const char* expected[] = {marked ? "numeric" : "text", "1.2345", "1.23"};
+    for (int col = 0; col < 3; col++) {
+      const auto value =
+          ArrowArrayViewGetStringUnsafe(output.array_view->children[col], 0);
+      EXPECT_EQ(std::string_view(value.data, value.size_bytes), expected[col]);
+    }
+  }
+}
+
+TEST_F(PostgresStatementTest,
        DecimalSchemaRejectionPreservesBindOwnershipAndReplaceSentinel) {
   auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
       connection.private_data);
