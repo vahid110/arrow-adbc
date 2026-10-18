@@ -69,6 +69,42 @@ inline ArrowErrorCode FixtureResolver(const adbc::driver::pgwire::BackendProfile
   return NANOARROW_OK;
 }
 
+inline ArrowErrorCode FixtureFromQuery(
+    PqResultHelper& query, const std::shared_ptr<PostgresTypeResolver>& resolver,
+    ArrowArray* out, ArrowSchema* schema, ArrowError* error) {
+  PostgresType root;
+  if (!query.ResolveOutputTypes(*resolver, &root).ok()) return EINVAL;
+  nanoarrow::UniqueSchema tmp_schema;
+  ArrowSchemaInit(tmp_schema.get());
+  NANOARROW_RETURN_NOT_OK(root.SetSchema(tmp_schema.get(), "Redshift"));
+  nanoarrow::UniqueArray array;
+  NANOARROW_RETURN_NOT_OK(ArrowArrayInitFromSchema(array.get(), tmp_schema.get(), error));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(array.get()));
+  for (int col = 0; col < query.NumColumns(); col++) {
+    std::unique_ptr<PostgresCopyFieldReader> reader;
+    NANOARROW_RETURN_NOT_OK(
+        MakeCopyFieldReader(root.child(col), tmp_schema->children[col], &reader, error));
+    reader->Init(root.child(col));
+    NANOARROW_RETURN_NOT_OK(reader->InitSchema(tmp_schema->children[col]));
+    NANOARROW_RETURN_NOT_OK(reader->InitArray(array->children[col]));
+    for (int row = 0; row < query.NumRows(); row++) {
+      const auto item = query.Row(row)[col];
+      ArrowBufferView data{};
+      data.data.data = item.data;
+      data.size_bytes = item.is_null ? -1 : item.len;
+      NANOARROW_RETURN_NOT_OK(reader->Read(&data, static_cast<int32_t>(data.size_bytes),
+                                           array->children[col], error));
+    }
+    NANOARROW_RETURN_NOT_OK(reader->FinishArray(array->children[col], error));
+  }
+  array->length = query.NumRows();
+  array->null_count = 0;
+  NANOARROW_RETURN_NOT_OK(ArrowArrayFinishBuildingDefault(array.get(), error));
+  array.move(out);
+  tmp_schema.move(schema);
+  return NANOARROW_OK;
+}
+
 // Both C++ assertions and installed PyArrow import consume arrays made by the
 // real resolver, schema builder and field readers. There is no expected-array
 // construction here. Literal network-order bytes are independent test inputs.
@@ -114,37 +150,7 @@ inline ArrowErrorCode IntervalFixture(int empty, ArrowArray* out, ArrowSchema* s
       }
     }
   }
-  PostgresType root;
-  if (!query.ResolveOutputTypes(*resolver, &root).ok()) return EINVAL;
-  nanoarrow::UniqueSchema tmp_schema;
-  ArrowSchemaInit(tmp_schema.get());
-  NANOARROW_RETURN_NOT_OK(root.SetSchema(tmp_schema.get(), "Redshift"));
-  nanoarrow::UniqueArray array;
-  NANOARROW_RETURN_NOT_OK(ArrowArrayInitFromSchema(array.get(), tmp_schema.get(), error));
-  NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(array.get()));
-  for (int col = 0; col < 3; col++) {
-    std::unique_ptr<PostgresCopyFieldReader> reader;
-    NANOARROW_RETURN_NOT_OK(
-        MakeCopyFieldReader(root.child(col), tmp_schema->children[col], &reader, error));
-    reader->Init(root.child(col));
-    NANOARROW_RETURN_NOT_OK(reader->InitSchema(tmp_schema->children[col]));
-    NANOARROW_RETURN_NOT_OK(reader->InitArray(array->children[col]));
-    for (int row = 0; row < query.NumRows(); row++) {
-      const auto item = query.Row(row)[col];
-      ArrowBufferView data{};
-      data.data.data = item.data;
-      data.size_bytes = item.is_null ? -1 : item.len;
-      NANOARROW_RETURN_NOT_OK(reader->Read(&data, static_cast<int32_t>(data.size_bytes),
-                                           array->children[col], error));
-    }
-    NANOARROW_RETURN_NOT_OK(reader->FinishArray(array->children[col], error));
-  }
-  array->length = query.NumRows();
-  array->null_count = 0;
-  NANOARROW_RETURN_NOT_OK(ArrowArrayFinishBuildingDefault(array.get(), error));
-  array.move(out);
-  tmp_schema.move(schema);
-  return NANOARROW_OK;
+  return FixtureFromQuery(query, resolver, out, schema, error);
 }
 
 }  // namespace adbcpq::testing

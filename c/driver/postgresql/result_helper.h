@@ -28,6 +28,7 @@
 
 #include <arrow-adbc/adbc.h>
 #include <libpq-fe.h>
+#include <limits>
 
 #include "copy/reader.h"
 #include "driver/framework/status.h"
@@ -64,6 +65,18 @@ struct PqRecord {
     }
   }
 
+  Result<std::optional<int32_t>> ParseTypeModifier() const {
+    if (is_null) return std::nullopt;
+    int64_t value;
+    UNWRAP_RESULT(value, ParseInteger());
+    if (value < (std::numeric_limits<int32_t>::min)() ||
+        value > (std::numeric_limits<int32_t>::max)()) {
+      return Status(ADBC_STATUS_INVALID_DATA,
+                    "Catalog type modifier is outside signed int32 range");
+    }
+    return static_cast<int32_t>(value);
+  }
+
   Result<std::vector<std::string>> ParseTextArray() const {
     std::string text_array(data, len);
     text_array.erase(0, 1);
@@ -98,6 +111,8 @@ class PqResultRow {
 
     return PqRecord{data, len, is_null};
   }
+
+  int NumColumns() const { return result_ ? PQnfields(result_) : 0; }
 
   bool IsValid() const {
     return result_ && row_num_ >= 0 && row_num_ < PQntuples(result_);
@@ -154,6 +169,10 @@ class PqResultHelper {
   PGresult* ReleaseResult() { return result_.release(); }
 
   void ClearResult() { result_.reset(); }
+
+  // Resolve the exact name/OID/modifier catalog projection used by GetTableSchema.
+  Status ResolveTableSchema(PostgresTypeResolver& type_resolver,
+                            PostgresType* result_types);
 
   int64_t AffectedRows() const;
 

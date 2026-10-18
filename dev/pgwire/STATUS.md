@@ -43,8 +43,11 @@ Current state only; history is in git and PR descriptions.
   its narrow int64 scope, not all-type support or release readiness. Task010a
   source audit/docs is merged (PR #21). Task010b adds distinct catalog-driven
   interval read/schema/family metadata, strict reference-format codecs, C/Python
-  C Data tests and unsupported-write guards; independent review/CI are pending.
-  These generated offline fixtures do not qualify the actual Redshift/libpq path.
+  C Data tests and unsupported-write guards (PR #22 merged; offline CI passed).
+  Task010c1 adds per-field raw modifiers and bounded numeric/character metadata
+  across query/schema/catalog/parameter paths; review/CI pending. Numeric value
+  decoding and writes are unchanged. Synthetic descriptors and local PostgreSQL
+  plumbing do not qualify the actual Redshift/libpq path.
   Interval writes/qualifiers, scalar/modifier, SUPER, HLL and spatial work remains
   required before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.

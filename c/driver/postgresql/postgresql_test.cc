@@ -22,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -40,7 +41,10 @@
 #include "common/utils.h"
 #include "connection.h"
 #include "driver/framework/utility.h"
+#include "metadata.h"
 #include "redshift_interval_test_fixture.h"
+#include "result_reader.h"
+#include "type_discovery.h"
 #include "validation/adbc_validation.h"
 #include "validation/adbc_validation_util.h"
 
@@ -1347,6 +1351,177 @@ TEST_F(PostgresStatementTest, IsolationLevels) {
   ArrowStringView view = ArrowArrayViewGetStringUnsafe(reader.array_view->children[0], 0);
   std::string_view isolation_level(view.data, static_cast<size_t>(view.size_bytes));
   ASSERT_EQ(isolation_level, "serializable");
+}
+
+// PostgreSQL service plumbing for the Redshift descriptor policy. These tests
+// do not claim captured Redshift descriptors or vendor numeric value formats.
+static std::optional<std::string> PostgresFieldMetadata(const ArrowSchema* schema,
+                                                        const char* key) {
+  ArrowStringView value{};
+  EXPECT_EQ(ArrowMetadataGetValue(schema->metadata, ArrowCharView(key), &value), 0);
+  if (!value.data) return std::nullopt;
+  return std::string(value.data, value.size_bytes);
+}
+
+TEST_F(PostgresStatementTest, RedshiftModifiersOnActualNonCopyBoundAndEmptyReaders) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  ASSERT_TRUE(
+      adbcpq::DiscoverPostgresTypes(
+          owner->conn(), adbc::driver::pgwire::BackendProfile::Redshift(), &resolver)
+          .ok());
+  for (int mode : {0, 1, 2}) {
+    const bool bound = mode == 2;
+    const std::string query =
+        "SELECT 1.25::numeric(10,2) AS n10, 2.1::numeric(18,9) AS n18, "
+        "'a'::varchar(20) AS label WHERE " +
+        std::string(bound ? "$1=1" : (mode == 0 ? "true" : "false"));
+    adbcpq::PqResultArrayReader reader(owner->conn(), resolver, query);
+    reader.SetVendorName("Redshift");
+    reader.SetAutocommit(true);
+    if (bound) {
+      auto lease = std::make_shared<int>(0);
+      ASSERT_TRUE(owner->TryClaimBoundStream(lease));
+      reader.SetConnection(owner, std::move(lease));
+      nanoarrow::UniqueSchema schema;
+      ArrowSchemaInit(schema.get());
+      ASSERT_EQ(ArrowSchemaSetTypeStruct(schema.get(), 1), 0);
+      ASSERT_EQ(ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_INT32), 0);
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(
+          adbc_validation::MakeBatch<int32_t>(schema.get(), array.get(), nullptr, {1, 1}),
+          0);
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+      reader.SetBind(stream.get());
+    }
+    adbc_validation::StreamReader output;
+    ASSERT_THAT(
+        reader.ToArrayStream(&output.rows_affected, &output.stream.value).ToAdbc(&error),
+        IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(output.GetSchema());
+    EXPECT_EQ(output.schema->name, nullptr);
+    EXPECT_EQ(
+        PostgresFieldMetadata(output.schema->children[0], "ADBC:redshift:precision"),
+        "10");
+    EXPECT_EQ(PostgresFieldMetadata(output.schema->children[0], "ADBC:redshift:scale"),
+              "2");
+    EXPECT_EQ(
+        PostgresFieldMetadata(output.schema->children[1], "ADBC:redshift:precision"),
+        "18");
+    EXPECT_EQ(PostgresFieldMetadata(output.schema->children[1], "ADBC:redshift:scale"),
+              "9");
+    EXPECT_EQ(
+        PostgresFieldMetadata(output.schema->children[2], "ADBC:redshift:byte_width"),
+        "20");
+    int64_t rows = 0;
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(output.Next());
+      if (!output.array->release) break;
+      rows += output.array->length;
+      if (output.array->length) {
+        ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::string>(
+            output.array_view->children[0], {"1.25"}));
+      }
+      nanoarrow::UniqueSchema current;
+      ASSERT_EQ(output.stream->get_schema(&output.stream.value, current.get()), 0);
+      EXPECT_EQ(PostgresFieldMetadata(current->children[0], "ADBC:redshift:precision"),
+                "10");
+    }
+    EXPECT_EQ(rows, bound ? 2 : (mode == 0 ? 1 : 0));
+  }
+  adbcpq::PqResultHelper parameters(
+      owner->conn(), "SELECT $1::numeric(10,2), $2::varchar(20), $3::bpchar(10)");
+  ASSERT_TRUE(parameters.Prepare().ok());
+  ASSERT_TRUE(parameters.DescribePrepared().ok());
+  adbcpq::PostgresType types;
+  ASSERT_TRUE(parameters.ResolveParamTypes(*resolver, &types).ok());
+  nanoarrow::UniqueSchema param_schema;
+  ArrowSchemaInit(param_schema.get());
+  ASSERT_EQ(types.SetSchema(param_schema.get(), "Redshift"), 0);
+  const char* families[] = {"DECIMAL", "VARCHAR", "CHAR"};
+  for (int i = 0; i < 3; i++) {
+    EXPECT_FALSE(types.child(i).type_modifier());
+    EXPECT_EQ(PostgresFieldMetadata(param_schema->children[i], "ADBC:redshift:sql_type"),
+              families[i]);
+    EXPECT_FALSE(
+        PostgresFieldMetadata(param_schema->children[i], "ADBC:redshift:type_modifier"));
+    EXPECT_FALSE(
+        PostgresFieldMetadata(param_schema->children[i], "ADBC:redshift:precision"));
+    EXPECT_FALSE(PostgresFieldMetadata(param_schema->children[i], "ADBC:redshift:scale"));
+    EXPECT_FALSE(
+        PostgresFieldMetadata(param_schema->children[i], "ADBC:redshift:byte_width"));
+  }
+  adbcpq::PostgresType result_types;
+  ASSERT_TRUE(parameters.ResolveOutputTypes(*resolver, &result_types).ok());
+  EXPECT_TRUE(result_types.child(0).type_modifier());
+  adbcpq::PostgresType cached;
+  ASSERT_EQ(resolver->Find(types.child(0).oid(), &cached, nullptr), 0);
+  EXPECT_FALSE(cached.type_modifier());
+}
+
+TEST_F(PostgresStatementTest, ModifierCatalogQueriesUseRealFiltersOrderAndParsers) {
+  auto owner = *reinterpret_cast<std::shared_ptr<adbcpq::PostgresConnection>*>(
+      connection.private_data);
+  adbcpq::PqResultHelper create(
+      owner->conn(),
+      "CREATE TEMP TABLE \"adbc_mod%fields\" (n10 numeric(10,2), removed int, "
+      "narrow varchar(20), n38 numeric(38,37), fixed char(10)); "
+      "ALTER TABLE \"adbc_mod%fields\" DROP COLUMN removed; "
+      "ALTER TABLE \"adbc_mod%fields\" RENAME COLUMN narrow TO renamed; "
+      "CREATE TEMP TABLE \"adbc_modXfields\" (unrelated int)");
+  ASSERT_TRUE(create.Execute().ok());
+  std::shared_ptr<adbcpq::PostgresTypeResolver> resolver;
+  const auto profile = adbc::driver::pgwire::BackendProfile::Redshift();
+  ASSERT_TRUE(adbcpq::DiscoverPostgresTypes(owner->conn(), profile, &resolver).ok());
+  adbcpq::MetadataQuerySet queries(profile);
+  adbcpq::PqResultHelper table(owner->conn(), queries.TableSchema());
+  ASSERT_TRUE(table.Execute({"pg_temp.\"adbc_mod%fields\""}).ok());
+  adbcpq::PostgresType root;
+  ASSERT_TRUE(table.ResolveTableSchema(*resolver, &root).ok());
+  ASSERT_EQ(root.n_children(), 4);
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(root.SetSchema(schema.get(), "Redshift"), 0);
+  EXPECT_STREQ(schema->children[1]->name, "renamed");
+  EXPECT_EQ(PostgresFieldMetadata(schema->children[0], "ADBC:redshift:precision"), "10");
+  EXPECT_EQ(PostgresFieldMetadata(schema->children[2], "ADBC:redshift:scale"), "37");
+  EXPECT_EQ(PostgresFieldMetadata(schema->children[3], "ADBC:redshift:byte_width"), "10");
+  adbcpq::PqResultHelper namespace_name(owner->conn(),
+                                        "SELECT pg_my_temp_schema()::regnamespace::text");
+  ASSERT_TRUE(namespace_name.Execute().ok());
+  const std::string nsp(namespace_name.Row(0)[0].value());
+  adbcpq::PqResultHelper columns(owner->conn(), queries.Columns(false));
+  ASSERT_TRUE(columns.Execute({nsp, "adbc_mod%fields"}).ok());
+  ASSERT_EQ(columns.NumRows(), 4);  // A literal percent must not select the neighbor.
+  const int ordinals[] = {1, 3, 4, 5};
+  for (int i = 0; i < 4; i++) {
+    auto parsed = adbcpq::ResolveColumnMetadata(columns.Row(i), profile);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed.value().ordinal_position, ordinals[i]);
+    EXPECT_EQ(parsed.value().column_name, root.child(i).field_name());
+    ASSERT_TRUE(parsed.value().xdbc);
+    EXPECT_EQ(parsed.value().xdbc->xdbc_column_size,
+              i == 0 ? 10 : (i == 1 ? 20 : (i == 2 ? 38 : 10)));
+  }
+  adbcpq::PqResultHelper filtered(owner->conn(), queries.Columns(true));
+  ASSERT_TRUE(filtered.Execute({nsp, "adbc_mod%fields", "n%"}).ok());
+  ASSERT_EQ(filtered.NumRows(), 2);
+  EXPECT_EQ(filtered.Row(0)[0].value(), "n10");
+  EXPECT_EQ(filtered.Row(1)[0].value(), "n38");
+  ASSERT_TRUE(filtered.Execute({nsp, "adbc_mod%fields", "missing"}).ok());
+  EXPECT_EQ(filtered.NumRows(), 0);
+  // The public PostgreSQL table-schema policy remains unchanged despite common
+  // raw-descriptor plumbing and the stricter table projection/parser.
+  nanoarrow::UniqueSchema pg_schema;
+  ASSERT_THAT(AdbcConnectionGetTableSchema(&connection, nullptr, "pg_temp",
+                                           "adbc_mod%fields", pg_schema.get(), &error),
+              IsOkStatus(&error));
+  ASSERT_EQ(pg_schema->n_children, 4);
+  EXPECT_EQ(pg_schema->name, nullptr);
+  EXPECT_FALSE(PostgresFieldMetadata(pg_schema->children[0], "ADBC:redshift:precision"));
+  EXPECT_EQ(PostgresFieldMetadata(pg_schema->children[0], "POSTGRESQL:type"), "numeric");
 }
 
 TEST_F(PostgresStatementTest, SqlIngestSchema) {

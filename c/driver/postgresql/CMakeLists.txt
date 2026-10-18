@@ -198,9 +198,11 @@ if(ADBC_BUILD_TESTS)
                 metadata_test.cc
                 postgres_type_test.cc
                 redshift_interval_test.cc
+                type_modifier_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc
+                result_reader.cc
                 type_discovery.cc
                 type_discovery_test.cc
                 EXTRA_LINK_LIBS

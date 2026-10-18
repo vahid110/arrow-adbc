@@ -19,6 +19,7 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -169,6 +170,21 @@ class PostgresType {
     out.typname_ = typname;
     return out;
   }
+
+  // Field descriptors are copies: the global OID cache never retains a result
+  // column's modifier, and OID-only parameter descriptions remain unmodified.
+  PostgresType WithFieldDescriptor(
+      std::optional<int32_t> raw,
+      const adbc::driver::pgwire::BackendProfile& profile) const {
+    PostgresType out(*this);
+    out.type_modifier_ = raw;
+    out.redshift_descriptor_ =
+        profile.kind == adbc::driver::pgwire::BackendKind::kRedshift;
+    out.modifier_metadata_ = profile.DescribeTypeModifier(typname_, raw);
+    return out;
+  }
+
+  std::optional<int32_t> type_modifier() const { return type_modifier_; }
 
   PostgresType Array(uint32_t oid = 0, const std::string& typname = "") const {
     PostgresType out(PostgresTypeId::kArray);
@@ -373,6 +389,7 @@ class PostgresType {
     // Don't add POSTGRESQL:type to top-level field (which is the schema)
     if (type_id_ != PostgresTypeId::kRecord || !field_name_.empty()) {
       NANOARROW_RETURN_NOT_OK(AddTypeMetadata(schema));
+      NANOARROW_RETURN_NOT_OK(AddFieldMetadata(schema));
     }
 
     NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(schema, field_name_.c_str()));
@@ -395,6 +412,9 @@ class PostgresType {
   std::string typname_;
   std::string field_name_;
   std::vector<PostgresType> children_;
+  std::optional<int32_t> type_modifier_;
+  bool redshift_descriptor_ = false;
+  adbc::driver::pgwire::TypeModifierMetadata modifier_metadata_;
 
   static constexpr const char* kPostgresTypeKey = "ADBC:postgresql:typname";
   static constexpr const char* kTypeKey = "POSTGRESQL:type";
@@ -403,6 +423,33 @@ class PostgresType {
   static constexpr const char* kJsonExtensionName = "arrow.json";
   static constexpr const char* kUuidExtensionName = "arrow.uuid";
   static constexpr const char* kExtensionMetadata = "ARROW:extension:metadata";
+
+  ArrowErrorCode AddFieldMetadata(ArrowSchema* schema) const {
+    if (!redshift_descriptor_) return NANOARROW_OK;
+    nanoarrow::UniqueBuffer buffer;
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(buffer.get(), schema->metadata));
+    if (!modifier_metadata_.sql_type.empty()) {
+      const auto family = modifier_metadata_.sql_type;
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
+          buffer.get(), ArrowCharView("ADBC:redshift:sql_type"),
+          ArrowStringView{family.data(), static_cast<int64_t>(family.size())}));
+    }
+    auto append_integer = [&](const char* key, std::optional<int32_t> value) {
+      if (!value) return NANOARROW_OK;
+      const std::string text = std::to_string(*value);
+      return ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(key),
+                                        ArrowCharView(text.c_str()));
+    };
+    NANOARROW_RETURN_NOT_OK(
+        append_integer("ADBC:redshift:type_modifier", type_modifier_));
+    NANOARROW_RETURN_NOT_OK(
+        append_integer("ADBC:redshift:precision", modifier_metadata_.precision));
+    NANOARROW_RETURN_NOT_OK(
+        append_integer("ADBC:redshift:scale", modifier_metadata_.scale));
+    NANOARROW_RETURN_NOT_OK(
+        append_integer("ADBC:redshift:byte_width", modifier_metadata_.byte_width));
+    return ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(buffer->data));
+  }
 
   ArrowErrorCode AddRedshiftIntervalMetadata(ArrowSchema* schema,
                                              const char* family) const {
@@ -483,6 +530,8 @@ class PostgresTypeResolver {
   explicit PostgresTypeResolver(adbc::driver::pgwire::BackendProfile profile =
                                     adbc::driver::pgwire::BackendProfile::PostgreSQL())
       : profile_(profile), base_(AllBase()) {}
+
+  const adbc::driver::pgwire::BackendProfile& backend_profile() const { return profile_; }
 
   bool is_redshift() const {
     return profile_.kind == adbc::driver::pgwire::BackendKind::kRedshift;

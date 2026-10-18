@@ -36,8 +36,9 @@ passed in [CI 38899143218](https://github.com/vahid110/arrow-adbc/actions/runs/3
 (baseline PostgreSQL evidence; Task010b changes are separately identified below).
 `T`: opt-in Redshift test declaration, not a qualification receipt.
 `L`: narrowly live proven by [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470).
-`F`: Task010b offline generated protocol fixtures plus codec-produced C Data import checks
-added to C/Python CI; this is not captured traffic or a live libpq qualification.
+`F`: Task010b offline protocol/C Data checks passed in PR22; Task010c1 adds
+synthetic descriptor/parser and C Data metadata checks. Neither is captured
+Redshift traffic or a live libpq qualification.
 `NQ`: Redshift behavior not qualified; `N`: no semantic implementation.
 `opaque` means unsupported external bytes, **not full type support**.
 C/O-PG/T without L remains NQ; no row is a claim of full-range support.
@@ -49,11 +50,11 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | SMALLINT / INT2 | C,O-PG,T | C,O-PG | C / C | C-name | int16 |
 | INTEGER / INT / INT4 | C,O-PG,T | C,O-PG,T | C / C,T | C-name,T | int32 |
 | BIGINT / INT8 | C,O-PG,T,L | C,O-PG,L | C,L / C,L | C-name,L | int64 |
-| DECIMAL / NUMERIC | C-string,O-PG,T | C-decimal,O-PG | C-defaults / C | C-name; modifiers N | decimal128(p,s); exact text for unresolved expression modifiers |
+| DECIMAL / NUMERIC | C-string,O-PG,T | C-decimal,O-PG | C-defaults / C | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
 | REAL / FLOAT4 | C,O-PG,T | C,O-PG | C / C | C-name | float32 |
 | DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T | C,O-PG | C / C | C-name | float64 |
-| CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C-name; width N | utf8 + CHAR width/identity |
-| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C,O-PG,T | C,O-PG | C-defaults / C,T | C-name,T; width N | utf8/large_utf8 + byte limit |
+| CHAR / CHARACTER / NCHAR / BPCHAR | C,O-PG | N distinct CHAR; string coercion C | N CHAR / C-coercion | C,F byte width; NQ | utf8 + CHAR width/identity |
+| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C,O-PG,T | C,O-PG | C-defaults / C,T | C,F,T byte width; NQ | utf8/large_utf8 + byte limit |
 | DATE | C,O-PG,T | C-date32,O-PG | C / C | C-name | date32 |
 | TIME / TIME WITHOUT TIME ZONE | C,O-PG,T | C-time64(us),O-PG | C / C | C-name; precision N | time64(us); endpoint decision below |
 | TIMETZ / TIME WITH TIME ZONE | C-opaque,NQ | N semantic mapping | N / N | C-name only | explicit offset-time representation, below |
@@ -90,12 +91,12 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   to string with `arrow.opaque`, TIMETZ to opaque binary, and generic PostgreSQL
   interval to month/day/nanosecond. Task010b adds distinct backend-classified Redshift
   interval IDs and strict family readers; neither uses the PostgreSQL interval codec. Unknown bytes can be useful diagnostics without proving a native codec.
-- Modifiers: [ResolveOutputTypes](../../c/driver/postgresql/result_helper.cc#L163),
-  [GetTableSchema](../../c/driver/postgresql/connection.cc#L941) and
-  [TableSchema SQL](../../c/driver/postgresql/metadata.cc#L110) use OID/name but no
-  result typmod/column modifiers. [GetObjects](../../c/driver/postgresql/connection.cc#L190)
-  fills `xdbc_type_name`, not numeric precision/scale/width. Schema-only, empty
-  results, parameter schemas and populated reads must agree without sampling rows.
+- Modifiers: Task010c1 retains `PQfmod` per field in
+  [ResolveOutputTypes](../../c/driver/postgresql/result_helper.cc), including the
+  actual non-COPY reader, empty and schema-only descriptions. The global OID cache
+  stays unmodified. GetTableSchema parses name/OID/atttypmod; GetObjects parses
+  ordered catalog columns through the same backend interpretation. OID-only
+  parameters retain canonical family but no inferred precision/scale/width.
 - Binding: [BindStream::SetParamTypes](../../c/driver/postgresql/bind_stream.h#L144)
   normally derives binary parameter OIDs/writers from Arrow; only Arrow NA uses
   inferred expected types. Existing PostgreSQL `arrow.json` mapping is not SUPER.
@@ -134,6 +135,35 @@ requirement, not proof of a current decimal bug**: the connector
 Each libpq path needs its own qualified descriptor/format/fixture evidence. The generated literal fixture bytes follow only the pinned reference contract, use
 arbitrary fixture catalog OIDs, and are not captured libpq evidence. No upstream
 implementation is copied.
+
+## Current Redshift descriptor metadata (Task010c1)
+
+Additive UTF-8 field metadata, alongside existing `POSTGRESQL:type`, opaque and
+interval-family metadata:
+
+| Key (`ADBC:redshift:` prefix) | Meaning |
+|---|---|
+| `sql_type` | Known canonical family `DECIMAL`, `CHAR` (bpchar), or `VARCHAR`; includes OID-only parameters |
+| `type_modifier` | Exact observed signed int32 descriptor in decimal text, including unknown `-1`; absent if not supplied |
+| `precision`, `scale` | Both emitted only for a supported numeric encoding: precision 1..38, scale 0..precision through 38 |
+| `byte_width` | Supported bpchar/varchar descriptor byte width, 1..16,000,000 |
+
+The [pinned AWS JDBC arithmetic](https://github.com/aws/amazon-redshift-jdbc-driver/blob/773fa16aabbd589e9e2c93684c7ca2543e3ce31a/src/main/java/com/amazon/redshift/jdbc/TypeInfoCache.java#L665)
+is reference evidence, not a captured native descriptor. Unsupported encodings
+keep raw diagnostics without fabricated defaults. Interval/temporal precision,
+qualifiers, VARBYTE and other modifier meanings remain unknown. PostgreSQL's
+public schema metadata policy stays unchanged. Numeric storage remains its
+existing string/opaque representation; this metadata is not a new value codec.
+
+Catalogs describe views/derived expressions too, so both schema/catalog readers
+retain the full read envelope above. This does not authorize wider stored-column
+DDL or imply every engine produces every boundary. [AWS numeric computations](https://docs.aws.amazon.com/redshift/latest/dg/r_numeric_computations201.html)
+conflicts internally: its computed-result section allows scale 38 while overflow
+conditions cap intermediate/final results at 37. Native boundary qualification
+remains open. [Character results](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html)
+may reach 16M bytes despite narrower stored-column limits. GetObjects emits known
+numeric precision/scale/radix or character column-size/octet-length; unknown
+values remain null. CREATE/append validation is a separate future writer task.
 
 ## Recommended lossless contract and acceptance
 
@@ -260,8 +290,13 @@ must be reviewed before implementation; an unresolved representation blocks rele
   from driver artifacts and normal installs. Native libpq-path qualification is
   still pending a separately admitted installed-artifact batch, with its own finite
   authority; this slice does not complete Task010.
-- **010c:** type-modifier plumbing and scalar/decimal/temporal write/read gaps,
-  including native-format evidence, exact DDL, target-aware append and loss checks.
+- **010c1 implemented, review/CI pending:** per-field descriptor plumbing and
+  bounded Redshift schema/GetObjects metadata, including normal/bound/empty query
+  readers and OID-only parameter identity. Synthetic descriptor/C Data and local
+  PostgreSQL regressions cover the actual parser/consumer seams; no new native
+  numeric codec or write support is claimed.
+- **010c successors:** scalar/decimal/temporal value/write gaps, native-format
+  evidence, faithful DDL/target-aware append, legal declaration bounds and loss checks.
 - **010d:** native SUPER plus supported-size binding/ingest, with the extension/
   protocol decisions above; a mixed projection must work without user query rewrites.
 - **010e:** HLLSKETCH and spatial native codecs/semantic contracts, split if needed;
