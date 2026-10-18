@@ -58,8 +58,17 @@ Current state only; history is in git and PR descriptions.
   authority requires coordinator/human resolution after review.
   PR #19's first head `f10b26670` required independent deadline/fresh-run repairs;
   its [cancelled Dev run](https://github.com/vahid110/arrow-adbc/actions/runs/38923832691)
-  remains evidence. The batched successor requires fresh exact-head review/CI;
-  no external resources or CI role remain and no live authority is renewed.
+  remains evidence. PR #19 merged the reviewed deadline/fresh-run repair.
+  The separately approved replacement run `38933278088` passed installed preflight,
+  OIDC, host bootstrap and the supported SYS observer, then exact claim creation
+  failed AccessDenied before any driver payload. Host post-failure observer proved
+  zero fixtures/sessions. Fresh independent physical/secret/IAM teardown is
+  verified; the original namespace-removal uncertainty remains evidence.
+  Task008d adds the versioned exact-claim policy, explicit nonce scopes, immutable
+  host reservation and static consumer first-failure receipts with policy-enforcing
+  offline tests. Independent review/CI remain required. The old singleton admission
+  stays immutable version 1; all prior attempt authority is spent. No external
+  resources or CI role remain and this repair grants no live authority.
   AO stays paused; Task009 publication stays paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
@@ -114,3 +123,4 @@ remain. Actual compute costs await reconciliation; no further attempt is authori
 | 2026-10-16 | [38912745155](https://github.com/vahid110/arrow-adbc/actions/runs/38912745155) | `9f3bbaa770386b165f8e0cc9e1de4a4cdae9109c` | installed preflight passed (artifact `12051211152`); OIDC denied because dedicated trust used a legacy subject instead of authenticated immutable owner/repository IDs | 0.00 |
 | 2026-10-16 | [38916730017](https://github.com/vahid110/arrow-adbc/actions/runs/38916730017) | `5e3afc8653e39eaf099c5cb91ea9be21b386adb6` | preflight/STS passed; `CreateWorkgroup` rejected simultaneous pricing target and scaling autonomics fields; owned partial resources independently removed, no admission/claim/SQL | 0.00 compute |
 | 2026-10-16 | [38920727258](https://github.com/vahid110/arrow-adbc/actions/runs/38920727258) | `36b786d1c569c0f0c727c70dcc06995d0b31a173` | created dedicated resources; post-usage gate failed with original response status unrecorded; cleanup SQL FAILED on STV access and cancellation masked error; independent physical teardown later verified, no admission/claim/client batch | pending |
+| 2026-10-16 | [38933278088](https://github.com/vahid110/arrow-adbc/actions/runs/38933278088) | `44bc188350125045e42a8b65e1fc1dc7820e3683` | installed preflight/OIDC/bootstrap/SYS proof passed; exact claim PutParameter denied before driver payload; claim absent, supported post-failure observer zero; independent full physical/secret/IAM teardown verified, original namespace uncertainty retained | pending |

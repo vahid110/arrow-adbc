@@ -42,6 +42,11 @@ import pgwire_qualification_prepare as prepare
 import test_pgwire_qualification as legacy
 from pgwire_qualification_host import OWNER, Host
 from pgwire_qualification_manifest import Rejected
+from pgwire_qualification_policy import (
+    TEMPLATE,
+    admission_name,
+    operation_prefix,
+)
 from test_pgwire_qualification import NOW, ROOT, RUN, SOURCE, fixture
 
 
@@ -51,6 +56,9 @@ class NotFound(Exception):
 
 class ValidationException(Exception):
     pass
+
+
+NONCE = "d" * 64
 
 
 def admission():
@@ -124,7 +132,7 @@ class AWS:
                     "Effect": "Allow",
                     "Action": ["ssm:GetParameter"],
                     "Resource": f"arn:aws:ssm:{live.REGION}:{live.ACCOUNT}:parameter"
-                    + live.PARAMETER,
+                    + admission_name(self.a["nonce"]),
                 },
             ],
         }
@@ -251,9 +259,24 @@ class AWS:
             ]
         }
 
+    def describe_parameters(self, **kwargs):
+        self.event("operation-metadata")
+        assert kwargs["MaxResults"] == 50
+        prefix = kwargs["ParameterFilters"][0]["Values"][0]
+        assert prefix == operation_prefix(self.a["nonce"])
+        return {
+            "Parameters": [
+                {"Name": name} for name in self.claims if name.startswith(prefix)
+            ]
+        }
+
     def put_parameter(self, **kwargs):
         self.events.append(
-            "claim" if kwargs["Name"].startswith(live.CLAIMS) else "admission"
+            "host-reservation"
+            if kwargs["Name"].endswith("/host-attempt")
+            else "claim"
+            if "/claim-" in kwargs["Name"]
+            else "admission"
         )
         assert (
             kwargs["Overwrite"] is False
@@ -534,6 +557,7 @@ class LiveTest(unittest.TestCase):
             self.c_client,
             aws={k: self.sdk for k in ("sts", "ssm", "ec2", "redshift-serverless")},
             github=self.github,
+            nonce=NONCE,
             clock=kwargs.pop("clock", lambda: NOW),
             invoke=self.invoke,
             **kwargs,
@@ -910,7 +934,9 @@ class PrepareFlowTest(unittest.TestCase):
                         b"'libadbc_driver_redshift.so'))\n"
                     ),
                     "adbc_driver_redshift/dbapi.py": b"# load-only fixture\n",
-                    "adbc_driver_redshift/iam.py": b"# load-only fixture\n",
+                    "adbc_driver_redshift/iam.py": (
+                        ROOT / "python/adbc_driver_redshift/adbc_driver_redshift/iam.py"
+                    ).read_bytes(),
                     "adbc_driver_redshift/libadbc_driver_redshift.so": self.library,
                     "adbc_driver_redshift-0.dist-info/METADATA": (
                         b"Name: adbc-driver-redshift\nVersion: 0\n"
@@ -953,7 +979,7 @@ class PrepareFlowTest(unittest.TestCase):
             patch.object(live, "private_process", wraps=live.private_process) as probes,
         ):
             result = prepare.prepare(
-                self.github, self.directory, self.interpreter, 20, 21
+                self.github, self.directory, self.interpreter, 20, 21, nonce=NONCE
             )
             self.assertEqual(probes.call_count, 2)
             self.assertTrue(
@@ -972,7 +998,7 @@ class PrepareFlowTest(unittest.TestCase):
         )
         self.assertTrue((self.directory / "paths.json").is_file())
         with self.assertRaises(Rejected):
-            live.validate(record, source=SOURCE, run=RUN, now=NOW)
+            live.validate(record, source=SOURCE, run=RUN, now=NOW, nonce=NONCE)
 
     def test_consumer_rechecks_emitted_record_before_sdk_and_rejects_tampering(self):
         record = self.prepare()
@@ -982,7 +1008,16 @@ class PrepareFlowTest(unittest.TestCase):
             patch.object(sys, "executable", self.interpreter),
             patch.dict(os.environ, {"GH_TOKEN": "synthetic-token"}),
             patch.object(
-                sys, "argv", ["qualification", str(paths), "--output", str(output)]
+                sys,
+                "argv",
+                [
+                    "qualification",
+                    str(paths),
+                    "--output",
+                    str(output),
+                    "--nonce",
+                    NONCE,
+                ],
             ),
             patch.object(prepare, "GitHub", return_value=self.github),
             patch.object(
@@ -999,6 +1034,7 @@ class PrepareFlowTest(unittest.TestCase):
             sdk.reset_mock()
             library = self.directory / "c-prefix/lib/libadbc_driver_redshift.so"
             library.write_bytes(b"changed after prepare")
+            sys.argv[3] = str(output.with_name("tamper-result.json"))
             self.assertEqual(live.main(), 1)
             sdk.assert_not_called()
 
@@ -1396,6 +1432,7 @@ class HostDeadlineTest(unittest.TestCase):
         prepared = {
             k: a[k]
             for k in (
+                "nonce",
                 "source_sha",
                 "run_id",
                 "artifacts",
@@ -1499,7 +1536,8 @@ class HostDeadlineTest(unittest.TestCase):
 
         def put_admission(**kwargs):
             result = put(**kwargs)
-            state["status"] = "completed"
+            if kwargs["Name"] == admission_name(NONCE):
+                state["status"] = "completed"
             return result
 
         sdk.put_parameter = put_admission
@@ -1572,20 +1610,7 @@ class HostDeadlineTest(unittest.TestCase):
                 pause=lambda n: tick.__setitem__(0, tick[0] + n),
             )
             template = Path(temp) / "policy.json"
-            template.write_text(
-                json.dumps(
-                    {
-                        "Version": "2012-10-17",
-                        "Statement": [
-                            {
-                                "Effect": "Allow",
-                                "Action": "ssm:PutParameter",
-                                "Resource": a["nonce"] + "-EXACT_RUN_ID",
-                            }
-                        ],
-                    }
-                )
-            )
+            template.write_bytes(TEMPLATE.read_bytes())
             if mode == "preflight":
                 preflight = host.preflight
 
@@ -1630,7 +1655,10 @@ class HostDeadlineTest(unittest.TestCase):
             if mode.startswith("readiness-"):
                 self.assertNotIn("install-runtime-policy", sdk.events)
             self.assertFalse(sdk.ns_exists or sdk.wg_exists or sdk.sg_exists)
-            self.assertEqual(host.state["external_teardown"], "verified")
+            self.assertEqual(
+                host.state["external_teardown"],
+                "not-started" if mode in ("preflight", "initial-role") else "verified",
+            )
             if mode.startswith("wrong-") or mode in (
                 "cancelled",
                 "failure",
@@ -1767,23 +1795,11 @@ class HostTest(unittest.TestCase):
                     pause=lambda _: None,
                 )
                 template = Path(temp) / "template.json"
-                template.write_text(
-                    json.dumps(
-                        {
-                            "Version": "2012-10-17",
-                            "Statement": [
-                                {
-                                    "Effect": "Allow",
-                                    "Action": "ssm:PutParameter",
-                                    "Resource": a["nonce"] + "-EXACT_RUN_ID",
-                                }
-                            ],
-                        }
-                    )
-                )
+                template.write_bytes(TEMPLATE.read_bytes())
                 preflight = {
                     k: a[k]
                     for k in (
+                        "nonce",
                         "source_sha",
                         "run_id",
                         "artifacts",
@@ -1937,6 +1953,7 @@ class HostTest(unittest.TestCase):
         preflight = {
             k: a[k]
             for k in (
+                "nonce",
                 "source_sha",
                 "run_id",
                 "artifacts",
@@ -1970,23 +1987,7 @@ class HostTest(unittest.TestCase):
                 pause=lambda seconds: tick.__setitem__(0, tick[0] + seconds),
             )
             template = Path(temp) / "policy.json"
-            template.write_text(
-                json.dumps(
-                    {
-                        "Version": "2012-10-17",
-                        "Statement": [
-                            {
-                                "Effect": "Allow",
-                                "Action": "ssm:PutParameter",
-                                "Resource": a["nonce"] + "-EXACT_RUN_ID",
-                                "Condition": {
-                                    "DateLessThan": {"aws:CurrentTime": "EXACT_CUTOFF"}
-                                },
-                            }
-                        ],
-                    }
-                )
-            )
+            template.write_bytes(TEMPLATE.read_bytes())
             if failure:
                 with (
                     patch.object(host, "preflight", return_value=preflight),
@@ -2158,10 +2159,17 @@ class HostTest(unittest.TestCase):
                 pause=lambda _: None,
             )
             with (
-                patch.object(host, "preflight", return_value={}),
+                patch.object(host, "preflight", return_value={"nonce": NONCE}),
                 self.assertRaises(Rejected),
             ):
-                host.run(preflight_id=1, run=RUN, source=SOURCE, nonce=a["nonce"])
+                host.run(
+                    preflight_id=1,
+                    run=RUN,
+                    source=SOURCE,
+                    nonce=a["nonce"],
+                    policy_template=TEMPLATE,
+                    policy_sha256=live.file_sha(TEMPLATE),
+                )
             self.assertEqual(sdk.events.count("create-workgroup"), 1)
             self.assertFalse(
                 set(sdk.events)
@@ -2181,7 +2189,14 @@ class HostTest(unittest.TestCase):
             self.assertIn("delete-group", sdk.events)
             original_receipt = host.path.read_bytes()
             with self.assertRaisesRegex(Rejected, "existing host receipt"):
-                host.run(preflight_id=1, run=RUN, source=SOURCE, nonce=a["nonce"])
+                host.run(
+                    preflight_id=1,
+                    run=RUN,
+                    source=SOURCE,
+                    nonce=a["nonce"],
+                    policy_template=TEMPLATE,
+                    policy_sha256=live.file_sha(TEMPLATE),
+                )
             self.assertEqual(host.path.read_bytes(), original_receipt)
             self.assertEqual(sdk.events.count("create-workgroup"), 1)
 
@@ -2215,10 +2230,17 @@ class HostTest(unittest.TestCase):
                 pause=lambda _: None,
             )
             with (
-                patch.object(host, "preflight", return_value={}),
+                patch.object(host, "preflight", return_value={"nonce": NONCE}),
                 self.assertRaises(Rejected),
             ):
-                host.run(preflight_id=1, run=RUN, source=SOURCE, nonce=a["nonce"])
+                host.run(
+                    preflight_id=1,
+                    run=RUN,
+                    source=SOURCE,
+                    nonce=a["nonce"],
+                    policy_template=TEMPLATE,
+                    policy_sha256=live.file_sha(TEMPLATE),
+                )
             self.assertFalse(sdk.ns_exists)
             self.assertNotIn("admission", sdk.events)
             self.assertTrue(host.path.exists())

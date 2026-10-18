@@ -42,14 +42,14 @@ from pgwire_qualification_manifest import (
     ROLE,
     SHA,
     UUID,
+    Rejected,
     digest,
     load,
     require,
 )
+from pgwire_qualification_policy import admission_name, claim_name
 from pgwire_qualification_process import client, private_process, validate_uri
 
-PARAMETER = "/adbc/qualification/20261016/admission"
-CLAIMS = "/adbc/qualification/20261016/claims/"
 REPOSITORY = "vahid110/arrow-adbc"
 REF = "refs/heads/feature/pgwire-core-redshift"
 # Pinned to authenticated repository OIDC metadata, including immutable IDs.
@@ -82,7 +82,9 @@ def matches(value, pattern):
     )
 
 
-def validate(admission, *, source, run, now):
+def validate(admission, *, source, run, now, nonce):
+    admission_name(nonce)
+    require(admission.get("nonce") == nonce, "operation nonce mismatch")
     # Never query a protected caller-supplied target, even in a malformed record.
     encoded = json.dumps(admission, allow_nan=False)
     require(len(encoded.encode()) <= 4096, "admission exceeds Standard String limit")
@@ -354,6 +356,102 @@ def verify_local(admission, paths, interpreter):
     return libraries
 
 
+STAGES = (
+    "START",
+    "PREPARED",
+    "SDK",
+    "ADMISSION_WAIT",
+    "ADMISSION_VALIDATE",
+    "GITHUB_VERIFY",
+    "INSTALLED_VERIFY",
+    "IDENTITY",
+    "RESOURCE_VERIFY",
+    "CLAIM",
+    "INGRESS",
+    "C_CREDENTIALS",
+    "C_PAYLOAD",
+    "PYTHON_CREDENTIALS",
+    "PYTHON_PAYLOAD",
+    "INGRESS_CLEANUP",
+    "COMPLETE",
+)
+
+
+class ConsumerReceipt:
+    def __init__(self, path=None):
+        require(
+            path is None or not path.exists(),
+            "existing consumer receipt requires recovery, never retry",
+        )
+        self.path = path
+        self.data = {
+            "version": 3,
+            "status": "failed-or-interrupted",
+            "stage": "START",
+            "first_failure": None,
+            "source_sha": None,
+            "run_id": None,
+            "operation_nonce": None,
+            "admission_sha256": None,
+            "claim": "NOT_ATTEMPTED",
+            "owned_ingress": "NOT_ATTEMPTED",
+            "installed_entrypoints_verified": False,
+            "payloads": {k: "NOT_STARTED" for k in KINDS},
+            "external_teardown": "required",
+        }
+        self.save()
+
+    def save(self):
+        if self.path is not None:
+            temporary = self.path.with_suffix(".tmp")
+            with temporary.open("w") as stream:
+                json.dump(self.data, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+
+    def mark(self, stage):
+        require(stage in STAGES, "invalid consumer stage")
+        self.data["stage"] = stage
+        self.save()
+
+    def fail(self, error):
+        if self.data["first_failure"] is not None:
+            return
+        stage = self.data["stage"]
+        response = getattr(error, "response", {})
+        details = response.get("Error", {}) if type(response) is dict else {}
+        code = details.get("Code") if type(details) is dict else None
+        if stage == "CLAIM":
+            reason = (
+                "CLAIM_ACCESS_DENIED"
+                if code in ("AccessDenied", "AccessDeniedException")
+                else "CLAIM_ALREADY_SPENT"
+                if code == "ParameterAlreadyExists"
+                else "CLAIM_UNCERTAIN"
+            )
+            self.data["claim"] = (
+                "DENIED_NO_RETRY"
+                if reason == "CLAIM_ACCESS_DENIED"
+                else "SPENT_OR_UNKNOWN"
+            )
+        elif stage.endswith("PAYLOAD"):
+            reason = "PAYLOAD_FAILED_OR_INTERRUPTED"
+        elif stage == "INGRESS_CLEANUP":
+            reason = "INGRESS_CLEANUP_FAILED"
+        elif isinstance(error, Rejected):
+            reason = {
+                "operation nonce mismatch": "OPERATION_MISMATCH",
+                "source/run mismatch": "SOURCE_RUN_MISMATCH",
+                "query deadline reached": "DEADLINE",
+                "insufficient query window": "DEADLINE",
+            }.get(str(error), "VERIFICATION_REJECTED")
+        else:
+            reason = "SDK_OR_INTERRUPTED"
+        self.data["first_failure"] = {"stage": stage, "reason": reason}
+        self.save()
+
+
 def execute(
     admission,
     paths,
@@ -362,25 +460,77 @@ def execute(
     *,
     aws,
     github,
+    nonce,
+    clock=time.time,
+    invoke=client,
+    receipt=None,
+):
+    receipt = receipt if receipt is not None else ConsumerReceipt()
+    try:
+        result = _execute(
+            admission,
+            paths,
+            interpreter,
+            c_client,
+            aws=aws,
+            github=github,
+            nonce=nonce,
+            clock=clock,
+            invoke=invoke,
+            receipt=receipt,
+        )
+        receipt.data["status"] = "passed"
+        receipt.mark("COMPLETE")
+        return result
+    except BaseException as error:
+        receipt.fail(error)
+        raise
+
+
+def _execute(
+    admission,
+    paths,
+    interpreter,
+    c_client,
+    *,
+    aws,
+    github,
+    nonce,
+    receipt,
     clock=time.time,
     invoke=client,
 ):
     """Internal injectable boundary. Production main supplies authenticated clients."""
     source, run = github.context()
-    validate(admission, source=source, run=run, now=int(clock()))
+    receipt.data["source_sha"] = (
+        source if type(source) is str and COMMIT.fullmatch(source) else None
+    )
+    receipt.data["run_id"] = run if type(run) is int and run > 0 else None
+    admission_name(nonce)
+    receipt.data["operation_nonce"] = nonce
+    receipt.data["admission_sha256"] = digest(admission)
+    receipt.mark("ADMISSION_VALIDATE")
+    validate(admission, source=source, run=run, now=int(clock()), nonce=nonce)
+    receipt.mark("GITHUB_VERIFY")
     github.verify(admission)
+    receipt.mark("INSTALLED_VERIFY")
     libraries = verify_local(admission, paths, interpreter)
     require(
         file_sha(c_client) == admission["c_client_sha256"],
         "C client changed after preflight",
     )
+    receipt.data["installed_entrypoints_verified"] = True
+    receipt.mark("IDENTITY")
     identity(aws["sts"])
+    receipt.mark("RESOURCE_VERIFY")
     resources(admission, aws["redshift-serverless"], aws["ec2"])
-    validate(admission, source=source, run=run, now=int(clock()))
+    validate(admission, source=source, run=run, now=int(clock()), nonce=nonce)
     # Atomic create; a lost reply is consumed/unknown. There is NO retry/readback
     # path that authorizes paid work, even if a claim happens to match our bytes.
+    receipt.data["claim"] = "ATTEMPTED_UNKNOWN"
+    receipt.mark("CLAIM")
     aws["ssm"].put_parameter(
-        Name=CLAIMS + admission["nonce"] + "-" + str(run),
+        Name=claim_name(nonce, run),
         Value=json.dumps(
             {"admission_sha256": digest(admission), "run_id": run}, sort_keys=True
         ),
@@ -388,6 +538,8 @@ def execute(
         Tier="Standard",
         Overwrite=False,
     )
+    receipt.data["claim"] = "CREATED"
+    receipt.mark("INGRESS")
     ec2, redshift = aws["ec2"], aws["redshift-serverless"]
     group = admission["resources"]["security_group_id"]
     attempted_ingress = False
@@ -404,6 +556,8 @@ def execute(
             "pre-existing ingress",
         )
         attempted_ingress = True
+        receipt.data["owned_ingress"] = "ATTEMPTED_UNKNOWN"
+        receipt.save()
         response = ec2.authorize_security_group_ingress(
             GroupId=group,
             IpPermissions=[
@@ -445,6 +599,7 @@ def execute(
                 clock() < admission["window"]["query_deadline"] - 65,
                 "query deadline reached",
             )
+            receipt.mark("C_CREDENTIALS" if index == 0 else "PYTHON_CREDENTIALS")
             response = iam.fetch_serverless_credentials(
                 redshift,
                 workgroup_name=NAME,
@@ -494,15 +649,21 @@ def execute(
             )
             remaining = min(60, admission["window"]["query_deadline"] - clock() - 1)
             require(remaining > 0, "query deadline reached after credentials")
+            receipt.data["payloads"][kind] = "STARTED_UNKNOWN"
+            receipt.mark("C_PAYLOAD" if index == 0 else "PYTHON_PAYLOAD")
             invoke(argv, uri, seconds=remaining)
+            receipt.data["payloads"][kind] = "PASSED"
+            receipt.save()
             print(
                 "Qualification stage: " + kind + " private payload passed.", flush=True
             )
             uri = response = None
-    except BaseException:
+    except BaseException as error:
+        receipt.fail(error)
         failed = True
     finally:
         if attempted_ingress:
+            receipt.mark("INGRESS_CLEANUP")
             # Lost authorize replies are recovered only by independent exact
             # ownership observation. Never revoke a CIDR, guessed ID or other rule.
             try:
@@ -518,7 +679,12 @@ def execute(
                     "owned ingress remains",
                 )
                 removed = True
-            except BaseException:
+                receipt.data["owned_ingress"] = "removed"
+                receipt.save()
+            except BaseException as error:
+                receipt.data["owned_ingress"] = "UNKNOWN"
+                receipt.fail(error)
+                receipt.save()
                 failed = True
     require(
         not failed and removed and clock() < admission["window"]["teardown_deadline"],
@@ -583,37 +749,46 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--nonce", required=True)
     args = parser.parse_args()
     try:
-        args.output.write_text(
-            json.dumps(
-                {
-                    "version": 2,
-                    "status": "failed-or-interrupted",
-                    "claim": "possibly-spent",
-                    "external_teardown": "required",
-                }
-            )
-            + "\n"
-        )
+        receipt = ConsumerReceipt(args.output)
+        admission_name(args.nonce)
+        receipt.data["operation_nonce"] = args.nonce
+        receipt.mark("PREPARED")
         from pgwire_qualification_prepare import GitHub
 
         github = GitHub(os.environ["GH_TOKEN"])
+        source, run = github.context()
+        require(
+            type(source) is str
+            and COMMIT.fullmatch(source)
+            and type(run) is int
+            and run > 0,
+            "invalid consumer context",
+        )
+        receipt.data["source_sha"], receipt.data["run_id"] = source, run
+        receipt.save()
         paths = load(args.paths)
         prepared = load(args.paths.with_name("preflight.json"))
+        require(prepared["nonce"] == args.nonce, "operation nonce mismatch")
+        parameter_name = admission_name(args.nonce)
         github.verify(prepared)
         verify_local(prepared, paths, sys.executable)
         require(
             file_sha(paths["c_client"]) == prepared["c_client_sha256"],
             "prepared C client changed",
         )
+        receipt.data["installed_entrypoints_verified"] = True
+        receipt.mark("SDK")
         aws = clients()
         identity(aws["sts"])
+        receipt.mark("ADMISSION_WAIT")
         deadline = time.monotonic() + 1200
         while True:
             try:
                 parameter = aws["ssm"].get_parameter(
-                    Name=PARAMETER, WithDecryption=False
+                    Name=parameter_name, WithDecryption=False
                 )["Parameter"]
                 break
             except aws["ssm"].exceptions.ParameterNotFound:
@@ -622,7 +797,7 @@ def main():
                 )
                 time.sleep(5)
         require(
-            parameter["Name"] == PARAMETER
+            parameter["Name"] == parameter_name
             and parameter["Type"] == "String"
             and parameter["Version"] == 1,
             "admission is not immutable version one",
@@ -631,16 +806,28 @@ def main():
         from pgwire_qualification_prepare import parse_json
 
         admission = parse_json(parameter["Value"])
-        result = execute(
-            admission, paths, sys.executable, paths["c_client"], aws=aws, github=github
+        receipt.mark("ADMISSION_VALIDATE")
+        receipt.data["admission_sha256"] = digest(admission)
+        execute(
+            admission,
+            paths,
+            sys.executable,
+            paths["c_client"],
+            aws=aws,
+            github=github,
+            nonce=args.nonce,
+            receipt=receipt,
+            invoke=client,
+            clock=time.time,
         )
-        args.output.write_text(json.dumps(result, sort_keys=True) + "\n")
         print(
             "Installed Redshift qualification passed; "
             "external cleanup observation and teardown REQUIRED."
         )
         return 0
-    except BaseException:
+    except BaseException as error:
+        if "receipt" in locals():
+            receipt.fail(error)
         print(
             "Qualification failed closed; claim may be spent; "
             "external host observation REQUIRED.",

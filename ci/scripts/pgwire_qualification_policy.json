@@ -1,0 +1,189 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Sid": "Identity"
+    },
+    {
+      "Action": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeSubnets",
+        "redshift-serverless:GetUsageLimit"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": "eu-north-1"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Sid": "RegionalMetadata"
+    },
+    {
+      "Action": [
+        "redshift-serverless:GetWorkgroup",
+        "redshift-serverless:GetCredentials"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:redshift-serverless:eu-north-1:385207570137:workgroup/EXACT_OWNED_WG"
+      ],
+      "Sid": "OwnedWorkgroup"
+    },
+    {
+      "Action": [
+        "redshift-serverless:GetNamespace"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:redshift-serverless:eu-north-1:385207570137:namespace/EXACT_OWNED_NS"
+      ],
+      "Sid": "OwnedNamespace"
+    },
+    {
+      "Action": [
+        "redshift-serverless:ListTagsForResource"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:redshift-serverless:eu-north-1:385207570137:workgroup/EXACT_OWNED_WG",
+        "arn:aws:redshift-serverless:eu-north-1:385207570137:namespace/EXACT_OWNED_NS"
+      ],
+      "Sid": "OwnedTags"
+    },
+    {
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ssm:eu-north-1:385207570137:parameter/adbc/qualification/20261016/operations/EXACT_OPERATION_NONCE/admission"
+      ],
+      "Sid": "ReadAdmission"
+    },
+    {
+      "Action": [
+        "ssm:PutParameter"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ssm:eu-north-1:385207570137:parameter/adbc/qualification/20261016/operations/EXACT_OPERATION_NONCE/claim-EXACT_RUN_ID"
+      ],
+      "Sid": "ConsumeExactClaim"
+    },
+    {
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        },
+        "StringEquals": {
+          "aws:ResourceTag/adbc-qualification-nonce": "EXACT_OPERATION_NONCE"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ec2:eu-north-1:385207570137:security-group/EXACT_OWNED_SG"
+      ],
+      "Sid": "OwnedGroupIngress"
+    },
+    {
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        },
+        "StringEquals": {
+          "aws:RequestTag/adbc-qualification-nonce": "EXACT_OPERATION_NONCE"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ec2:eu-north-1:385207570137:security-group-rule/*"
+      ],
+      "Sid": "CreateOwnedRule"
+    },
+    {
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "EXACT_CUTOFF"
+        },
+        "StringEquals": {
+          "aws:RequestTag/adbc-qualification-nonce": "EXACT_OPERATION_NONCE",
+          "ec2:CreateAction": "AuthorizeSecurityGroupIngress"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ec2:eu-north-1:385207570137:security-group-rule/*"
+      ],
+      "Sid": "TagAtRuleCreation"
+    },
+    {
+      "Action": [
+        "ssm:PutParameter"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ssm:Overwrite": "true"
+        }
+      },
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:ssm:eu-north-1:385207570137:parameter/adbc/qualification/20261016/operations/EXACT_OPERATION_NONCE/claim-EXACT_RUN_ID"
+      ],
+      "Sid": "NeverOverwriteClaim"
+    }
+  ],
+  "Version": "2012-10-17"
+}

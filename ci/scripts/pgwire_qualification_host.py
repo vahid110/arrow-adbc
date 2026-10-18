@@ -31,7 +31,6 @@ import os
 import sys
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 from pgwire_qualification import file_sha
@@ -40,7 +39,6 @@ from pgwire_qualification_live import (
     KINDS,
     NAME,
     OIDC_SUBJECT,
-    PARAMETER,
     REF,
     REGION,
     REPOSITORY,
@@ -56,6 +54,14 @@ from pgwire_qualification_live import (
     validate,
 )
 from pgwire_qualification_manifest import PROTECTED, SHA, Rejected, digest, require
+from pgwire_qualification_policy import (
+    admission_name,
+    checked_template,
+    host_attempt_name,
+    initial_policy,
+    operation_prefix,
+    runtime_policy,
+)
 from pgwire_qualification_prepare import GitHub, parse_json
 
 OWNER = f"arn:aws:iam::{ACCOUNT}:role/adbc-provisioner"
@@ -64,6 +70,8 @@ RUN_POLICY = "adbc-qualification-20261016-runtime"
 ROLE_NAME = "adbc-isolated-qualification-ci"
 FAILURE_STAGES = {
     "preflight-verification": "PREFLIGHT",
+    "operation-inventory": "OPERATION_INVENTORY",
+    "host-reservation-attempted": "HOST_RESERVATION",
     "initial-role-verification": "INITIAL_ROLE",
     "initial-role-verified": "INITIAL_ROLE",
     "create-namespace-attempted": "CREATE_NAMESPACE",
@@ -80,6 +88,9 @@ FAILURE_STAGES = {
     "admission-issued": "CI_COMPLETION",
 }
 FAILURE_REASONS = {
+    "operation inventory is existing or incomplete": "OPERATION_SPENT_OR_UNKNOWN",
+    "operation nonce mismatch": "OPERATION_NONCE",
+    "runtime template is not the versioned contract": "POLICY_TEMPLATE",
     "workgroup not ready": "WORKGROUP_NOT_READY",
     "workgroup ownership mismatch": "WORKGROUP_OWNERSHIP",
     "namespace ownership mismatch": "NAMESPACE_OWNERSHIP",
@@ -108,25 +119,6 @@ def failure_reason(error):
         if isinstance(error, Rejected)
         else "SDK_OR_UNEXPECTED_FAILURE"
     )
-
-
-INITIAL_POLICY_DOCUMENT = {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "Identity",
-            "Effect": "Allow",
-            "Action": ["sts:GetCallerIdentity"],
-            "Resource": "*",
-        },
-        {
-            "Sid": "ReadSingleAdmission",
-            "Effect": "Allow",
-            "Action": ["ssm:GetParameter"],
-            "Resource": f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter" + PARAMETER,
-        },
-    ],
-}
 
 
 class Host:
@@ -352,7 +344,7 @@ class Host:
             "PolicyDocument"
         ]
         require(
-            observed == INITIAL_POLICY_DOCUMENT,
+            observed == initial_policy(self.state["nonce"]),
             "initial CI policy exceeds exact admission read",
         )
         self.state["initial_policy_sha256"] = digest(observed)
@@ -368,31 +360,8 @@ class Host:
         require(
             file_sha(template) == expected_sha, "unreviewed runtime policy template"
         )
-        cutoff = datetime.fromtimestamp(
-            self.state["admission"]["window"]["teardown_deadline"], timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        encoded = Path(template).read_text()
-        for name, value in {
-            "EXACT_OWNED_WG": self.state["created"]["workgroup"],
-            "EXACT_OWNED_NS": self.state["created"]["namespace"],
-            "EXACT_OWNED_SG": self.state["created"]["security_group"],
-            "EXACT_RUN_ID": str(self.state["run_id"]),
-            "EXACT_CUTOFF": cutoff,
-        }.items():
-            encoded = encoded.replace(name, value)
-        require(
-            "EXACT_" not in encoded and self.state["nonce"] in encoded,
-            "runtime policy binding incomplete",
-        )
-        policy = parse_json(encoded)
-        cutoff = datetime.fromtimestamp(
-            self.state["admission"]["window"]["teardown_deadline"], timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for statement in policy["Statement"]:
-            if statement["Effect"] == "Allow":
-                statement.setdefault("Condition", {}).setdefault("DateLessThan", {})[
-                    "aws:CurrentTime"
-                ] = cutoff
+        checked_template(template, expected_sha)
+        policy = runtime_policy(self.state["admission"])
         self.state["runtime_policy"] = policy
         self.state["runtime_policy_template_sha256"] = expected_sha
         self.state["attempted"].append("runtime_policy")
@@ -461,6 +430,7 @@ class Host:
             "run_id": run,
             "started_at": int(started),
             "deadline": int(self.deadline),
+            "host_attempt": "NOT_ATTEMPTED",
             "attempted": [],
             "created": {},
             "external_teardown": "required",
@@ -472,6 +442,28 @@ class Host:
             self.phase("preflight-verification")
             self.check_deadline()
             preflight = self.preflight(preflight_id, run, source)
+            self.check_deadline()
+            require(preflight["nonce"] == nonce, "operation nonce mismatch")
+            checked_template(policy_template, policy_sha256)
+            self.phase("operation-inventory")
+            self.check_deadline()
+            inventory = self.aws["ssm"].describe_parameters(
+                ParameterFilters=[
+                    {
+                        "Key": "Name",
+                        "Option": "BeginsWith",
+                        "Values": [operation_prefix(nonce)],
+                    }
+                ],
+                MaxResults=50,
+            )
+            require(
+                type(inventory) is dict
+                and "NextToken" not in inventory
+                and type(inventory.get("Parameters")) is list
+                and inventory["Parameters"] == [],
+                "operation inventory is existing or incomplete",
+            )
             self.check_deadline()
             # Reject broad initial authority before any resource can be created.
             self.phase("initial-role-verification")
@@ -498,6 +490,35 @@ class Host:
                 )["SecurityGroups"],
                 "dedicated security group already exists",
             )
+            self.check_deadline()
+            # This immutable reservation wins before any provisioning. A lost
+            # reply is spent, never read back or retried as authorization.
+            reservation = {
+                "version": 1,
+                "source_sha": source,
+                "run_id": run,
+                "nonce": nonce,
+                "policy_sha256": policy_sha256,
+                "deadline": self.state["deadline"],
+            }
+            self.state["host_attempt"] = "ATTEMPTED_UNKNOWN"
+            self.phase("host-reservation-attempted")
+            self.check_deadline()
+            reservation_reply = self.aws["ssm"].put_parameter(
+                Name=host_attempt_name(nonce),
+                Type="String",
+                Tier="Standard",
+                Overwrite=False,
+                Value=json.dumps(reservation, sort_keys=True),
+            )
+            self.check_deadline()
+            require(
+                reservation_reply.get("Version") == 1,
+                "host reservation is not immutable version one",
+            )
+            self.state["host_attempt"] = "CREATED"
+            self.save()
+            self.check_deadline()
             tags = [{"key": TAG, "value": nonce}]
             for kind, create in (
                 (
@@ -608,7 +629,7 @@ class Host:
                 },
                 "cleanup": {"owner": OWNER, "observer": OWNER},
             }
-            validate(admission, source=source, run=run, now=now)
+            validate(admission, source=source, run=run, now=now, nonce=nonce)
             self.state["admission"] = admission
             self.save()
             self.phase("initial-resource-verification")
@@ -644,7 +665,7 @@ class Host:
             self.phase("admission-write-attempted")
             self.check_deadline(admission["window"]["admit_before"])
             self.aws["ssm"].put_parameter(
-                Name=PARAMETER,
+                Name=admission_name(nonce),
                 Value=json.dumps(admission, sort_keys=True, separators=(",", ":")),
                 Type="String",
                 Tier="Standard",
@@ -673,7 +694,16 @@ class Host:
             self.save()
         finally:
             try:
-                self.cleanup()
+                if (
+                    not self.state["attempted"]
+                    and self.state["host_attempt"] != "CREATED"
+                ):
+                    # A duplicate/uncertain reservation owns no resources or
+                    # shared workflow cancellation. Preserve it without effects.
+                    self.state["external_teardown"] = "not-started"
+                    self.save()
+                else:
+                    self.cleanup()
             except BaseException:
                 failed = True
                 self.state["external_teardown"] = (
