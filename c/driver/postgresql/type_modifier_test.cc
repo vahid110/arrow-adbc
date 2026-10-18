@@ -206,8 +206,8 @@ TEST(TypeModifierTest, LiteralTypeSpecificBoundsNeverProduceDefaultsOrWrap) {
     EXPECT_EQ(info.scale, item.scale);
     EXPECT_EQ(info.byte_width, item.width);
   }
-  for (int32_t raw : {-1, 0, 3, 4, std::numeric_limits<int32_t>::min(),
-                      std::numeric_limits<int32_t>::max()}) {
+  for (int32_t raw : {-1, 0, 3, 4, (std::numeric_limits<int32_t>::min)(),
+                      (std::numeric_limits<int32_t>::max)()}) {
     const auto info = profile.DescribeTypeModifier("numeric", raw);
     EXPECT_FALSE(info.precision);
     EXPECT_FALSE(info.scale);

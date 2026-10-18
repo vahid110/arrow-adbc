@@ -202,7 +202,7 @@ Status PqResultHelper::ResolveTableSchema(PostgresTypeResolver& type_resolver,
     }
     int64_t oid;
     UNWRAP_RESULT(oid, row[1].ParseInteger());
-    if (oid < 0 || oid > std::numeric_limits<uint32_t>::max()) {
+    if (oid < 0 || oid > (std::numeric_limits<uint32_t>::max)()) {
       return Status(ADBC_STATUS_INVALID_DATA, "Table column OID is outside uint32 range");
     }
     std::optional<int32_t> modifier;

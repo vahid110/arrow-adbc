@@ -69,8 +69,8 @@ struct PqRecord {
     if (is_null) return std::nullopt;
     int64_t value;
     UNWRAP_RESULT(value, ParseInteger());
-    if (value < std::numeric_limits<int32_t>::min() ||
-        value > std::numeric_limits<int32_t>::max()) {
+    if (value < (std::numeric_limits<int32_t>::min)() ||
+        value > (std::numeric_limits<int32_t>::max)()) {
       return Status(ADBC_STATUS_INVALID_DATA,
                     "Catalog type modifier is outside signed int32 range");
     }

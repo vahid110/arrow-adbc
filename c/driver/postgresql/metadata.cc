@@ -103,7 +103,7 @@ adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetada
   column.column_name = std::string_view(row[0].data, row[0].len);
   int64_t ordinal;
   UNWRAP_RESULT(ordinal, row[1].ParseInteger());
-  if (ordinal <= 0 || ordinal > std::numeric_limits<int32_t>::max()) {
+  if (ordinal <= 0 || ordinal > (std::numeric_limits<int32_t>::max)()) {
     return Status(ADBC_STATUS_INVALID_DATA,
                   "Catalog column ordinal is outside positive int32 range");
   }
