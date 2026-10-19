@@ -32,7 +32,10 @@ struct NativeRunInput {
   std::string_view schema, authenticated_cleanup_schema;
   std::chrono::steady_clock::time_point discovery_deadline, cleanup_deadline;
   // Sessions are borrowed, distinct, nonblocking, quiescent/autocommit and
-  // exclusively used by this call. Descriptors are borrowed, private and empty.
+  // exclusively used by this call. Root must install sanitized/nonlogging libpq
+  // notice handling before SQL; default notices can print raw server text. This
+  // library never changes/restores an unknown caller callback or opaque argument.
+  // Descriptors are borrowed, private and empty.
 };
 enum class NativeRunState {
   kUnattempted,

@@ -166,7 +166,10 @@ operations. A prepare/describe pair shares one three-second deadline; only the
 five selected HLL setup steps have ten seconds. Discovery is at most 720 seconds
 with a separate 180-second cleanup reserve. No connect/authentication, CLI,
 plan loader, alternate SQL/format, retry, cancellation or reconnect is provided.
-The caller must authenticate the source/runtime/resource/one-use operation and
+The caller must install sanitized/nonlogging libpq notice handling before SQL:
+libpq default notices can print raw server text even though capture never reads
+error messages. The runner does not change/restore unknown caller callbacks or
+opaque arguments. The caller must authenticate the source/runtime/resource/one-use operation and
 exact cleanup schema before calling. Borrowed handles or schema syntax are not
 admission. The socket-free default test is `adbc-native-protocol-runner-test`.
 
