@@ -901,13 +901,36 @@ def _fact(value, os_image=False):
     require(value["cpu"] == probe.ARM64, "wrong-image-cpu")
     g0._hash(value["uuid"], g0._LOCAL_ID)
     require(value["uuid"] != "0" * 32, "missing-image-uuid")
-    deployment = value["deployment"]
-    if deployment is not None:
-        g0._keys(deployment, ("platform", "minos_packed", "sdk_packed"))
+    deployments = value["deployment"]
+    require(
+        type(deployments) is list and len(deployments) <= probe.MAX_COMMANDS,
+        "invalid-image",
+    )
+    platforms = set()
+    for deployment in deployments:
+        g0._keys(deployment, ("platform", "minos_packed", "sdk_packed", "tools"))
         require(
-            all(type(n) is int and 0 <= n <= 4294967295 for n in deployment.values()),
+            all(
+                type(deployment[key]) is int and 0 <= deployment[key] <= 4294967295
+                for key in ("platform", "minos_packed", "sdk_packed")
+            ),
             "invalid-image",
         )
+        require(deployment["platform"] not in platforms, "invalid-image")
+        platforms.add(deployment["platform"])
+        tools = deployment["tools"]
+        require(
+            type(tools) is list and len(tools) <= probe.MAX_COMMANDS, "invalid-image"
+        )
+        seen_tools = set()
+        for tool in tools:
+            g0._keys(tool, ("tool", "version"))
+            require(
+                all(type(n) is int and 0 <= n <= 4294967295 for n in tool.values()),
+                "invalid-image",
+            )
+            require(tool["tool"] not in seen_tools, "invalid-image")
+            seen_tools.add(tool["tool"])
     if os_image:
         return
     require(
@@ -967,9 +990,9 @@ def _runtime(selected):
         facts = probe.parse_macho(data)
         require(
             facts["filetype"] in (2, 6, 8)
-            and facts["deployment"] is not None
-            and facts["deployment"]["platform"] == 1
-            and facts["deployment"]["minos_packed"] <= _version(selected.os_version),
+            and len(facts["deployment"]) == 1
+            and facts["deployment"][0]["platform"] == 1
+            and facts["deployment"][0]["minos_packed"] <= _version(selected.os_version),
             "unsupported-image-deployment",
         )
         out[entry.path] = facts

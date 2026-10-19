@@ -52,10 +52,19 @@ install = sibling("pgwire_local_install")
 probe = install.probe
 
 
-def macho(uuid="1" * 32, minimum=0xF0000, platform=1, cpu=probe.ARM64, extra=b""):
+def build_version(platform, minimum, sdk, tools=()):
+    return struct.pack(
+        "<6I", 0x32, 24 + len(tools) * 8, platform, minimum, sdk, len(tools)
+    ) + b"".join(struct.pack("<2I", *tool) for tool in tools)
+
+
+def macho(
+    uuid="1" * 32, minimum=0xF0000, platform=1, cpu=probe.ARM64, extra=b"", builds=None
+):
     commands = struct.pack("<II", 0x1B, 24) + bytes.fromhex(uuid)
-    commands += struct.pack("<6I", 0x32, 24, platform, minimum, 0xF0400, 0)
-    count = 2
+    builds = (build_version(platform, minimum, 0xF0400),) if builds is None else builds
+    commands += b"".join(builds)
+    count = 1 + len(builds)
     if extra:
         commands += extra
         count += 1
@@ -551,6 +560,68 @@ class LocalInstallTest(unittest.TestCase):
         facts = probe.parse_macho(macho(extra=command))
         self.assertEqual(facts["dylibs"][0]["name"], "@rpath/example.dylib")
         self.assertEqual(facts["dylibs"][0]["resolution"], "unresolved")
+
+    def test_os_multiple_deployment_commands_preserve_all_facts(self):
+        commands = (
+            build_version(1, 983808, 983808, ((3, 111),)),
+            build_version(6, 1180416, 1180416, ((3, 222),)),
+        )
+        facts = probe.parse_macho(macho(builds=commands))
+        expected = [
+            {
+                "platform": 1,
+                "minos_packed": 983808,
+                "sdk_packed": 983808,
+                "tools": [{"tool": 3, "version": 111}],
+            },
+            {
+                "platform": 6,
+                "minos_packed": 1180416,
+                "sdk_packed": 1180416,
+                "tools": [{"tool": 3, "version": 222}],
+            },
+        ]
+        self.assertEqual(facts["deployment"], expected)
+        f = self.fixture
+        f.transform = lambda value: (
+            value["images"][-1].update(deployment=expected) or value
+        )
+        result = f.observe()
+        metadata = json.loads((f.metadata / result.metadata.path).read_bytes())
+        self.assertEqual(metadata["images"][-1]["deployment"], expected)
+        self.assertNotIn("sha256", metadata["images"][-1])
+        for bad in (
+            expected + [expected[0]],
+            [dict(expected[0], tools=[{"tool": True, "version": 1}])],
+            [dict(expected[0], extra=1)],
+            {"platform": 1},
+            None,
+        ):
+            with self.subTest(bad=bad):
+                f.transform = lambda value, bad=bad: (
+                    value["images"][-1].update(deployment=bad) or value
+                )
+                self.rejected()
+        f.transform = lambda value: value
+        f.main.write_bytes(macho("d" * 32, builds=commands))
+        f.selected = replace(
+            f.selected,
+            runtime=tuple(identity(Path(e.path)) for e in f.selected.runtime),
+        )
+        self.rejected()
+
+    def test_deployment_command_malformed_and_duplicate_platform_rejected(self):
+        good = build_version(1, 983808, 983808, ((3, 111),))
+        for builds in (
+            (good, good),
+            (good, build_version(1, 1180416, 1180416)),
+            (good[:-8],),
+            (good[:20] + struct.pack("<I", 2) + good[24:],),
+            (build_version(1, 983808, 983808, ((3, 1), (3, 2))),),
+        ):
+            with self.subTest(builds=builds):
+                with self.assertRaises(probe.Invalid):
+                    probe.parse_macho(macho(builds=builds))
 
     def test_runtime_unknown_uuid_deployment_origins_and_membership(self):
         f = self.fixture

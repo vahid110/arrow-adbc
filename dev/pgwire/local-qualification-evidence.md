@@ -92,7 +92,9 @@ protocols and admission paths stay unchanged.
 Runtime facts cover only this named load-only process. Thin64le ARM64 file-backed
 images must match selected before/after identities and on-disk UUID/CPU/deployment
 and bounded load-command facts. OS-prefix images bind actual OS build and raw
-in-memory UUID/CPU/deployment, including distinct system deployment codes; no disk
+in-memory UUID/CPU and ordered deployment commands, including each distinct
+platform's minimum/SDK and tool versions; duplicate platforms reject. Non-OS
+images require one macOS deployment with minimum no newer than the host. No disk
 hash for a shared-cache image is invented. Raw dylib/RPATH edges stay unresolved;
 future dynamic loads and broader runtime closure remain unknown. The interpreter
 launch file and dyld main executable are separate facts. OS/architecture/ABI and

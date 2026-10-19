@@ -78,7 +78,7 @@ def parse_macho(data):
     commands = memoryview(data)[32 : 32 + size]
     position = 0
     uuid = None
-    deployment = None
+    deployment = []
     dylibs = []
     rpaths = []
     other = []
@@ -100,14 +100,28 @@ def parse_macho(data):
             uuid = bytes(block[8:24]).hex()
             require(uuid != "0" * 32)
         elif command == 0x32:
-            require(length >= 24 and deployment is None)
+            require(length >= 24)
             platform, minimum, sdk, tools = struct.unpack_from("<4I", block, 8)
-            require(length == 24 + tools * 8)
-            deployment = {
-                "platform": platform,
-                "minos_packed": minimum,
-                "sdk_packed": sdk,
-            }
+            require(length == 24 + tools * 8 and tools <= MAX_COMMANDS)
+            require(all(value["platform"] != platform for value in deployment))
+            tool_facts = [
+                dict(
+                    zip(
+                        ("tool", "version"),
+                        struct.unpack_from("<2I", block, 24 + index * 8),
+                    )
+                )
+                for index in range(tools)
+            ]
+            require(len({value["tool"] for value in tool_facts}) == tools)
+            deployment.append(
+                {
+                    "platform": platform,
+                    "minos_packed": minimum,
+                    "sdk_packed": sdk,
+                    "tools": tool_facts,
+                }
+            )
         elif command in (0xD, 0xC, 0x80000018, 0x8000001F, 0x80000023):
             require(length >= 24)
             offset, timestamp, current, compatible = struct.unpack_from("<4I", block, 8)
