@@ -186,7 +186,8 @@ struct Execution {
   NativeRunReason reason = NativeRunReason::kTransport;
   NativeRunPhase phase = NativeRunPhase::kSend;
   int calls = 0;
-  bool completed = false;
+  // Protocol completion only; the statement outcome can still be unknown.
+  bool completed = false, encoding_lost = false;
   std::optional<int> observed_terminal;
 };
 bool Before(Time deadline, const Calls& c) { return c.now() < deadline; }
@@ -219,7 +220,8 @@ Execution Execute(PGconn* session, const NativeStepPlan& p, SendKind kind,
         Before(deadline, c) ? NativeRunReason::kSession : NativeRunReason::kDeadline;
     return e;
   }
-  if (!c.utf8(session) || !Before(deadline, c)) {
+  e.encoding_lost = !c.utf8(session);
+  if (e.encoding_lost || !Before(deadline, c)) {
     e.reason =
         Before(deadline, c) ? NativeRunReason::kEncoding : NativeRunReason::kDeadline;
     return e;
@@ -335,12 +337,16 @@ bool ValidState(std::string_view s) {
     if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) return false;
   return true;
 }
+bool UnknownStatementOutcome(const Observation& observation) {
+  return observation.result_status == PGRES_FATAL_ERROR && observation.sqlstate &&
+         (*observation.sqlstate == "40003" || *observation.sqlstate == "03000");
+}
 bool Definitive(const Observation& observation) {
   if (observation.result_status != PGRES_FATAL_ERROR || !observation.sqlstate ||
       observation.sqlstate->size() != 5)
     return false;
   const auto& s = *observation.sqlstate;
-  if (!ValidState(s)) return false;
+  if (!ValidState(s) || UnknownStatementOutcome(observation)) return false;
   return s.substr(0, 2) != "08" && s != "57014" && s != "57P01" && s != "57P02" &&
          s != "57P03";
 }
@@ -389,7 +395,7 @@ class Runner {
           Failure(0, NativeRunPhase::kPreflight, NativeRunReason::kSession);
           return Finish();
         }
-        const bool utf8 = c_.utf8(session);
+        const bool utf8 = CheckUtf8(session);
         if (!Before(input_.discovery_deadline, c_)) {
           Failure(0, NativeRunPhase::kPreflight, NativeRunReason::kDeadline);
           return Finish();
@@ -448,7 +454,7 @@ class Runner {
       if (result_.schema_created &&
           input_.schema == input_.authenticated_cleanup_schema &&
           Before(input_.cleanup_deadline, c_) && c_.ready(input_.sessions[0]) &&
-          c_.utf8(input_.sessions[0]) && Before(input_.cleanup_deadline, c_)) {
+          CheckUtf8(input_.sessions[0]) && Before(input_.cleanup_deadline, c_)) {
         Step(*p, observation, phase, terminal, calls, true);
         result_.cleanup_captured = result_.states[current_] == NativeRunState::kCaptured;
       } else {
@@ -463,6 +469,15 @@ class Runner {
   }
 
  private:
+  void LoseEncoding(size_t which) {
+    qualified_[which] = false;
+    encoding_[which] = false;
+  }
+  bool CheckUtf8(PGconn* session) {
+    const bool valid = c_.utf8(session);
+    if (!valid) LoseEncoding(session == input_.sessions[0] ? 0 : 1);
+    return valid;
+  }
   void Failure(size_t step, NativeRunPhase phase, NativeRunReason reason,
                const Observation* obs = nullptr) {
     reasons_[step] = reason;
@@ -502,10 +517,24 @@ class Runner {
       phase = NativeRunPhase::kParameter;
       active_ = phase;
       auto& source = cache_[static_cast<size_t>(p.parameter->source)];
-      if (!source || source->session != session || !c_.utf8(session) ||
-          !Before(until, c_)) {
+      if (!source || source->session != session) {
         result_.states[i] = NativeRunState::kInvalid;
         Failure(i, phase, NativeRunReason::kParameter);
+        stopped_ = true;
+        return;
+      }
+      if (!Before(until, c_)) {
+        result_.states[i] = NativeRunState::kUncertain;
+        Failure(i, phase, NativeRunReason::kDeadline);
+        stopped_ = true;
+        return;
+      }
+      const bool utf8 = CheckUtf8(session);
+      if (!utf8 || !Before(until, c_)) {
+        result_.states[i] = NativeRunState::kUncertain;
+        Failure(
+            i, phase,
+            Before(until, c_) ? NativeRunReason::kEncoding : NativeRunReason::kDeadline);
         stopped_ = true;
         return;
       }
@@ -522,6 +551,7 @@ class Runner {
     Execution e;
     if (p.operation == NativeOperation::kPrepareDescribe) {
       e = Execute(session, p, SendKind::kPrepare, nullptr, until, c_, output_, cleanup);
+      if (e.encoding_lost) LoseEncoding(which);
       calls += e.calls;
       result_.operation_calls += e.calls;
       if (e.calls) ++result_.attempted_steps;
@@ -538,12 +568,14 @@ class Runner {
         // Prepare success is not the final describe observation. Same deadline.
         e = Execute(session, p, SendKind::kDescribe, nullptr, until, c_, output_,
                     cleanup);
+        if (e.encoding_lost) LoseEncoding(which);
         calls += e.calls;
         result_.operation_calls += e.calls;
       }
     } else {
       e = Execute(session, p, SendKind::kExecute, owner.get(), until, c_, output_,
                   cleanup);
+      if (e.encoding_lost) LoseEncoding(which);
       calls = e.calls;
       result_.operation_calls += e.calls;
       if (e.calls) ++result_.attempted_steps;
@@ -561,7 +593,7 @@ class Runner {
     // Never decode text after an encoding-changing result or a slow check.
     phase = NativeRunPhase::kCapture;
     active_ = phase;
-    if (!c_.utf8(session) || !Before(until, c_)) {
+    if (!CheckUtf8(session) || !Before(until, c_)) {
       result_.states[i] = NativeRunState::kUncertain;
       Failure(
           i, phase,
@@ -602,13 +634,18 @@ class Runner {
             std::make_unique<CacheEntry>(CacheEntry{Observation{}, session, *bytes});
         cache_pending_id_ = i;
       }
-    } else if (Definitive(observation)) {
+    } else if (Definitive(observation) || UnknownStatementOutcome(observation)) {
       phase = p.operation == NativeOperation::kPrepareDescribe
                   ? (calls == 1 ? NativeRunPhase::kPrepare : NativeRunPhase::kDescribe)
                   : NativeRunPhase::kSend;
-      result_.states[i] = NativeRunState::kDefinitiveError;
-      Failure(i, phase, NativeRunReason::kSqlError, &observation);
-      stopped_ |= Stops(p.definitive_error, true);
+      const bool unknown = UnknownStatementOutcome(observation);
+      result_.states[i] =
+          unknown ? NativeRunState::kUncertain : NativeRunState::kDefinitiveError;
+      Failure(i, phase,
+              unknown ? NativeRunReason::kStatementOutcomeUnknown
+                      : NativeRunReason::kSqlError,
+              &observation);
+      stopped_ |= Stops(p.definitive_error, !unknown);
     } else {
       result_.states[i] =
           observation.present ? NativeRunState::kDiagnostic : NativeRunState::kInvalid;

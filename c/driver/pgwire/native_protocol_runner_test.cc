@@ -407,6 +407,150 @@ TEST(NativeRunnerTest, Every715FaultUsesActualPrerequisiteAndStopFunctions) {
     }
   EXPECT_EQ(scenarios, 1430U);
 }
+std::string StepRecord(const Files& files, std::string_view name) {
+  for (size_t group = 0; group < 8; ++group) {
+    const auto text = files.Read(group);
+    const auto at = text.find("\"name\":\"" + std::string(name) + "\"");
+    if (at != std::string::npos) {
+      const auto start = text.rfind('\n', at);
+      const auto end = text.find('\n', at);
+      return text.substr(start == std::string::npos ? 0 : start + 1,
+                         end - (start == std::string::npos ? 0 : start + 1));
+    }
+  }
+  return {};
+}
+TEST(NativeRunnerTest,
+     ExplicitUnknownCandidateAndDrainedParameterOutcomesStopAndKeepFacts) {
+  size_t parameter = count;
+  for (size_t i = 0; i < count; ++i)
+    if (BuildNativeStep(static_cast<NativeStepId>(i), owned_schema)->parameter) {
+      parameter = i;
+      break;
+    }
+  ASSERT_LT(parameter, count);
+  for (auto target : {Index("candidate.geometry.01"), parameter})
+    for (const auto& code : {"40003", "03000"}) {
+      SCOPED_TRACE(std::to_string(target) + ":" + code);
+      Files files;
+      Fake fake;
+      fake.errors[target] = code;
+      auto result = RunWith(fake.Input(files), Fake::Api());
+      ASSERT_TRUE(result.first_failure);
+      EXPECT_EQ(result.first_failure->step, target);
+      EXPECT_EQ(std::string(result.first_failure->sqlstate.data()), code);
+      EXPECT_EQ(result.states[target], NativeRunState::kUncertain);
+      EXPECT_EQ(result.first_failure->reason, NativeRunReason::kStatementOutcomeUnknown);
+      EXPECT_FALSE(result.discovery_finished);
+      EXPECT_TRUE(result.spent);
+      EXPECT_TRUE(result.schema_created);
+      EXPECT_TRUE(result.cleanup_captured);
+      for (auto [id, kind] : fake.sent) EXPECT_TRUE(id <= target || id == count - 1);
+      // Final NULL drains protocol, not proof of a known statement effect. No
+      // parameter is still borrowed; in-flight positive control remains separate.
+      EXPECT_FALSE(fake.parameter);
+      for (const auto& owner : result.pending_parameters) EXPECT_FALSE(owner);
+      const auto plan = *BuildNativeStep(static_cast<NativeStepId>(target), owned_schema);
+      const auto record = StepRecord(files, plan.name);
+      EXPECT_NE(record.find("\"observed_terminal\":7"), std::string::npos);
+      EXPECT_NE(record.find(code), std::string::npos);
+    }
+}
+TEST(NativeRunnerTest, GenuineDefinitiveCandidateAndParameterControlsStillContinue) {
+  size_t parameter = count;
+  for (size_t i = 0; i < count; ++i)
+    if (BuildNativeStep(static_cast<NativeStepId>(i), owned_schema)->parameter) {
+      parameter = i;
+      break;
+    }
+  ASSERT_LT(parameter, count);
+  for (auto target : {Index("candidate.geometry.01"), parameter})
+    for (const auto& code : {"0A000", "XX000"}) {
+      Files files;
+      Fake fake;
+      fake.errors[target] = code;
+      auto result = RunWith(fake.Input(files), Fake::Api());
+      ASSERT_TRUE(result.first_failure);
+      EXPECT_EQ(result.first_failure->step, target);
+      EXPECT_EQ(result.states[target], NativeRunState::kDefinitiveError);
+      EXPECT_TRUE(result.discovery_finished);
+      EXPECT_TRUE(result.cleanup_captured);
+      bool later = false;
+      for (auto [id, kind] : fake.sent)
+        if (id > target && id < count - 1) later = true;
+      EXPECT_TRUE(later);
+      for (const auto& owner : result.pending_parameters) EXPECT_FALSE(owner);
+    }
+}
+TEST(NativeRunnerTest, DetectedEncodingLossInvalidatesOnlyCurrentAffectedSessionRecords) {
+  size_t parameter = count;
+  for (size_t i = 0; i < count; ++i)
+    if (BuildNativeStep(static_cast<NativeStepId>(i), owned_schema)->parameter) {
+      parameter = i;
+      break;
+    }
+  ASSERT_LT(parameter, count);
+  for (int mode = 0; mode < 5; ++mode) {
+    Files files;
+    Fake fake;
+    size_t target = mode == 1 ? parameter : Index("vendor_mixed.values.text");
+    if (mode == 4) target = Index("vendor_mixed.values.describe");
+    if (mode == 3)
+      for (size_t i = 123; i < count - 1; ++i) {
+        if (BuildNativeStep(static_cast<NativeStepId>(i), owned_schema)->connection ==
+            NativeConnection::kAlternateZone) {
+          target = i;
+          break;
+        }
+      }
+    const auto failed = *BuildNativeStep(static_cast<NativeStepId>(target), owned_schema);
+    const auto which = static_cast<size_t>(failed.connection);
+    bool armed = false, changed = false;
+    fake.hook = [&](std::string_view event) {
+      const auto active = static_cast<size_t>(fake.active.id);
+      if (event == "capture" && active + 1 == target) armed = true;
+      if (!changed && (((mode == 2 || mode == 3) && event == "get" && active == target) ||
+                       (mode < 2 && armed && event == "utf8") ||
+                       (mode == 4 && event == "get" && active == target &&
+                        fake.kind == SendKind::kPrepare && fake.gets == 2))) {
+        changed = true;
+        fake.encoding[which] = false;
+      }
+    };
+    auto result = RunWith(fake.Input(files), Fake::Api());
+    ASSERT_TRUE(changed);
+    ASSERT_TRUE(result.first_failure);
+    EXPECT_EQ(result.first_failure->step, target);
+    EXPECT_FALSE(result.discovery_finished);
+    EXPECT_EQ(result.first_failure->reason, NativeRunReason::kEncoding);
+    EXPECT_NE(StepRecord(files, failed.name).find("\"context_qualified\":false"),
+              std::string::npos);
+    std::string same, other;
+    for (size_t i = target + 1; i < count - 1; ++i) {
+      const auto p = *BuildNativeStep(static_cast<NativeStepId>(i), owned_schema);
+      if (p.connection == failed.connection && same.empty()) same = p.name;
+      if (p.connection != failed.connection && other.empty()) other = p.name;
+    }
+    ASSERT_FALSE(same.empty());
+    if (mode == 1)
+      EXPECT_TRUE(other.empty());
+    else
+      ASSERT_FALSE(other.empty());
+    EXPECT_NE(StepRecord(files, same).find("\"context_qualified\":false"),
+              std::string::npos);
+    if (!other.empty())
+      EXPECT_NE(StepRecord(files, other).find("\"context_qualified\":true"),
+                std::string::npos);
+    EXPECT_NE(
+        StepRecord(files, "session.raw_utc.timezone").find("\"context_qualified\":true"),
+        std::string::npos);
+    EXPECT_NE(StepRecord(files, "session.raw_alternate_zone.timezone")
+                  .find("\"context_qualified\":true"),
+              std::string::npos);
+    EXPECT_EQ(result.cleanup_attempted, which == 1);
+    EXPECT_TRUE(result.schema_created);
+  }
+}
 TEST(NativeRunnerTest,
      DefinitiveCandidateSkipsOnlyItsDescendantsAndAbsentBaselineSendsNothing) {
   Files files;

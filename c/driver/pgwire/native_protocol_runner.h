@@ -74,7 +74,8 @@ enum class NativeRunReason {
   kAllocation,
   kOwnership,
   kStopped,
-  kDependency
+  kDependency,
+  kStatementOutcomeUnknown
 };
 struct NativeRunFailure {
   size_t step;
@@ -90,8 +91,11 @@ struct NativeRunResult {
   std::array<uint64_t, 8> output_bytes{};
   bool spent = true, discovery_finished = false, output_complete = false;
   bool schema_created = false, cleanup_attempted = false, cleanup_captured = false;
-  // On uncertainty retain these stable owners until ROOT closes/discards the
-  // corresponding borrowed sessions. They do not mean completion/cancellation.
+  // Still-in-flight/not-confirmed-drained parameter operations retain stable
+  // owners until ROOT closes/discards the corresponding borrowed sessions.
+  // Presence does not prove a query is still running or cancellation completed.
+  // Fully drained protocol with unknown statement effects creates no pending
+  // borrow: protocol completion and known statement outcome are distinct.
   std::array<std::unique_ptr<RawParameter>, 2> pending_parameters;
 };
 // Uses only the closed715 sequence. Output is protocol/accounting evidence, not

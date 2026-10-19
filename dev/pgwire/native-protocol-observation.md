@@ -177,15 +177,19 @@ Actual UTF8 is checked before SQL and interpretation. Selected SET plus exact
 SHOW facts qualify each session only for subsequent work; earlier catalog/alias
 records explicitly remain context-unqualified. Required setup/context failures
 stop discovery. Definitive exploratory SQL errors skip actual descendants;
-transport, timeout, missing/invalid SQLSTATE and unfamiliar outcomes stop and
-spend the attempt. Cached fixed parameter baselines have a conservative 16 MiB
+transport, timeout, missing/invalid SQLSTATE, explicit unknown/incomplete
+statement outcomes (`40003`/`03000`) and unfamiliar outcomes stop and spend the
+attempt. Detected UTF8 loss invalidates only that session's current qualification;
+earlier records retain their historical context facts. Cached fixed parameter baselines have a conservative 16 MiB
 owned-storage cap (excluding allocator overhead and libpq receive storage) and
 are released after last use. Positive replay uses actual format and stable G4
 owned bytes; controlled NULL/empty trials retain distinct origins.
 
-On uncertain in-flight parameter execution, the returned result retains its
-owner. Root must close/discard the corresponding sessions **before destroying
-that result**; return does not mean completed execution or cancellation. The
+For still-in-flight or not-confirmed-drained parameter execution, the returned
+result conservatively retains its owner. Root must close/discard the corresponding sessions **before destroying
+that result**; owner presence does not prove a query is still running. A drained
+protocol with unknown statement effects creates no pending borrow and does not
+prove a known outcome. Return does not mean completed execution or cancellation. The
 runner never closes borrowed sessions or descriptors. Its sole DROP is a finally
 action only after positively completed, captured creation in this invocation and
 matching root-authenticated cleanup schema. Duplicate or uncertain CREATE grants
