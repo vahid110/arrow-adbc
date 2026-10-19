@@ -81,7 +81,9 @@ artifact G0 identities remain distinct. Task010g2 adds a bounded output fd for
 the existing fixed seven-probe own-PG plumbing test (locally integrated cfe9feb;
 actual channel/stale-fd/cleanup checks, all 31 validation steps and exact independent
 approval). Task010g4 adds a noninstalled owned single raw replay parameter with
-separate controlled NULL/empty trials; final validation/review are pending.
+separate controlled NULL/empty trials (locally integrated def7084; independent
+approval, all 31 validation steps and ten own-PG echoes/15 calls). Task010h0 adds
+closed compiled discovery plans/capture shapes; validation/review pending.
 These dependencies do not supply native
 execution, broader runtime closure or live authority; see
 [the local evidence boundary](local-qualification-evidence.md). Native interval constraint

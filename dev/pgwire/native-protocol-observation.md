@@ -118,6 +118,38 @@ on every preparation attempt or owner destruction. Failed/unprepared access is
 `nullopt`, distinct from a valid SQL NULL view. Allocation failure leaves no
 usable parameter. This adds no SQL, execution path, production writer or codec.
 
+`native_protocol_plan.h` adds a closed compiled 715-step native discovery
+specification: 103 commands, 494 row queries and 118 PREPARE/DESCRIBE pairs,
+833 counted libpq operations. Fixed IDs select interned SQL, ordered columns,
+formats, limits, source selections and dependency/affected sets. Only the
+validated schema spelling is substituted. No runtime SQL/JSON loader or caller
+shape is accepted. Existing 35 capture IDs and the seven-PG output remain intact. The old capture
+API retains its caps; native sequence wrappers only tighten them to the selected
+per-step row bounds. Commands require COMMAND_OK with no row/field/parameter payload, plus exact
+bounded affected-row counts where required. Raw affected tag text is never logged.
+
+Forty required setup/session steps stop on failure; 674 exploratory/read/replay
+steps allow unrelated work only after a definitive completed SQL error, skipping
+actual dependents. Uncertain outcomes always stop and spend the operation with
+no retry. Cleanup failure stays unknown. These are explicit plan facts, not a
+scheduler. SHOW alone has a fixed one-field/one-row shape retaining its bounded
+actual field name because native label capitalization remains unqualified. Other
+projected names remain exact. Actual UTF8/timezone values must match; a bounded
+mismatch retains the actual row only as incomplete diagnostics. Size, shape or
+allocation failures retain no bodies. Other SHOW facts are observed without guessed defaults. The future frontend must establish
+and verify UTF8 before ANY fixture SQL; later SHOW cannot prove earlier state.
+
+`PrepareNativeInput` joins only a fixed parameter/source ID and completed bounded
+observation to G4 ownership. It checks ordered shape, actual format, fixed
+BIGINT case literals and selected NULL semantics; vendor OIDs/encodings are not
+guessed. Controlled BIGINT binary case literals are reference expectations,
+not a native wire qualification. SUPER observed SQL NULL stays distinct from
+fixture NULL/empty. Failed joins expire previous access without changing source
+observations. This guard cannot authenticate a claimed source ID or observation;
+the later frontend must bind the actual capture/session/source/resource identity.
+No native connection, execution bridge, admission, semantic codec or production
+Bind/BindStream implementation is supplied by these plans.
+
 A later reviewed root adapter must bind exact source/build/libpq/session/target
 provenance, private inputs/outputs, finite admission and execution counts. This
 primitive grants none of those and changes no Task008 CI-only trust/claim gate.

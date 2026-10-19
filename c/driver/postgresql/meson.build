@@ -192,6 +192,7 @@ protocol_capture = executable(
     sources: [
         '../pgwire/native_protocol_capture.cc',
         '../pgwire/native_protocol_capture_test.cc',
+        '../pgwire/native_protocol_plan_test.cc',
     ],
     dependencies: [libpq_dep, gtest_main_dep],
     override_options: ['cpp_std=c++20'],

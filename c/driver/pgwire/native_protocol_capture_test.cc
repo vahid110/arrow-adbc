@@ -544,7 +544,7 @@ TEST(NativeRawParameterTest, EmbeddedTextNulRejectsWithoutReclassifyingBinary) {
 TEST(NativeRawParameterTest, EveryInvalidObservationExpiresNonnullEmptyAndNullViews) {
   auto good = ReplaySource(1, "ok");
   for (size_t prior : {size_t{0}, size_t{1}, size_t{2}}) {
-    for (int change = 0; change < 27; ++change) {
+    for (int change = 0; change < 28; ++change) {
       auto bad = good;
       switch (change) {
         case 0:
@@ -627,6 +627,9 @@ TEST(NativeRawParameterTest, EveryInvalidObservationExpiresNonnullEmptyAndNullVi
           break;
         case 26:
           bad.fields[0].name.assign(128, 'x');
+          break;
+        case 27:
+          bad.affected_rows = 1;
           break;
       }
       RawParameter input;

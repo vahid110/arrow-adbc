@@ -80,7 +80,9 @@ Current state only; history is in git and PR descriptions.
   (locally integrated cfe9feb after actual seven-record/stale-fd/cleanup checks,
   all 31 serial validation steps and exact independent approval). Task010g4 adds
   a noninstalled owned single replay parameter with distinct observed and
-  controlled NULL/empty origins; final validation/review are pending.
+  controlled NULL/empty origins (locally integrated def7084; independent approval,
+  all 31 serial validation steps and ten own-PG echoes/15 calls). Task010h0 adds
+  closed compiled native discovery plans/capture shapes; validation/review pending.
   Broader runtime closure and the local execution/live handoff remain
   separate prerequisites. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.

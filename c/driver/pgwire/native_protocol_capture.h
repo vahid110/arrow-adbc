@@ -84,7 +84,9 @@ enum class CaptureStatus {
   kBodyLimit,
   kEncodingLimit,
   kAllocationFailure,
-  kInvalidResult
+  kInvalidResult,
+  kAffectedRows,
+  kContextMismatch
 };
 struct CaptureLimits {
   int64_t fields = 64, parameters = 64, rows = 64, name_bytes = 127, cell_bytes = 65536;
@@ -118,6 +120,7 @@ struct Observation {
   std::optional<int> result_status;
   std::optional<int64_t> row_count, field_count;
   std::optional<int64_t> failure_row, failure_field, failure_length;
+  std::optional<int64_t> affected_rows;
   std::optional<std::string> sqlstate;
   std::vector<CapturedField> fields;
   std::optional<std::vector<uint32_t>> parameters;

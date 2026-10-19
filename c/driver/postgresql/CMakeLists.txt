@@ -137,6 +137,7 @@ if(ADBC_BUILD_TESTS)
                 SOURCES
                 ../pgwire/native_protocol_capture.cc
                 ../pgwire/native_protocol_capture_test.cc
+                ../pgwire/native_protocol_plan_test.cc
                 EXTRA_LINK_LIBS
                 ${LIBPQ_LINK_LIBRARIES})
   target_compile_features(adbc-native-protocol-capture-test PRIVATE cxx_std_20)
