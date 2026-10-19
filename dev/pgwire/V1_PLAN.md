@@ -75,7 +75,11 @@ serial validation steps passed). Task010g0 links anchored historical local
 source/review/validation/log/package bytes (locally integrated 1f35366 after
 independent FULL approval, actual historical linkage and retained validation).
 Task010g1 adds trusted in-place install comparisons and fixed same-host load-only
-observations; final actual validation/review is pending. Neither supplies native
+observations (locally integrated 0285eba after actual named G0 artifact load,
+retained 30-step validation and exact independent approval). Collector G1 and
+artifact G0 identities remain distinct. Task010g2 adds a bounded output fd for
+the existing fixed seven-probe own-PG plumbing test; actual channel validation
+and independent review are pending. These dependencies do not supply native
 execution, broader runtime closure or live authority; see
 [the local evidence boundary](local-qualification-evidence.md). Native interval constraint
 producers remain unqualified, blocking actual

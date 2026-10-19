@@ -19,6 +19,7 @@
 // No native vendor type or backend identity override is involved.
 #include "libpq_raii.h"
 #include "native_protocol_capture.h"
+#include "native_protocol_output.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -66,7 +67,8 @@ struct Fixture {
     if (!Cleanup()) std::cerr << "ordinary_postgresql_plumbing cleanup_failed\n";
   }
 };
-bool Observe(PGconn* conn, ProbeId id, const std::string& schema) {
+bool Observe(PGconn* conn, ProbeId id, const std::string& schema,
+             ObservationOutput* output) {
   auto plan = BuildProbe(id, schema);
   if (!plan) return false;
   UniqueResult result;
@@ -117,18 +119,28 @@ bool Observe(PGconn* conn, ProbeId id, const std::string& schema) {
       return false;
     if (id == ProbeId::kFloatBitsEmptyBinary && out.row_count != 0) return false;
   }
+  if (output) return output->Record(id, out.json);
   std::cout << "F0_PLUMBING_OBSERVATION=" << out.json << "\n";
-  return true;
+  return static_cast<bool>(std::cout);
 }
 }  // namespace
 int main(int argc, char** argv) {
   const char* phase = "input";
   try {
     alarm(30);
-    if (argc != 11) return 2;
+    if (argc != 11 && argc != 13) return 2;
     const char* keys[] = {"--socket-dir", "--port", "--database", "--user", "--schema"};
     for (int i = 0; i < 5; ++i)
       if (std::strcmp(argv[i * 2 + 1], keys[i])) return 2;
+    std::optional<ObservationOutput> output;
+    if (argc == 13) {
+      int fd = -1;
+      if (std::strcmp(argv[11], "--observation-fd") ||
+          !ObservationOutput::ParseDescriptor(argv[12], &fd))
+        return 2;
+      output.emplace(fd);
+      if (!output->Initialize()) return 2;
+    }
     for (char** var = environ; *var; ++var)
       if ((*var)[0] == 'P' && (*var)[1] == 'G') return 2;
     std::string socket_dir = argv[2], port = argv[4], database = argv[6], user = argv[8],
@@ -185,8 +197,9 @@ int main(int argc, char** argv) {
     UniqueConnection conn(PQconnectdbParams(parameters, values, 0));
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) throw 1;
     PQsetNoticeProcessor(conn.get(), [](void*, const char*) {}, nullptr);
-    std::cout << "ordinary_postgresql_plumbing libpq=" << PQlibVersion()
-              << " server=" << PQserverVersion(conn.get()) << "\n";
+    if (!output)
+      std::cout << "ordinary_postgresql_plumbing libpq=" << PQlibVersion()
+                << " server=" << PQserverVersion(conn.get()) << "\n";
     Fixture fixture{conn.get(), schema};
     phase = "fixture_create";
     const auto create = "CREATE SCHEMA \"" + schema + "\"";
@@ -206,14 +219,19 @@ int main(int argc, char** argv) {
                               nullptr, 0));
     if (!result || PQresultStatus(result.get()) != PGRES_COMMAND_OK) throw 1;
     phase = "fixed_observation";
-    for (auto id : {ProbeId::kFloatBitsValuesText, ProbeId::kFloatBitsValuesBinary,
-                    ProbeId::kFloatBitsNullsBinary, ProbeId::kFloatBitsEmptyBinary,
-                    ProbeId::kFloatBitsValuesDescribe,
-                    ProbeId::kFloatBitsParameterDescribe, ProbeId::kPlumbingError})
-      if (!Observe(conn.get(), id, schema)) throw 1;
+    for (auto id : ObservationOutput::kOrder)
+      if (!Observe(conn.get(), id, schema, output ? &*output : nullptr)) throw 1;
     phase = "cleanup";
     if (!fixture.Cleanup()) throw 1;
-    std::cout << "ordinary_postgresql_plumbing complete cleanup_acknowledged\n";
+    if (output) {
+      phase = "observation_output";
+      auto status = output->Complete(true, PQlibVersion(), PQserverVersion(conn.get()));
+      if (!status) throw 1;
+      std::cout << *status << "\n" << std::flush;
+      if (!std::cout) throw 1;
+    } else {
+      std::cout << "ordinary_postgresql_plumbing complete cleanup_acknowledged\n";
+    }
     return 0;
   } catch (...) {
     std::cerr << "ordinary_postgresql_plumbing failure_phase=" << phase << "\n";

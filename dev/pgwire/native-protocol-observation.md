@@ -79,6 +79,27 @@ environment fallback. It uses fixed ordinary float_bits fixture SQL to observe
 real parameters, origin/modifier fields and error SQLSTATE, then acknowledges
 cleanup. Root separately verifies schema absence. Worker/reviewer do not connect.
 
+The optional trailing `--observation-fd N` selects a separate borrowed output
+descriptor; the old stdout mode is retained. Before connecting, the test requires
+a canonical integer greater than 2 and a writable, non-append regular file owned
+by the current UID, mode 0600, one link, empty size and zero offset. The root
+creates it exclusively under its own 0700 directory. The child never opens a
+result path, truncates data or closes this caller-owned descriptor.
+
+Fd mode writes the seven actual `Observation.json` records in fixed probe order,
+each followed by LF. Limits include LF: 3 MiB per record and 4 MiB total. Whole
+record bounds precede writes; short writes and EINTR are handled, and any partial
+failure stays failed. File identity, mode, length and offset are rechecked.
+After successful fixture cleanup, fsync and final checks, stdout contains only
+one compact version-1 `adbc-local-observation-complete` status with ordinary-PG
+identity, seven records, actual bytes, libpq/server versions and cleanup
+acknowledgement. The intentional error record remains `complete=false` with
+SQLSTATE 22012; channel completion does not qualify that query or any type.
+Failed/partial output never becomes completed evidence. The 30-second process
+alarm can bypass destructors, so timeout leaves cleanup unknown until the root's
+independent absence check. Observed-change checks do not promise detection of
+every concurrent writer. This adds no parent executor or native access path.
+
 A later reviewed root adapter must bind exact source/build/libpq/session/target
 provenance, private inputs/outputs, finite admission and execution counts. This
 primitive grants none of those and changes no Task008 CI-only trust/claim gate.

@@ -143,9 +143,21 @@ if(ADBC_BUILD_TESTS)
   target_include_directories(adbc-native-protocol-capture-test SYSTEM
                              PRIVATE ${LIBPQ_INCLUDE_DIRS})
   if(UNIX)
+    add_test_case(native_protocol_output_test
+                  PREFIX
+                  adbc
+                  EXTRA_LABELS
+                  protocol-observation
+                  SOURCES
+                  ../pgwire/native_protocol_output.cc
+                  ../pgwire/native_protocol_output_test.cc)
+    target_compile_features(adbc-native-protocol-output-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-output-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
     # Explicit root-only own-PG test; never a default test or installed client.
     add_executable(adbc-native-protocol-capture-plumbing-test EXCLUDE_FROM_ALL
                    ../pgwire/native_protocol_capture.cc
+                   ../pgwire/native_protocol_output.cc
                    ../pgwire/native_protocol_capture_plumbing_test.cc)
     target_compile_features(adbc-native-protocol-capture-plumbing-test PRIVATE cxx_std_20)
     target_include_directories(adbc-native-protocol-capture-plumbing-test SYSTEM
