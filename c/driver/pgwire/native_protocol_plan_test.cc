@@ -189,7 +189,7 @@ TEST(NativePlanTest, CommandShapeAndMissingAffectedCountFailClosed) {
   EXPECT_FALSE(out.affected_rows);
   EXPECT_EQ(Plan("candidate.geometry.01").affected_rows, 1);
   EXPECT_EQ(Plan("setup.spatial_cases.baseline").affected_rows, 36);
-  EXPECT_EQ(Plan("setup.hll_input.values").affected_rows, 100000);
+  EXPECT_EQ(Plan("setup.hll_input.values").affected_rows, 32768);
   for (auto status :
        {PGRES_TUPLES_OK, PGRES_EMPTY_QUERY, PGRES_FATAL_ERROR, PGRES_COPY_IN}) {
     auto wrong = Make({}, 0, 0, status);
@@ -200,6 +200,52 @@ TEST(NativePlanTest, CommandShapeAndMissingAffectedCountFailClosed) {
   auto fields = Make({"extra"}, 0, 0, PGRES_COMMAND_OK);
   EXPECT_EQ(CaptureNativeResult(Id("setup.schema"), fields.get(), &out),
             CaptureStatus::kShapeMismatch);
+}
+TEST(NativePlanTest, HllAffectedCountMatchesLiteralFilteredCartesianSql) {
+  const auto plan = Plan("setup.hll_input.values");
+  const std::string digit_sql =
+      "(SELECT 0 AS d UNION ALL SELECT 1 AS d UNION ALL SELECT 2 AS d UNION ALL SELECT 3 "
+      "AS d UNION ALL SELECT 4 AS d UNION ALL SELECT 5 AS d UNION ALL SELECT 6 AS d "
+      "UNION ALL SELECT 7 AS d UNION ALL SELECT 8 AS d UNION ALL SELECT 9 AS d)";
+  const auto expected_sql =
+      "INSERT INTO \"" + std::string(schema) +
+      "\".\"hll_input\" SELECT a.d+10*b.d+100*c.d+1000*d.d+10000*e.d FROM " + digit_sql +
+      " a CROSS JOIN " + digit_sql + " b CROSS JOIN " + digit_sql + " c CROSS JOIN " +
+      digit_sql + " d CROSS JOIN " + digit_sql +
+      " e WHERE a.d+10*b.d+100*c.d+1000*d.d+10000*e.d<32768";
+  EXPECT_EQ(plan.sql, expected_sql);
+  constexpr std::array<int, 10> digits{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  std::array<bool, 32768> seen{};
+  int candidates = 0, retained = 0;
+  for (int a : digits)
+    for (int b : digits)
+      for (int c : digits)
+        for (int d : digits)
+          for (int e : digits) {
+            ++candidates;
+            const int n = a + 10 * b + 100 * c + 1000 * d + 10000 * e;
+            if (n < 32768) {
+              ASSERT_GE(n, 0);
+              ASSERT_FALSE(seen[n]);
+              seen[n] = true;
+              ++retained;
+            }
+          }
+  EXPECT_EQ(candidates, 100000);
+  EXPECT_EQ(retained, 32768);
+  EXPECT_TRUE(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }));
+  EXPECT_EQ(plan.affected_rows, retained);
+  EXPECT_EQ(plan.operation, NativeOperation::kCommand);
+  EXPECT_EQ(plan.protocol_calls, 1);
+  EXPECT_EQ(plan.definitive_error, NativeErrorPolicy::kStopRequired);
+  // Pure parser/compiled-plan evidence, not a fabricated server command tag.
+  // Genuine COMMAND_OK shape/missing-count negatives remain above. Root alone
+  // obtains the actual INSERT command result from its own PostgreSQL instance.
+  int64_t count = -1;
+  ASSERT_TRUE(detail::ParseAffectedRows("32768", &count));
+  EXPECT_EQ(plan.affected_rows, count);
+  ASSERT_TRUE(detail::ParseAffectedRows("100000", &count));
+  EXPECT_NE(plan.affected_rows, count);
 }
 TEST(NativePlanTest, AffectedCountParserHasIndependentLiteralBoundaries) {
   int64_t out = -1;
