@@ -83,7 +83,10 @@ actual channel/stale-fd/cleanup checks, all 31 validation steps and exact indepe
 approval). Task010g4 adds a noninstalled owned single raw replay parameter with
 separate controlled NULL/empty trials (locally integrated def7084; independent
 approval, all 31 validation steps and ten own-PG echoes/15 calls). Task010h0 adds
-closed compiled discovery plans/capture shapes; validation/review pending.
+closed compiled discovery plans/capture shapes (locally integrated 4bdc23b;
+independent approval, all 31 serial stages and nine own-PG checks/15 calls).
+Task010h1 adds the noninstalled closed 715-step async runner and eight bounded
+output descriptors; exact review and root serial validation are pending.
 These dependencies do not supply native
 execution, broader runtime closure or live authority; see
 [the local evidence boundary](local-qualification-evidence.md). Native interval constraint

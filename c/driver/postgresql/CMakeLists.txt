@@ -127,6 +127,16 @@ else()
   set(REDSHIFT_TEST_LINK_LIBS adbc_driver_redshift_static)
 endif()
 
+# Explicitly built noninstalled native discovery dependency; never driver input.
+if(UNIX)
+  add_library(adbc_native_protocol_runner STATIC EXCLUDE_FROM_ALL
+              ../pgwire/native_protocol_capture.cc ../pgwire/native_protocol_runner.cc)
+  target_compile_features(adbc_native_protocol_runner PRIVATE cxx_std_20)
+  target_include_directories(adbc_native_protocol_runner SYSTEM
+                             PRIVATE ${LIBPQ_INCLUDE_DIRS})
+  target_link_libraries(adbc_native_protocol_runner PRIVATE ${LIBPQ_LINK_LIBRARIES})
+endif()
+
 if(ADBC_BUILD_TESTS)
   # Observer/test code is excluded from both driver source and install lists.
   add_test_case(native_protocol_capture_test
@@ -144,6 +154,20 @@ if(ADBC_BUILD_TESTS)
   target_include_directories(adbc-native-protocol-capture-test SYSTEM
                              PRIVATE ${LIBPQ_INCLUDE_DIRS})
   if(UNIX)
+    # Test includes runner.cc for translation-unit-private socket-free seams.
+    add_test_case(native_protocol_runner_test
+                  PREFIX
+                  adbc
+                  EXTRA_LABELS
+                  protocol-observation
+                  SOURCES
+                  ../pgwire/native_protocol_capture.cc
+                  ../pgwire/native_protocol_runner_test.cc
+                  EXTRA_LINK_LIBS
+                  ${LIBPQ_LINK_LIBRARIES})
+    target_compile_features(adbc-native-protocol-runner-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-runner-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
     add_test_case(native_protocol_output_test
                   PREFIX
                   adbc

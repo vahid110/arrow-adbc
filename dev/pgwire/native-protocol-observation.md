@@ -156,3 +156,45 @@ primitive grants none of those and changes no Task008 CI-only trust/claim gate.
 The previous paid batch remains spent. Local-first development, full21 installed
 acceptance, finite own-resource teardown, final applicable CI and separate release
 authority remain required; no remote or live execution is introduced here.
+
+## Closed runner (Task010h1)
+
+`RunNativeDiscovery` is a noninstalled POSIX library entry with two borrowed,
+already-connected, distinct nonblocking/autocommit sessions and eight borrowed
+private output files. It executes only H0's 715 compiled steps, at most 833 send
+operations. A prepare/describe pair shares one three-second deadline; only the
+five selected HLL setup steps have ten seconds. Discovery is at most 720 seconds
+with a separate 180-second cleanup reserve. No connect/authentication, CLI,
+plan loader, alternate SQL/format, retry, cancellation or reconnect is provided.
+The caller must authenticate the source/runtime/resource/one-use operation and
+exact cleanup schema before calling. Borrowed handles or schema syntax are not
+admission. The socket-free default test is `adbc-native-protocol-runner-test`.
+
+Actual UTF8 is checked before SQL and interpretation. Selected SET plus exact
+SHOW facts qualify each session only for subsequent work; earlier catalog/alias
+records explicitly remain context-unqualified. Required setup/context failures
+stop discovery. Definitive exploratory SQL errors skip actual descendants;
+transport, timeout, missing/invalid SQLSTATE and unfamiliar outcomes stop and
+spend the attempt. Cached fixed parameter baselines have a conservative 16 MiB
+owned-storage cap (excluding allocator overhead and libpq receive storage) and
+are released after last use. Positive replay uses actual format and stable G4
+owned bytes; controlled NULL/empty trials retain distinct origins.
+
+On uncertain in-flight parameter execution, the returned result retains its
+owner. Root must close/discard the corresponding sessions **before destroying
+that result**; return does not mean completed execution or cancellation. The
+runner never closes borrowed sessions or descriptors. Its sole DROP is a finally
+action only after positively completed, captured creation in this invocation and
+matching root-authenticated cleanup schema. Duplicate or uncertain CREATE grants
+no SQL cleanup ownership. Primary failure survives cleanup failure; independent
+schema/resource absence remains a root duty.
+
+Each JSONL record including LF/metadata is at most 3 MiB, each fixed group 4 MiB,
+and all eight groups 32 MiB. Short writes/EINTR, sticky failures, fd identity,
+mode/owner/offset/size and final fsync are checked. Step/error/skip records count
+toward every cap; a final accounting record plus successful return/reap is needed
+for transport completion. None is type compatibility. PGresult extraction caps
+do not bound receive memory, allocator overhead or a blocked kernel operation:
+root process/RSS/receive/deadline containment and exact admission are still
+required before any paid execution. H1 introduces no native/all-type support,
+installed consumer proof or renewed Task008 spending authority.

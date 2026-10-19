@@ -82,7 +82,10 @@ Current state only; history is in git and PR descriptions.
   a noninstalled owned single replay parameter with distinct observed and
   controlled NULL/empty origins (locally integrated def7084; independent approval,
   all 31 serial validation steps and ten own-PG echoes/15 calls). Task010h0 adds
-  closed compiled native discovery plans/capture shapes; validation/review pending.
+  closed compiled native discovery plans/capture shapes (locally integrated 4bdc23b;
+  independent approval, all 31 serial stages and nine own-PG checks/15 calls).
+  Task010h1 adds the noninstalled closed 715-step async runner and eight bounded
+  output descriptors; exact review and root serial validation are pending.
   Broader runtime closure and the local execution/live handoff remain
   separate prerequisites. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.

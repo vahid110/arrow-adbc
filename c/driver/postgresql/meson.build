@@ -200,6 +200,28 @@ protocol_capture = executable(
 )
 test('adbc-native-protocol-capture', protocol_capture, timeout: 30)
 if host_machine.system() != 'windows'
+    static_library(
+        'adbc_native_protocol_runner',
+        sources: [
+            '../pgwire/native_protocol_capture.cc',
+            '../pgwire/native_protocol_runner.cc',
+        ],
+        dependencies: [libpq_dep],
+        override_options: ['cpp_std=c++20'],
+        build_by_default: false,
+        install: false,
+    )
+    protocol_runner = executable(
+        'adbc-native-protocol-runner-test',
+        sources: [
+            '../pgwire/native_protocol_capture.cc',
+            '../pgwire/native_protocol_runner_test.cc',
+        ],
+        dependencies: [libpq_dep, gtest_main_dep],
+        override_options: ['cpp_std=c++20'],
+        install: false,
+    )
+    test('adbc-native-protocol-runner-test', protocol_runner, timeout: 30)
     protocol_output = executable(
         'adbc-native-protocol-output-test',
         sources: [
