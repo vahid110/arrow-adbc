@@ -368,6 +368,90 @@ std::optional<ProbePlan> BuildProbe(ProbeId id, std::string_view schema) noexcep
     return std::nullopt;
   }
 }
+ParameterStatus RawParameter::Prepare(const Observation& source, size_t row,
+                                      size_t field) noexcept {
+  return PrepareImpl(source, row, field, ParameterOrigin::kObserved, std::nullopt);
+}
+ParameterStatus RawParameter::PrepareFixture(const Observation& source, size_t row,
+                                             size_t field, ParameterOrigin origin,
+                                             int requested_format) noexcept {
+  return PrepareImpl(source, row, field, origin, requested_format);
+}
+ParameterStatus RawParameter::PrepareImpl(const Observation& source, size_t row,
+                                          size_t field, ParameterOrigin origin,
+                                          std::optional<int> fixture_format) noexcept {
+  // Invalidate access before even validation/allocation. Old views have expired.
+  ready_ = false;
+  bytes_.clear();
+  type_ = 0;
+  format_ = length_ = 0;
+  null_ = true;
+  origin_ = ParameterOrigin::kObserved;
+  if (fixture_format) {
+    if (origin != ParameterOrigin::kFixtureNull &&
+        origin != ParameterOrigin::kFixtureEmpty)
+      return ParameterStatus::kInvalidOrigin;
+    if (*fixture_format != 0 && *fixture_format != 1)
+      return ParameterStatus::kInvalidFormat;
+  } else if (origin != ParameterOrigin::kObserved) {
+    return ParameterStatus::kInvalidOrigin;
+  }
+  const CaptureLimits hard;
+  if (!source.present || !source.complete || source.result_status != PGRES_TUPLES_OK ||
+      !source.row_count || !source.field_count || *source.row_count < 0 ||
+      *source.row_count > 63 || *source.field_count <= 0 ||
+      *source.field_count > hard.fields ||
+      source.rows.size() != static_cast<size_t>(*source.row_count) ||
+      source.fields.size() != static_cast<size_t>(*source.field_count) ||
+      source.parameters || source.sqlstate || source.failure_row ||
+      source.failure_field || source.failure_length || source.json.empty() ||
+      source.json.size() > static_cast<uint64_t>(hard.encoded_bytes))
+    return ParameterStatus::kInvalidObservation;
+  for (const auto& descriptor : source.fields) {
+    if (!descriptor.oid || (descriptor.format != 0 && descriptor.format != 1) ||
+        descriptor.name.empty() ||
+        descriptor.name.size() > static_cast<uint64_t>(hard.name_bytes))
+      return ParameterStatus::kInvalidObservation;
+  }
+  uint64_t body = 0;
+  for (const auto& cells : source.rows) {
+    if (cells.size() != source.fields.size()) return ParameterStatus::kInvalidObservation;
+    for (size_t i = 0; i < cells.size(); ++i) {
+      const auto& cell = cells[i];
+      if (cell.length < 0 || cell.length > hard.cell_bytes ||
+          cell.bytes.size() != static_cast<uint64_t>(cell.length) ||
+          (cell.is_null && (cell.length != 0 || !cell.bytes.empty())) ||
+          !detail::CheckedAdd(body, cell.bytes.size(), hard.body_bytes, &body))
+        return ParameterStatus::kInvalidObservation;
+      if (source.fields[i].format == 0 && cell.bytes.find('\0') != std::string::npos)
+        return ParameterStatus::kInvalidText;
+    }
+  }
+  if (row >= source.rows.size() || field >= source.fields.size())
+    return ParameterStatus::kInvalidSelection;
+  const auto& cell = source.rows[row][field];
+  try {
+    // Stage ownership before publishing metadata; std::string owns its final NUL.
+    std::string staged;
+    if (origin == ParameterOrigin::kObserved && !cell.is_null) staged = cell.bytes;
+    bytes_.swap(staged);
+    type_ = source.fields[field].oid;
+    format_ = fixture_format.value_or(source.fields[field].format);
+    null_ = origin == ParameterOrigin::kFixtureNull ||
+            (origin == ParameterOrigin::kObserved && cell.is_null);
+    length_ = static_cast<int>(bytes_.size());  // Validated at most 65536 above.
+    origin_ = origin;
+    ready_ = true;
+    return ParameterStatus::kReady;
+  } catch (...) {
+    return ParameterStatus::kAllocationFailure;
+  }
+}
+std::optional<RawParameterView> RawParameter::Get() const noexcept {
+  if (!ready_) return std::nullopt;
+  return RawParameterView{type_, format_, length_, null_ ? nullptr : bytes_.c_str(),
+                          origin_};
+}
 const char* CaptureStatusName(CaptureStatus value) noexcept {
   switch (value) {
     case CaptureStatus::kComplete:

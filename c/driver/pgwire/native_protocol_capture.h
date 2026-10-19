@@ -18,6 +18,7 @@
 #pragma once
 
 #include <libpq-fe.h>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -127,6 +128,51 @@ struct Observation {
 // or JSON; the separate nonallocating return status remains authoritative.
 CaptureStatus CaptureResult(ProbeId id, const PGresult* result, Observation* out,
                             CaptureLimits limits = {}) noexcept;
+
+enum class ParameterOrigin { kObserved, kFixtureNull, kFixtureEmpty };
+enum class ParameterStatus {
+  kReady,
+  kInvalidObservation,
+  kInvalidSelection,
+  kInvalidOrigin,
+  kInvalidFormat,
+  kInvalidText,
+  kAllocationFailure
+};
+struct RawParameterView {
+  Oid type;
+  int format, length;
+  const char* value;
+  ParameterOrigin origin;
+};
+// Single noninstalled replay input, not a codec, executor or admission proof.
+// Every Prepare attempt expires previous views, even on failure. A valid SQL
+// NULL is an engaged view with nullptr; failed/unprepared Get returns nullopt.
+// The source may be destroyed after Prepare. This owner cannot move/copy; views
+// remain stable only until the next Prepare attempt or owner destruction.
+class RawParameter {
+ public:
+  RawParameter() = default;
+  RawParameter(const RawParameter&) = delete;
+  RawParameter& operator=(const RawParameter&) = delete;
+  RawParameter(RawParameter&&) = delete;
+  RawParameter& operator=(RawParameter&&) = delete;
+  ParameterStatus Prepare(const Observation& source, size_t row, size_t field) noexcept;
+  // Controlled NULL/empty trial only: never reinterpret an observed positive body.
+  ParameterStatus PrepareFixture(const Observation& source, size_t row, size_t field,
+                                 ParameterOrigin origin, int requested_format) noexcept;
+  std::optional<RawParameterView> Get() const noexcept;
+
+ private:
+  ParameterStatus PrepareImpl(const Observation& source, size_t row, size_t field,
+                              ParameterOrigin origin,
+                              std::optional<int> fixture_format) noexcept;
+  std::string bytes_;
+  Oid type_ = 0;
+  int format_ = 0, length_ = 0;
+  bool ready_ = false, null_ = true;
+  ParameterOrigin origin_ = ParameterOrigin::kObserved;
+};
 namespace detail {
 bool CheckedAdd(uint64_t a, uint64_t b, uint64_t ceiling, uint64_t* out) noexcept;
 bool CheckedMultiply(uint64_t a, uint64_t b, uint64_t ceiling, uint64_t* out) noexcept;

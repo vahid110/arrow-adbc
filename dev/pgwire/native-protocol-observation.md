@@ -100,6 +100,24 @@ alarm can bypass destructors, so timeout leaves cleanup unknown until the root's
 independent absence check. Observed-change checks do not promise detection of
 every concurrent writer. This adds no parent executor or native access path.
 
+`RawParameter` is a noninstalled single-input owner for a later fixed replay
+frontend. It requires a present, complete TUPLES_OK row observation with consistent
+bounded dimensions, nonzero observed OIDs, actual formats 0/1 and exact cell/null
+storage. It rechecks the whole observation before copying the selected cell;
+format-mismatch diagnostics cannot supply a baseline. `Prepare` preserves the
+observed OID, format and body. Text rejects embedded NUL and owns a final NUL
+outside the payload length; binary retains every byte. SQL NULL has a null pointer,
+while empty non-null input has a non-null pointer in either format.
+
+Separate `PrepareFixture` accepts only controlled NULL/empty trials using an
+observed field identity and an explicit requested format 0/1. It never reinterprets
+an observed positive body. The exposed origin distinguishes these trials from
+observed replay; neither establishes receiver acceptance or native encoding.
+The owner cannot copy/move. Views survive source mutation/destruction, but expire
+on every preparation attempt or owner destruction. Failed/unprepared access is
+`nullopt`, distinct from a valid SQL NULL view. Allocation failure leaves no
+usable parameter. This adds no SQL, execution path, production writer or codec.
+
 A later reviewed root adapter must bind exact source/build/libpq/session/target
 provenance, private inputs/outputs, finite admission and execution counts. This
 primitive grants none of those and changes no Task008 CI-only trust/claim gate.

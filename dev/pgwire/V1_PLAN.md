@@ -78,8 +78,11 @@ Task010g1 adds trusted in-place install comparisons and fixed same-host load-onl
 observations (locally integrated 0285eba after actual named G0 artifact load,
 retained 30-step validation and exact independent approval). Collector G1 and
 artifact G0 identities remain distinct. Task010g2 adds a bounded output fd for
-the existing fixed seven-probe own-PG plumbing test; actual channel validation
-and independent review are pending. These dependencies do not supply native
+the existing fixed seven-probe own-PG plumbing test (locally integrated cfe9feb;
+actual channel/stale-fd/cleanup checks, all 31 validation steps and exact independent
+approval). Task010g4 adds a noninstalled owned single raw replay parameter with
+separate controlled NULL/empty trials; final validation/review are pending.
+These dependencies do not supply native
 execution, broader runtime closure or live authority; see
 [the local evidence boundary](local-qualification-evidence.md). Native interval constraint
 producers remain unqualified, blocking actual

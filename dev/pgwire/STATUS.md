@@ -76,8 +76,11 @@ Current state only; history is in git and PR descriptions.
   and a fixed same-host load-only observation (locally integrated 0285eba after
   exact independent approval and all 30 serial validation steps). Its named G0
   artifact load observed 328 images: 28 non-OS and 300 OS; collector source is G1.
-  Task010g2 adds a bounded output fd for the existing seven-probe own-PG test;
-  final actual channel validation and review are pending.
+  Task010g2 adds a bounded output fd for the existing seven-probe own-PG test
+  (locally integrated cfe9feb after actual seven-record/stale-fd/cleanup checks,
+  all 31 serial validation steps and exact independent approval). Task010g4 adds
+  a noninstalled owned single replay parameter with distinct observed and
+  controlled NULL/empty origins; final validation/review are pending.
   Broader runtime closure and the local execution/live handoff remain
   separate prerequisites. Synthetic/local PostgreSQL
   evidence does not qualify Redshift; platform CI follows the local-first workflow.

@@ -25,6 +25,7 @@
 #include <new>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // This separate test executable fails only C++ owned-output allocation. No
@@ -419,6 +420,312 @@ TEST(NativeProtocolCaptureTest, OwnedOutputAllocationFailureClearsStaleSuccess) 
     }
   }
   EXPECT_GT(failures, 0);
+}
+// Arbitrary nonzero test OIDs are returned by genuine libpq PGresult utilities;
+// these literal payloads are not a claim about any native vendor wire layout.
+Observation ReplaySource(int format, std::string_view bytes, int count = 1,
+                         bool two_bodies = false) {
+  Result result(PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK));
+  const char* names[] = {"case_id", "real_value", "double_value"};
+  PGresAttDesc attrs[3]{};
+  for (int i = 0; i < 3; ++i) {
+    attrs[i].name = const_cast<char*>(names[i]);
+    attrs[i].typid = i == 2 ? UINT32_MAX : 400000001U + i;
+    attrs[i].format = format;
+    attrs[i].atttypmod = -1;
+  }
+  if (!result || !PQsetResultAttrs(result.get(), 3, attrs)) return {};
+  for (int row = 0; row < count; ++row) {
+    if (!PQsetvalue(result.get(), row, 0, const_cast<char*>(bytes.data()),
+                    static_cast<int>(bytes.size())) ||
+        !PQsetvalue(result.get(), row, 1,
+                    const_cast<char*>(two_bodies ? bytes.data() : ""),
+                    two_bodies ? static_cast<int>(bytes.size()) : 0) ||
+        !PQsetvalue(result.get(), row, 2, nullptr, 0))
+      return {};
+  }
+  Observation out;
+  EXPECT_EQ(CaptureResult(format == 0 ? ProbeId::kFloatBitsValuesText : rows_id,
+                          result.get(), &out),
+            CaptureStatus::kComplete);
+  return out;
+}
+static_assert(!std::is_copy_constructible_v<RawParameter> &&
+              !std::is_copy_assignable_v<RawParameter> &&
+              !std::is_move_constructible_v<RawParameter> &&
+              !std::is_move_assignable_v<RawParameter>);
+
+TEST(NativeRawParameterTest, TextOwnsSliceUnicodeAndFinalNulAfterSourceDestruction) {
+  RawParameter input;
+  EXPECT_FALSE(input.Get());
+  const char literal[] = {'a', 'b', 'c'};  // No input terminator.
+  {
+    auto source = ReplaySource(0, std::string_view(literal, sizeof(literal)));
+    ASSERT_EQ(input.Prepare(source, 0, 0), ParameterStatus::kReady);
+    source.rows[0][0].bytes.assign("changed");
+  }
+  auto view = input.Get();
+  ASSERT_TRUE(view);
+  EXPECT_EQ(view->type, 400000001U);
+  EXPECT_EQ(view->format, 0);
+  EXPECT_EQ(view->length, 3);
+  EXPECT_EQ(std::string(view->value, view->length), "abc");
+  EXPECT_EQ(view->value[view->length], '\0');
+  const auto* stable = view->value;
+  EXPECT_EQ(input.Get()->value, stable);
+  const std::string wrapped = "X\xc3\xa9\xf0\x9f\x99\x82Y";
+  auto unicode = ReplaySource(0, std::string_view(wrapped).substr(1, 6));
+  ASSERT_EQ(input.Prepare(unicode, 0, 0), ParameterStatus::kReady);
+  view = input.Get();
+  ASSERT_TRUE(view);
+  EXPECT_EQ(view->length, 6);
+  EXPECT_EQ(std::string(view->value, view->length), wrapped.substr(1, 6));
+  EXPECT_EQ(view->value[6], '\0');
+}
+TEST(NativeRawParameterTest, BinaryRetainsEveryByteAndSourceMutationCannotChangeIt) {
+  std::string literal;
+  for (int i = 0; i < 256; ++i) literal.push_back(static_cast<char>(i));
+  RawParameter input;
+  auto source = ReplaySource(1, literal);
+  ASSERT_EQ(input.Prepare(source, 0, 0), ParameterStatus::kReady);
+  source = {};
+  const auto view = input.Get();
+  ASSERT_TRUE(view);
+  EXPECT_EQ(view->format, 1);
+  EXPECT_EQ(view->length, 256);
+  EXPECT_EQ(view->origin, ParameterOrigin::kObserved);
+  EXPECT_EQ(std::string(view->value, view->length), literal);
+}
+TEST(NativeRawParameterTest, ObservedNullAndEmptyAndExplicitVariantsAreDistinct) {
+  for (int format : {0, 1}) {
+    auto source = ReplaySource(format, "body");
+    RawParameter input;
+    for (int requested : {0, 1}) {
+      for (const auto origin : {ParameterOrigin::kObserved, ParameterOrigin::kFixtureNull,
+                                ParameterOrigin::kFixtureEmpty}) {
+        for (size_t field : {size_t{0}, size_t{1}, size_t{2}}) {
+          const auto status =
+              origin == ParameterOrigin::kObserved
+                  ? input.Prepare(source, 0, field)
+                  : input.PrepareFixture(source, 0, field, origin, requested);
+          ASSERT_EQ(status, ParameterStatus::kReady);
+          const auto view = input.Get();
+          ASSERT_TRUE(view);
+          EXPECT_EQ(view->origin, origin);
+          EXPECT_EQ(view->format,
+                    origin == ParameterOrigin::kObserved ? format : requested);
+          EXPECT_EQ(view->type, source.fields[field].oid);
+          const bool is_null = origin == ParameterOrigin::kFixtureNull ||
+                               (origin == ParameterOrigin::kObserved && field == 2);
+          EXPECT_EQ(view->value == nullptr, is_null);
+          EXPECT_EQ(view->length,
+                    origin == ParameterOrigin::kObserved && field == 0 ? 4 : 0);
+          if (!is_null) EXPECT_EQ(view->value[view->length], '\0');
+        }
+      }
+    }
+  }
+}
+TEST(NativeRawParameterTest, EmbeddedTextNulRejectsWithoutReclassifyingBinary) {
+  const std::string bytes("a\0b", 3);
+  const auto text = ReplaySource(0, bytes);
+  const auto binary = ReplaySource(1, bytes);
+  RawParameter input;
+  for (auto origin : {ParameterOrigin::kObserved, ParameterOrigin::kFixtureNull,
+                      ParameterOrigin::kFixtureEmpty}) {
+    ASSERT_EQ(input.Prepare(binary, 0, 0), ParameterStatus::kReady);
+    const auto status = origin == ParameterOrigin::kObserved
+                            ? input.Prepare(text, 0, 0)
+                            : input.PrepareFixture(text, 0, 0, origin, 1);
+    EXPECT_EQ(status, ParameterStatus::kInvalidText);
+    EXPECT_FALSE(input.Get());
+  }
+}
+TEST(NativeRawParameterTest, EveryInvalidObservationExpiresNonnullEmptyAndNullViews) {
+  auto good = ReplaySource(1, "ok");
+  for (size_t prior : {size_t{0}, size_t{1}, size_t{2}}) {
+    for (int change = 0; change < 27; ++change) {
+      auto bad = good;
+      switch (change) {
+        case 0:
+          bad.present = false;
+          break;
+        case 1:
+          bad.complete = false;
+          break;
+        case 2:
+          bad.result_status = PGRES_COMMAND_OK;
+          break;
+        case 3:
+          bad.result_status.reset();
+          break;
+        case 4:
+          bad.row_count.reset();
+          break;
+        case 5:
+          bad.field_count.reset();
+          break;
+        case 6:
+          bad.row_count = -1;
+          break;
+        case 7:
+          bad.row_count = 64;
+          break;
+        case 8:
+          bad.field_count = 65;
+          break;
+        case 9:
+          bad.rows.clear();
+          break;
+        case 10:
+          bad.fields.clear();
+          break;
+        case 11:
+          bad.rows[0].pop_back();
+          break;
+        case 12:
+          bad.fields[0].oid = 0;
+          break;
+        case 13:
+          bad.fields[1].format = 2;
+          break;
+        case 14:
+          bad.fields[0].format = -1;
+          break;
+        case 15:
+          bad.rows[0][0].length = -1;
+          break;
+        case 16:
+          bad.rows[0][0].length = 65537;
+          break;
+        case 17:
+          bad.rows[0][0].length = INT64_MAX;
+          break;
+        case 18:
+          bad.rows[0][0].length = 1;
+          break;
+        case 19:
+          bad.rows[0][0].is_null = true;
+          break;
+        case 20:
+          bad.rows[0][2].bytes = "x";
+          break;
+        case 21:
+          bad.parameters = std::vector<uint32_t>{1};
+          break;
+        case 22:
+          bad.sqlstate = "22012";
+          break;
+        case 23:
+          bad.failure_field = 0;
+          break;
+        case 24:
+          bad.json.clear();
+          break;
+        case 25:
+          bad.fields[0].name.clear();
+          break;
+        case 26:
+          bad.fields[0].name.assign(128, 'x');
+          break;
+      }
+      RawParameter input;
+      ASSERT_EQ(input.Prepare(good, 0, prior), ParameterStatus::kReady);
+      const auto original = bad.json;
+      EXPECT_NE(input.Prepare(bad, 0, 0), ParameterStatus::kReady) << change;
+      EXPECT_FALSE(input.Get()) << change;
+      EXPECT_EQ(bad.json, original);
+      ASSERT_EQ(input.Prepare(good, 0, 0), ParameterStatus::kReady);
+      EXPECT_EQ(std::string(input.Get()->value, input.Get()->length), "ok");
+    }
+  }
+}
+TEST(NativeRawParameterTest, SelectionEmptyResultAndUnknownOriginInvalidateAccess) {
+  auto source = ReplaySource(1, "ok");
+  RawParameter input;
+  for (auto index : {size_t{3}, SIZE_MAX}) {
+    ASSERT_EQ(input.Prepare(source, 0, 2), ParameterStatus::kReady);
+    EXPECT_EQ(input.Prepare(source, 0, index), ParameterStatus::kInvalidSelection);
+    EXPECT_FALSE(input.Get());
+    ASSERT_EQ(input.Prepare(source, 0, 1), ParameterStatus::kReady);
+    EXPECT_EQ(input.Prepare(source, index, 0), ParameterStatus::kInvalidSelection);
+    EXPECT_FALSE(input.Get());
+  }
+  ASSERT_EQ(input.Prepare(source, 0, 0), ParameterStatus::kReady);
+  EXPECT_EQ(input.PrepareFixture(source, 0, 0, static_cast<ParameterOrigin>(99), 1),
+            ParameterStatus::kInvalidOrigin);
+  EXPECT_FALSE(input.Get());
+  auto empty = ReplaySource(1, "", 0);
+  EXPECT_EQ(input.PrepareFixture(empty, 0, 0, ParameterOrigin::kFixtureEmpty, 0),
+            ParameterStatus::kInvalidSelection);
+  EXPECT_FALSE(input.Get());
+}
+TEST(NativeRawParameterTest, FixtureOnlyFormatAndOriginFailuresExpireEveryPriorValue) {
+  const auto source = ReplaySource(1, std::string("a\0b", 3));
+  RawParameter input;
+  for (size_t prior : {size_t{0}, size_t{1}, size_t{2}}) {
+    for (int format : {-1, 2, INT_MAX}) {
+      ASSERT_EQ(input.Prepare(source, 0, prior), ParameterStatus::kReady);
+      EXPECT_EQ(
+          input.PrepareFixture(source, 0, 0, ParameterOrigin::kFixtureEmpty, format),
+          ParameterStatus::kInvalidFormat);
+      EXPECT_FALSE(input.Get());
+    }
+    for (auto origin : {ParameterOrigin::kObserved, static_cast<ParameterOrigin>(99)}) {
+      ASSERT_EQ(input.Prepare(source, 0, prior), ParameterStatus::kReady);
+      EXPECT_EQ(input.PrepareFixture(source, 0, 0, origin, 0),
+                ParameterStatus::kInvalidOrigin);
+      EXPECT_FALSE(input.Get());
+    }
+  }
+  // Binary positive bytes containing NUL are never copied/reclassified by fixtures.
+  for (auto origin : {ParameterOrigin::kFixtureNull, ParameterOrigin::kFixtureEmpty}) {
+    ASSERT_EQ(input.PrepareFixture(source, 0, 0, origin, 0), ParameterStatus::kReady);
+    ASSERT_TRUE(input.Get());
+    EXPECT_EQ(input.Get()->format, 0);
+    EXPECT_EQ(input.Get()->length, 0);
+    EXPECT_EQ(input.Get()->value == nullptr, origin == ParameterOrigin::kFixtureNull);
+  }
+}
+TEST(NativeRawParameterTest, ExactCellAndAggregateBoundsPrecedeAllocation) {
+  const std::string literal(65536, 'x');
+  auto source = ReplaySource(1, literal, 8, true);
+  ASSERT_TRUE(source.complete);
+  RawParameter input;
+  ASSERT_EQ(input.Prepare(source, 7, 1), ParameterStatus::kReady);
+  ASSERT_TRUE(input.Get());
+  EXPECT_EQ(input.Get()->length, 65536);
+  EXPECT_EQ(std::string(input.Get()->value, input.Get()->length), literal);
+  source.rows[0][2] = CapturedCell{false, 1, "x"};
+  allocation_fail_after = 0;
+  const auto invalid = input.Prepare(source, 0, 0);
+  allocation_fail_after = -1;
+  EXPECT_EQ(invalid, ParameterStatus::kInvalidObservation);
+  EXPECT_FALSE(input.Get());
+  source = ReplaySource(1, literal);
+  source.rows[0][0].bytes.push_back('x');
+  source.rows[0][0].length = 65537;
+  EXPECT_EQ(input.Prepare(source, 0, 0), ParameterStatus::kInvalidObservation);
+  EXPECT_FALSE(input.Get());
+}
+TEST(NativeRawParameterTest,
+     AllocationFailureInvalidatesAndSsoLongReuseRegeneratesViews) {
+  auto short_source = ReplaySource(0, "SSO");
+  auto long_source = ReplaySource(0, std::string(65536, 'q'));
+  RawParameter input;
+  for (size_t prior : {size_t{0}, size_t{1}, size_t{2}}) {
+    ASSERT_EQ(input.Prepare(short_source, 0, prior), ParameterStatus::kReady);
+    allocation_fail_after = 0;
+    const auto status = input.Prepare(long_source, 0, 0);
+    allocation_fail_after = -1;
+    EXPECT_EQ(status, ParameterStatus::kAllocationFailure);
+    EXPECT_FALSE(input.Get());
+    ASSERT_EQ(input.Prepare(long_source, 0, 0), ParameterStatus::kReady);
+    EXPECT_EQ(input.Get()->length, 65536);
+    EXPECT_EQ(input.Get()->value[65536], '\0');
+    ASSERT_EQ(input.Prepare(short_source, 0, 0), ParameterStatus::kReady);
+    EXPECT_EQ(std::string(input.Get()->value, input.Get()->length), "SSO");
+  }
 }
 }  // namespace
 }  // namespace adbc::qualification
