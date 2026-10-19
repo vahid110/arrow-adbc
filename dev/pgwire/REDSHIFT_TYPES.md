@@ -650,9 +650,12 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **010e3 locally integrated e2df066, independent FULL approval and 25 validation steps passed:** explicit TIMETZ fixed-offset
   struct, checked reference codecs, source/actual-target precision and bare DDL.
   Native layout/domain/offset/precision qualification remains open.
-- **010f0 implemented, final local validation/review pending:** noninstalled bounded
+- **010f0 locally integrated 65e7e9b, independent FULL approval and 30 validation steps passed:** noninstalled bounded
   raw-protocol observations and fixed probe plans, not a native executor or type codec.
   See [the observation boundary](native-protocol-observation.md).
+- **Local evidence dependencies:** G0 (1f35366) and G1 (0285eba) are locally integrated
+  after exact independent approval and retained validation. G1's named load uses
+  approved G0 artifacts; it is not native execution or additional type coverage.
 - **Prepared successors, not dispatched here:** native SUPER and lossless extension/protocol decisions;
   HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
   these phases; no arbitrary future phase number implies completion or authority.
