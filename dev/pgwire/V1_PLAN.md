@@ -85,18 +85,19 @@ separate controlled NULL/empty trials (locally integrated def7084; independent
 approval, all 31 validation steps and ten own-PG echoes/15 calls). Task010h0 adds
 closed compiled discovery plans/capture shapes (locally integrated 4bdc23b;
 independent approval, all 31 serial stages and nine own-PG checks/15 calls).
-Task010h1 adds the noninstalled closed 715-step async runner and eight bounded
-output descriptors; exact review and root serial validation are pending.
-These dependencies do not supply native
-execution, broader runtime closure or live authority; see
-[the local evidence boundary](local-qualification-evidence.md). Native interval constraint
+Task010h1's noninstalled closed 715-step async runner and eight bounded output
+files are locally integrated at `3c956e3` after exact independent approval and all 32
+serial validation stages. Later private admitted runs retain raw native protocol
+observations separately from installed-driver acceptance; see
+[the local evidence boundary](local-qualification-evidence.md). These components
+grant no live authority. Native interval constraint
 producers remain unqualified, blocking actual
 target writes even for NULL/empty input. Native temporal endpoints,
 sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
 Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
 native character/binary boundaries, TIMETZ layout/domain/offset/precision, SUPER, HLL and spatial
-work remain open before
-separately authorized installed-artifact qualification.
+full-envelope qualification remain open; the bounded installed vendor subset
+below does not close the full 21-type milestone.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer
 remain paused. No release-ready claim is made.
@@ -150,24 +151,13 @@ need before it is scheduled. Type-specific large-value transport requirements
 identified by Task010 are release decisions, not a blanket type deferral.
 
 
-Task010i1's bounded SUPER JSON-subset generated-ingest slice is locally integrated
-and independently reviewed with rebuilt/installed offline gates. Native acceptance
-and lossless SUPER reads remain open. Task010i2 adds useful bounded EWKB spatial
-read/generated raw-EWKB VARBYTE constructor writes and HLL serialization text writes
-plus all-HLL projection reads. Mixed HLL results and direct spatial/SUPER binds
-remain unsupported; no arbitrary SQL rewrite or binary fallback is selected.
-Vendor REPLACE still rejects before DROP, with existing CREATE residue/APPEND
-ownership boundaries. Source review and rebuilt installed offline gates passed;
-corrected native acceptance remains required. These subsets do not imply all21
-qualification.
-
-Task010j corrects generated spatial payloads to raw EWKB following installed
-POINT controls, and maps validated vendor payload errors to INVALID_ARGUMENT.
-Corrected full installed roundtrips remain pending; existing caps, null semantics,
-transaction ownership and unsupported routes stay unchanged.
-
-Task010k resolves Redshift's documented GEOMETRY output identity through its
-unique catalog descriptor, preserving raw output identity and typed EWKB
-validation. Catalog/parameter identities and PostgreSQL unknown types stay
-unchanged; conflicting/missing identities reject. Fresh corrected live proof
-remains required.
+Task010i1/i2/j/k are locally integrated at `a239f66cc` with independent source
+approval and rebuilt/installed offline validation. Operation `726f4b3594e048e29f4571b2770549c3` on 2026-10-21
+passed the fixed 18-case macOS arm64 installed-driver subset: SUPER JSON-subset
+CREATE/APPEND, spatial CREATE/readback, HLL CREATE/readback/text parameters,
+VARBYTE binary readback and three explicit rejection boundaries. The actual
+binary source remains `a239f66cc`, not this later docs-only checkpoint.
+All seven owned resource classes were verified absent after child reap.
+Full 21-type/domain/boundary/platform acceptance remains open. Mixed HLL output, direct SUPER/spatial binds and lossless
+native SUPER reads stay unsupported; no arbitrary SQL rewrite or fallback is
+selected. Existing size caps, NULL semantics and transaction ownership remain.

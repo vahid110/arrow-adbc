@@ -27,8 +27,8 @@ The implementation is fully open source: inspect, build, modify and redistribute
 it under the existing applicable licenses and third-party notices. This fork
 is the independent ADBC delivery route, separate from the Foundry Redshift driver.
 It is a development driver.
-**No public release or PyPI publication is claimed here.** Installed-artifact
-live qualification for v1 is still pending.
+**No public release or PyPI publication is claimed here.** Full installed-artifact
+qualification across all 21 types, boundaries and portable platforms remains open.
 
 Installation
 ============
@@ -257,9 +257,12 @@ Portable wheel checks cover installation/import and PostgreSQL rejection.
      - x64 only
 
 Linux wheels require glibc >=2.28; musl/Alpine is not qualified. The macOS
-minimums are build targets, not tests on those oldest OS versions. No installed
-wheel has passed the planned live v1 qualification batch. Other archive
-OS/CPU combinations are not qualified.
+minimums are build targets, not tests on those oldest OS versions. The historical
+Linux x86-64 installed batch covered query/parameters/int64. On 2026-10-21,
+installed macOS arm64 source ``a239f66cc`` passed 18 fixed vendor cases: 15 positive
+and three expected rejection boundaries. All seven owned resource classes were
+verified absent after child reap.
+Neither batch qualifies all 21 types, full boundaries or other OS/CPU combinations.
 
 * Queries, prepared/bound parameters, core metadata (``GetInfo``,
   ``GetTableTypes``, ``GetObjects``, ``GetTableSchema``), autocommit,
@@ -280,7 +283,7 @@ OS/CPU combinations are not qualified.
   durable outcome unknown. Concurrent connection use and remaining timezone
   cleanup failure edges are not qualified.
 
-Current qualification blockers (including CI OIDC role assumption), deferred
+Remaining qualification gates, deferred
 live checks and release status are tracked in
 `STATUS.md <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/STATUS.md>`__.
 
@@ -305,7 +308,8 @@ Full numeric subtype/precision and native read losslessness are not promised.
 SUPER REPLACE is rejected before DROP. CREATE and missing CREATE_APPEND may leave
 a new empty table after a subsequent payload failure; APPEND retains existing data
 transaction ownership. Raw native SUPER reads and direct SUPER/spatial binding remain unsupported.
-Installed native qualification remains pending.
+The fixed installed JSON-subset cases passed; native SUPER read losslessness
+and broader qualification remain open.
 
 
 Spatial EWKB and HLL serialization subsets
@@ -325,7 +329,7 @@ The selected read payload cap is1,048,447 bytes. Generated writes accept at most
 explicit ``::GEOGRAPHY`` cast where selected. Direct spatial parameter SQL is
 unsupported. Installed point controls accepted raw binary VARBYTE and rejected
 ASCIIhex VARBYTE. Installed evidence preserves spatial bytes and witnesses;
-the GEOMETRY output-metadata correction awaits fresh live acceptance, and full
+the corrected GEOMETRY output metadata passed the fixed installed cases. Full
 native boundary qualification remains pending. Invalid vendor payloads report INVALID_ARGUMENT;
 allocation and other internal failures retain INTERNAL status.
 
@@ -346,4 +350,7 @@ once in text format, with actual descriptor checks. Mixed HLL/non-HLL projection
 reject before execution, without retry, rewrite or scalar text fallback. Empty
 results retain the typed schema. Vendor REPLACE remains rejected before DROP;
 CREATE residue and APPEND transaction ownership follow the SUPER policy above.
-These bounded capabilities do not imply full mixed-HLL or all-type qualification.
+The fixed installed cases cover spatial CREATE/readback (array and stream),
+HLL CREATE/readback and typed text parameters, plus the documented mixed-output
+rejection. Spatial/HLL APPEND was not exercised. These bounded capabilities do
+not imply full mixed-HLL or all-type qualification.

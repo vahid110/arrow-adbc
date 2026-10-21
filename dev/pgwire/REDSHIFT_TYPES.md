@@ -19,8 +19,9 @@
 
 # First-release Redshift type contract
 
-Audit: 2026-10-18, source `3460c541914560a91872e4417c4c3b4ccbb81df0`.
-This is a design and evidence inventory, not implemented all-type support.
+Original audit: 2026-10-18, source `3460c541914560a91872e4417c4c3b4ccbb81df0`.
+Current evidence below identifies its actual tested source. This is a design and
+evidence inventory, not implemented all-type support.
 **All 21 table types are first-release work before Task009.** Aliases resolve to
 canonical server types; recovering the original CREATE spelling is not required.
 The [AWS list](https://docs.aws.amazon.com/redshift/latest/dg/c_Supported_data_types.html)
@@ -39,9 +40,15 @@ passed in [CI 38899143218](https://github.com/vahid110/arrow-adbc/actions/runs/3
 `F`: Task010b offline protocol/C Data checks passed in PR22; Task010c1 adds
 synthetic descriptor/parser and C Data metadata checks. Neither is captured
 Redshift traffic or a live libpq qualification.
-`NQ`: Redshift behavior not qualified; `N`: no semantic implementation.
+`M`: the fixed macOS arm64 installed-wheel/public-C-API subset passed on
+2026-10-21, operation `726f4b3594e048e29f4571b2770549c3`, source `a239f66cc`
+(15 positive and three expected-boundary cases). This is separate from historical Linux `L`; full-envelope `NQ` remains.
+Spatial/HLL CREATE and query schemas were exercised, not APPEND or every metadata
+API. All seven owned resource classes were verified absent after child reap.
+`NQ`: full Redshift envelope not qualified; `N`: no semantic implementation.
 `opaque` means unsupported external bytes, **not full type support**.
-C/O-PG/T without L remains NQ; no row is a claim of full-range support.
+C/O-PG/T alone supplies no native proof; L/M have only their stated scope. No row
+is a claim of full-range support.
 Create and append are separate in the fourth column. Metadata is current schema/
 canonical name evidence, not proof of precision, scale, length or qualifier.
 
@@ -63,11 +70,11 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-DDL / target producer N | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-DDL / target producer N | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
-| HLLSKETCH | C-serialization all-HLL only,NQ | C-text subset,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_utf8 serialized sketch |
-| SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
-| VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,NQ | C-raw/provisional size cap,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
-| GEOMETRY | C-bounded EWKB,NQ | C-generated raw constructor,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, per-value SRID |
-| GEOGRAPHY | C-bounded EWKB,NQ | C-generated constructor/cast,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, explicit per-value SRID |
+| HLLSKETCH | C-serialization all-HLL only,M,NQ | C-text subset,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_utf8 serialized sketch |
+| SUPER | N-native (explicit rejection),M | N-direct; C-generated JSON subset,M | C-JSON subset,M / C-target-checked,M | C-name/input contract; native read unsupported | large_utf8 JSON-subset input; no lossless native read |
+| VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,M,NQ | C-raw/provisional size cap,NQ | C-explicit width,M / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
+| GEOMETRY | C-bounded EWKB,M,NQ | C-generated raw constructor,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, per-value SRID |
+| GEOGRAPHY | C-bounded EWKB,M,NQ | C-generated constructor/cast,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, explicit per-value SRID |
 
 L covers installed C archive and Linux x86-64 wheel, temporary IAM/verify-full TLS,
 query/parameter value 42, small int64 create+append, schema/roundtrip and owned
@@ -130,7 +137,8 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   [interval catalog/schema/codec tests](../../c/driver/postgresql/redshift_interval_test.cc),
   [literal offline receive fixtures](../../c/driver/postgresql/redshift_interval_test_fixture.h)
   and [PyArrow C Data import](../../ci/scripts/pgwire_interval_c_data_test.py).
-  Native TIMETZ qualification, SUPER, HLLSKETCH and spatial family coverage remain pending.
+  Full native TIMETZ/SUPER/HLL/spatial qualification remains open; bounded
+  installed vendor evidence is recorded separately above.
 
 The [official Python connector source](https://github.com/aws/amazon-redshift-python-driver/blob/248ffd5896c7a46bba115452dc10b8389d3ede54/redshift_connector/utils/type_utils.py)
 (at pinned commit `248ffd5896c7a46bba115452dc10b8389d3ede54`) distinguishes
@@ -656,9 +664,11 @@ must be reviewed before implementation; an unresolved representation blocks rele
 - **Local evidence dependencies:** G0 (1f35366) and G1 (0285eba) are locally integrated
   after exact independent approval and retained validation. G1's named load uses
   approved G0 artifacts; it is not native execution or additional type coverage.
-- **Prepared successors, not dispatched here:** native SUPER and lossless extension/protocol decisions;
-  HLLSKETCH and spatial native codecs/semantic contracts. Coordinator briefs bound
-  these phases; no arbitrary future phase number implies completion or authority.
+- **010h1 and bounded vendor implementations locally integrated:** the runner's
+  exact review/full 32 validation completed at `3c956e3`. SUPER JSON-subset ingest,
+  HLL serialization and spatial EWKB subsets are implemented through `a239f66cc`;
+  fixed installed evidence is marked M above. Native SUPER losslessness and the
+  remaining full-type qualification gates are not closed.
 - **Final all-type qualification:** complete the 21-row read/bind/create/append/
   metadata evidence on installed C and wheel artifacts, all aliases and bounded
   unsupported operations. The coordinator controls the separately admitted finite
@@ -686,9 +696,9 @@ changes these settings. Semantic schemas/actual target identities are strict eve
 for all-NULL/empty streams. Arbitrary SQL is not rewritten, and SUPER REPLACE is
 rejected before ownership/DROP. CREATE or missing CREATE_APPEND may leave a newly
 created empty table following a later payload failure. APPEND keeps the existing
-data transaction owner. Native read losslessness and installed qualification stay
-open. HLL's documented24,580-byte number is a raw sketch-object bound, not the
-serialized UTF8 budget (retained dense examples exceed it).
+data transaction owner. The fixed installed JSON-subset cases passed; native
+read losslessness and broader qualification stay open. HLL's documented
+24,580-byte number is a raw sketch-object bound, not the serialized UTF8 budget (retained dense examples exceed it).
 
 ### Task010i2 bounded spatial and HLL subsets
 
@@ -706,10 +716,11 @@ VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
 spatial binding stays unsupported. Installed POINT controls accepted raw binary
 VARBYTE and rejected ASCIIhex VARBYTE. Subsequent installed evidence preserved
 spatial bytes and witnesses but exposed a GEOMETRY result-identity metadata gap.
-Task010k resolves documented Redshift output3999 through unique catalog GEOMETRY,
+Task010k resolves documented Redshift output 3999 through unique catalog GEOMETRY,
 without changing parameter OIDs or treating opaque bytes as qualified EWKB.
-Fresh corrected acceptance and full native boundary qualification remain pending. Vendor payload EINVAL maps to
-INVALID_ARGUMENT at both bind paths; allocation/other failures remain INTERNAL.
+The fixed corrected installed cases passed; full native boundary qualification
+remains pending. Vendor payload EINVAL maps to INVALID_ARGUMENT at both bind
+paths; allocation/other failures remain INTERNAL.
 
 HLL uses `large_utf8`, `adbc.redshift.hllsketch` and exact
 `{"version":1,"encoding":"redshift-serialized","logm":15}` plus HLLSKETCH identity.
@@ -725,5 +736,5 @@ Result-returning queries describe first. All-HLL nonempty projections execute
 once in global text format and validate actual descriptor/format before reading.
 Mixed HLL/non-HLL projections reject before execution; normal scalar expressions
 remain normal scalars. No SQL rewrite, retry or unrelated text fallback occurs.
-These source subsets await full/installed/native qualification and do not close
-lossless SUPER reads or all21 acceptance.
+The fixed installed subsets passed on the selected macOS arm64 artifacts; this
+does not close full native boundaries, lossless SUPER reads or all 21 acceptance.

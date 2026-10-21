@@ -20,20 +20,24 @@
 # Status
 
 
-Task010i1 SUPER JSON-subset generated ingest is locally integrated after independent
-source approval and full rebuilt/installed offline validation. Native acceptance
-is still pending; it is not lossless native SUPER reading. Task010i2 adds bounded
-spatial EWKB read/generated-constructor write and HLL serialization text binds,
-generated ingest and all-HLL result projections. It is locally integrated after
-independent source review and rebuilt installed offline validation. Task010j
-corrects vendor payload status mapping and generated spatial writes to raw EWKB
-VARBYTE, following installed POINT constructor controls. Installed live evidence
-confirms spatial bytes and witnesses; Task010k corrects GEOMETRY result metadata
-using its documented Redshift output identity and unique catalog descriptor.
-Fresh corrected live acceptance and broad native qualification remain pending. Mixed HLL projections,
-direct spatial/SUPER binds and native SUPER read losslessness remain unsupported. Vendor REPLACE rejects before
-ownership/DDL; CREATE residue and APPEND ownership remain as documented. The
-existing VARBYTE binary codec is unchanged.
+Task010i1/i2/j/k are locally integrated at `a239f66cc`, after independent exact
+source approval and rebuilt/installed 35-stage offline validation. On 2026-10-21,
+operation `726f4b3594e048e29f4571b2770549c3` passed all 18 fixed installed-driver
+cases on macOS arm64: 15 positive cases and three expected rejection boundaries,
+102 public API calls, no early stop. The tested source is `a239f66cc`; this docs
+update does not represent another binary build or live test. The cases cover
+SUPER JSON-subset generated CREATE/APPEND, spatial CREATE/readback with EWKB,
+metadata and native witnesses, HLL CREATE/readback and typed text parameters,
+and VARBYTE binary CREATE/readback. Spatial/HLL APPEND was not exercised.
+The child was reaped and its fixture and handles cleaned up. A separate admin
+observer and the root's owned-resource checks verified all seven owned resource
+classes absent. Actual billing is not reconciled.
+
+This bounded installed subset does not close all 21 types, full domains/size
+boundaries, every metadata API or portable-platform qualification. Native SUPER
+reads, direct SUPER/spatial binds and mixed HLL output remain explicitly
+unsupported. Vendor REPLACE rejects before ownership/DDL; CREATE residue and
+APPEND ownership remain as documented. The VARBYTE binary codec is unchanged.
 
 Current state only; history is in git and PR descriptions.
 
@@ -100,15 +104,14 @@ Current state only; history is in git and PR descriptions.
   all 31 serial validation steps and ten own-PG echoes/15 calls). Task010h0 adds
   closed compiled native discovery plans/capture shapes (locally integrated 4bdc23b;
   independent approval, all 31 serial stages and nine own-PG checks/15 calls).
-  Task010h1 adds the noninstalled closed 715-step async runner and eight bounded
-  output descriptors; exact review and root serial validation are pending.
-  Broader runtime closure and the local execution/live handoff remain
-  separate prerequisites. Synthetic/local PostgreSQL
-  evidence does not qualify Redshift; platform CI follows the local-first workflow.
-  Native temporal wire/domain/precision and character/binary boundaries, TIMETZ native layout/domain/offset/precision,
-  interval native wire/domain/catalog/qualifier qualification, SUPER,
-  HLL and spatial work remain
-  required before Task009. No paid operation is performed or authorized here.
+  Task010h1's noninstalled closed 715-step async runner and eight bounded output
+  descriptors were locally integrated at `3c956e3` after exact independent approval,
+  all 32 serial stages and controlled own-PG checks. Later private native runs
+  retain protocol observations and failures separately from installed-driver
+  acceptance. Synthetic/local PostgreSQL evidence does not qualify Redshift;
+  platform CI follows the local-first workflow. Full temporal/domain/precision,
+  character/binary size, interval qualifier and lossless native SUPER qualification
+  remain open before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
