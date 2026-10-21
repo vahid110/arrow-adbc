@@ -159,6 +159,9 @@ AdbcStatusCode PostgresDatabase::Connect(PGconn** conn, struct AdbcError* error)
                          "[libpq] Failed to connect: ", PQerrorMessage(connection.get()));
     return ADBC_STATUS_IO;
   }
+  if (backend_profile_.kind == adbc::driver::pgwire::BackendKind::kRedshift) {
+    RAISE_STATUS(error, CheckUtf8Encoding(connection.get()));
+  }
   *conn = connection.release();
   open_connections_++;
   return ADBC_STATUS_OK;
@@ -244,6 +247,8 @@ Status PostgresDatabase::InitVersions(PGconn* conn) {
     return Status::InvalidArgument("[libpq] Expected ", backend_profile_.name,
                                    " but connected to ", detected_profile.name);
   }
+  if (detected_profile.kind == adbc::driver::pgwire::BackendKind::kRedshift)
+    UNWRAP_STATUS(CheckUtf8Encoding(conn));
   backend_profile_ = detected_profile;
   postgres_server_version_ =
       ParsePrefixedVersion(version_info, backend_profile_.version_prefix);

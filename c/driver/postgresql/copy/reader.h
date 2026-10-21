@@ -30,6 +30,8 @@
 
 #include "../postgres_type.h"
 #include "../postgres_util.h"
+#include "../redshift_hll.h"
+#include "../redshift_spatial.h"
 #include "copy_common.h"
 
 namespace adbcpq {
@@ -186,6 +188,7 @@ inline ArrowErrorCode ReadCopyField(PostgresCopyFieldReader* reader,
 // Reader for a Postgres boolean (one byte -> bitmap)
 class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyBooleanFieldReader(bool strict = false) : strict_(strict) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
     if (field_size_bytes == -1) {
@@ -198,6 +201,11 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (strict_ && (data->size_bytes < 1 || !data->data.data ||
+                    (data->data.as_uint8[0] != 0 && data->data.as_uint8[0] != 1))) {
+      ArrowErrorSet(error, "[Redshift] Invalid boolean wire value");
+      return EINVAL;
+    }
     int64_t bytes_required = _ArrowBytesForBits(array->length + 1);
     if (bytes_required > data_->size_bytes) {
       NANOARROW_RETURN_NOT_OK(
@@ -212,6 +220,9 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
 
     return AppendValid(array);
   }
+
+ private:
+  bool strict_;
 };
 
 // Reader for Pg->Arrow conversions whose representations are identical minus
@@ -219,6 +230,7 @@ class PostgresCopyBooleanFieldReader : public PostgresCopyFieldReader {
 template <typename T, T kOffset = 0>
 class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyNetworkEndianFieldReader(bool strict = false) : strict_(strict) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
     if (field_size_bytes == -1) {
@@ -232,6 +244,11 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (strict_ &&
+        (data->size_bytes < static_cast<int64_t>(sizeof(T)) || !data->data.data)) {
+      ArrowErrorSet(error, "[Redshift] Truncated scalar wire value");
+      return EINVAL;
+    }
     T value = ReadUnsafe<T>(data);
     if constexpr (kOffset != 0) {
       T adjusted;
@@ -251,30 +268,53 @@ class PostgresCopyNetworkEndianFieldReader : public PostgresCopyFieldReader {
     NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &value, sizeof(T)));
     return AppendValid(array);
   }
+
+ private:
+  bool strict_;
 };
 
-// Redshift YEAR TO MONTH's reference receive format contains only signed months.
-// This is distinct from PostgreSQL's 16-byte interval. The supported offline
-// reference contract is documented in dev/pgwire/REDSHIFT_TYPES.md.
-class RedshiftIntervalYearMonthFieldReader : public PostgresCopyFieldReader {
+// Reference4/8-byte interval fields. No native sentinel/domain claim is implied.
+class RedshiftIntervalFieldReader : public PostgresCopyFieldReader {
  public:
-  ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
+  explicit RedshiftIntervalFieldReader(RedshiftIntervalConstraint constraint)
+      : constraint_(std::move(constraint)) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
                       ArrowError* error) override {
-    if (field_size_bytes == -1) return ArrowArrayAppendNull(array, 1);
-    if (field_size_bytes != 4) {
-      ArrowErrorSet(error, "Expected Redshift YEAR TO MONTH field with 4 bytes, found %d",
-                    static_cast<int>(field_size_bytes));
-      return EINVAL;
+    if (size == -1) return ArrowArrayAppendNull(array, 1);
+    const bool months = constraint_.family == RedshiftIntervalFamily::kYearMonth;
+    const int32_t width = months ? 4 : 8;
+    if (size != width || data->size_bytes < width || !data->data.data)
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "invalid/truncated interval field");
+    int64_t value;
+    if (months) {
+      uint32_t bits;
+      std::memcpy(&bits, data->data.data, 4);
+      bits = SwapNetworkToHost(bits);
+      int32_t signed_value;
+      std::memcpy(&signed_value, &bits, 4);
+      value = signed_value;
+    } else {
+      uint64_t bits;
+      std::memcpy(&bits, data->data.data, 8);
+      bits = SwapNetworkToHost(bits);
+      std::memcpy(&value, &bits, 8);
     }
-    int32_t months;
-    NANOARROW_RETURN_NOT_OK(ReadChecked<int32_t>(data, &months, error));
-    const int32_t days = 0;
-    const int64_t nanos = 0;
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &months, sizeof(months)));
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &days, sizeof(days)));
-    NANOARROW_RETURN_NOT_OK(ArrowBufferAppend(data_, &nanos, sizeof(nanos)));
-    return AppendValid(array);
+    NANOARROW_RETURN_NOT_OK(constraint_.CheckValue(value, error));
+    if (months) {
+      ArrowInterval interval{};
+      ArrowIntervalInit(&interval, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO);
+      interval.months = static_cast<int32_t>(value);
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInterval(array, &interval));
+    } else
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(array, value));
+    data->data.as_uint8 += width;
+    data->size_bytes -= width;
+    return NANOARROW_OK;
   }
+
+ private:
+  RedshiftIntervalConstraint constraint_;
 };
 
 // Reader for Intervals
@@ -603,8 +643,12 @@ class PostgresCopyNumericFieldReader : public PostgresCopyFieldReader {
 // Arrow types and any Postgres type.
 class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
  public:
+  explicit PostgresCopyBinaryFieldReader(RedshiftBytesSchema semantic = {})
+      : semantic_(semantic) {}
   ArrowErrorCode Read(ArrowBufferView* data, int32_t field_size_bytes, ArrowArray* array,
                       ArrowError* error) override {
+    if (semantic_.enabled() && field_size_bytes < -1)
+      return RedshiftBytesSchema::Invalid(error, "invalid field length");
     // -1 for NULL (0 would be empty string)
     if (field_size_bytes < 0) {
       return ArrowArrayAppendNull(array, 1);
@@ -617,6 +661,12 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
       return EINVAL;
     }
 
+    if (semantic_.enabled()) {
+      ArrowBufferView bytes = *data;
+      bytes.size_bytes = field_size_bytes;
+      NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
+          bytes, semantic_.kind, semantic_.width, false, error));
+    }
     int32_t* offsets = reinterpret_cast<int32_t*>(offsets_->data);
     int32_t next_offset = 0;
     if (!psnip_safe_int32_add(&next_offset, offsets[array->length], field_size_bytes)) {
@@ -630,6 +680,233 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
 
     return AppendValid(array);
   }
+
+ private:
+  RedshiftBytesSchema semantic_;
+};
+
+// Closed standard PostgreSQL reference fields. These checks do not certify a
+// Redshift SQL finite/sentinel domain; native qualification remains separate.
+class RedshiftEncodedFieldReader : public PostgresCopyFieldReader {
+ public:
+  explicit RedshiftEncodedFieldReader(
+      RedshiftEncodedKind kind,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : kind_(kind), allocation_(allocation) {}
+  ArrowErrorCode Read(ArrowBufferView* input, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    const bool null = size == -1;
+    if (size < -1 || (!null && (size > input->size_bytes || !input->data.data)))
+      return EINVAL;
+    if (!null) {
+      auto bytes = *input;
+      bytes.size_bytes = size;
+      if (kind_ == RedshiftEncodedKind::kHll)
+        NANOARROW_RETURN_NOT_OK(RedshiftHll::Validate(bytes, error));
+      else
+        NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(
+            bytes, kind_ == RedshiftEncodedKind::kGeography, false, error));
+    }
+    if (array->offset || array->length < 0 || array->length > INT64_MAX / 8 - 2 ||
+        array->null_count < 0 || array->null_count > array->length)
+      return EINVAL;
+    auto* offsets = ArrowArrayBuffer(array, 1);
+    auto* values = ArrowArrayBuffer(array, 2);
+    auto* bitmap = ArrowArrayValidityBitmap(array);
+    if (offsets->size_bytes != (array->length + 1) * 8 || !offsets->data ||
+        values->size_bytes < 0 || values->size_bytes > INT64_MAX - (null ? 0 : size))
+      return EINVAL;
+    int64_t last;
+    std::memcpy(&last, offsets->data + array->length * 8, 8);
+    if (bitmap->buffer.capacity_bytes < bitmap->buffer.size_bytes ||
+        (bitmap->buffer.capacity_bytes > 0 && !bitmap->buffer.data) ||
+        last != values->size_bytes || bitmap->size_bits < 0 ||
+        (bitmap->size_bits && bitmap->size_bits != array->length) ||
+        bitmap->buffer.size_bytes !=
+            bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||
+        (!bitmap->buffer.data && (bitmap->size_bits || bitmap->buffer.size_bytes)) ||
+        (!bitmap->size_bits && array->null_count))
+      return EINVAL;
+    const int64_t old_bytes = bitmap->buffer.size_bytes;
+    const int64_t needed = (array->length + 1) / 8 + ((array->length + 1) % 8 != 0);
+    nanoarrow::UniqueBitmap detached;
+    auto* reservation = bitmap->buffer.data ? bitmap : detached.get();
+    NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(
+        &reservation->buffer, needed - reservation->buffer.size_bytes, error,
+        allocation_));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(offsets, 8, error, allocation_));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(values, null ? 0 : size, error, allocation_));
+    if (!bitmap->buffer.data) ArrowBitmapMove(detached.get(), bitmap);
+    if (needed > old_bytes)
+      std::memset(bitmap->buffer.data + old_bytes, 0, needed - old_bytes);
+    if (!bitmap->size_bits && array->length)
+      ArrowBitmapAppendUnsafe(bitmap, 1, array->length);
+    const int64_t next = last + (null ? 0 : size);
+    if (!null) ArrowBufferAppendUnsafe(values, input->data.data, size);
+    ArrowBufferAppendUnsafe(offsets, &next, 8);
+    ArrowBitmapAppendUnsafe(bitmap, !null, 1);
+    ++array->length;
+    if (null)
+      ++array->null_count;
+    else {
+      input->data.as_uint8 += size;
+      input->size_bytes -= size;
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftEncodedKind kind_;
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftTimetzFieldReader : public PostgresCopyFieldReader {
+ public:
+  explicit RedshiftTimetzFieldReader(
+      std::optional<int32_t> precision,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : precision_(precision), allocation_(allocation) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    const bool null = size == -1;
+    int64_t civil = 0;
+    int32_t east = 0;
+    if (!null) {
+      if (size != 12 || data->size_bytes < 12 || !data->data.data)
+        return RedshiftTimetzSchema::Invalid(error,
+                                             "expected selected12-byte reference field");
+      auto peek = *data;
+      civil = ReadUnsafe<int64_t>(&peek);
+      const int64_t west = ReadUnsafe<int32_t>(&peek);
+      const int64_t converted = -west;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTimetzSchema::CheckValue(civil, converted, precision_, error));
+      east = static_cast<int32_t>(converted);
+    }
+    if (array->n_children != 2 || array->offset != 0 || array->length < 0 ||
+        array->length > INT64_MAX / 8 - 1 || array->null_count < 0 ||
+        array->null_count > array->length || array->children[0]->offset != 0 ||
+        array->children[1]->offset != 0 || array->children[0]->length != array->length ||
+        array->children[1]->length != array->length)
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "output struct children/length disagree");
+    auto* bitmap = ArrowArrayValidityBitmap(array);
+    if (bitmap->buffer.capacity_bytes < bitmap->buffer.size_bytes ||
+        (bitmap->buffer.capacity_bytes > 0 && !bitmap->buffer.data) ||
+        (!bitmap->buffer.data &&
+         (bitmap->size_bits != 0 || bitmap->buffer.size_bytes != 0)) ||
+        (bitmap->size_bits != 0 && bitmap->size_bits != array->length) ||
+        bitmap->size_bits < 0 ||
+        bitmap->buffer.size_bytes !=
+            bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||
+        (bitmap->size_bits == 0 && array->null_count != 0))
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "output validity length/bytes disagree");
+    const int64_t old_bitmap_bytes = bitmap->buffer.size_bytes;
+    // Reserve every fallible allocation before logical mutation. Generic reserve
+    // deliberately skips an absent validity bitmap, hence the explicit reserve.
+    nanoarrow::UniqueBitmap fresh_bitmap;
+    const bool detached = bitmap->buffer.data == nullptr;
+    auto* reservation = detached ? fresh_bitmap.get() : bitmap;
+    const int64_t bitmap_bytes = (array->length + 1) / 8 + ((array->length + 1) % 8 != 0);
+    NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(
+        &reservation->buffer, bitmap_bytes - reservation->buffer.size_bytes, error,
+        allocation_));
+    for (int child = 0; child < 2; ++child) {
+      auto* buffer = ArrowArrayBuffer(array->children[child], 1);
+      const int64_t width = child == 0 ? 8 : 4;
+      if (buffer->size_bytes != array->length * width)
+        return RedshiftTimetzSchema::Invalid(error, "output child data length disagrees");
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTimetzSchema::Reserve(buffer, width, error, allocation_));
+    }
+    // An absent bitmap must stay absent if a later child allocation fails: a
+    // newly exposed uninitialized bitmap would change the prior valid rows.
+    if (detached) ArrowBitmapMove(fresh_bitmap.get(), bitmap);
+    // Bit appends read-modify-write tail bytes. Initialize only fresh bytes,
+    // never an existing byte containing the previously committed valid prefix.
+    if (bitmap_bytes > old_bitmap_bytes)
+      std::memset(bitmap->buffer.data + old_bitmap_bytes, 0,
+                  bitmap_bytes - old_bitmap_bytes);
+    if (bitmap->size_bits == 0 && array->length)
+      ArrowBitmapAppendUnsafe(bitmap, 1, array->length);
+    ArrowBufferAppendUnsafe(ArrowArrayBuffer(array->children[0], 1), &civil,
+                            sizeof(civil));
+    ArrowBufferAppendUnsafe(ArrowArrayBuffer(array->children[1], 1), &east, sizeof(east));
+    ++array->children[0]->length;
+    ++array->children[1]->length;
+    ArrowBitmapAppendUnsafe(bitmap, !null, 1);
+    ++array->length;
+    if (null)
+      ++array->null_count;
+    else {
+      data->data.as_uint8 += 12;
+      data->size_bytes -= 12;
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  std::optional<int32_t> precision_;
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftTemporalFieldReader : public PostgresCopyFieldReader {
+ public:
+  RedshiftTemporalFieldReader(RedshiftTemporalKind kind, bool lossless,
+                              std::optional<int32_t> precision)
+      : kind_(kind), lossless_(lossless), precision_(precision) {}
+  ArrowErrorCode Read(ArrowBufferView* data, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    if (size == -1) return ArrowArrayAppendNull(array, 1);
+    const int32_t width = kind_ == RedshiftTemporalKind::kDate ? 4 : 8;
+    if (size != width || data->size_bytes < width || !data->data.data)
+      return RedshiftTemporalSchema::Invalid(error,
+                                             "malformed temporal field width/body");
+    int64_t value;
+    if (width == 4) {
+      uint32_t bits;
+      std::memcpy(&bits, data->data.data, 4);
+      bits = SwapNetworkToHost(bits);
+      int32_t signed_value;
+      std::memcpy(&signed_value, &bits, 4);
+      value = signed_value;
+    } else {
+      uint64_t bits;
+      std::memcpy(&bits, data->data.data, 8);
+      bits = SwapNetworkToHost(bits);
+      std::memcpy(&value, &bits, 8);
+    }
+    NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::CheckNative(kind_, value, error));
+    if (kind_ != RedshiftTemporalKind::kDate)
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftTemporalSchema::CheckPrecision(value, precision_, error));
+    if (kind_ == RedshiftTemporalKind::kDate) {
+      value += RedshiftTemporalSchema::kEpochDays;
+      if (value < INT32_MIN || value > INT32_MAX)
+        return RedshiftTemporalSchema::Invalid(error, "DATE Arrow epoch overflow");
+    } else if (!lossless_) {
+      if (kind_ == RedshiftTemporalKind::kTime) {
+        if (value == RedshiftTemporalSchema::kDayUs)
+          return RedshiftTemporalSchema::Invalid(error, "Arrow TIME excludes endofday");
+      } else {
+        if (value > INT64_MAX - RedshiftTemporalSchema::kEpochUs)
+          return RedshiftTemporalSchema::Invalid(error, "timestamp Arrow epoch overflow");
+        value += RedshiftTemporalSchema::kEpochUs;
+      }
+    }
+    NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(array, value));
+    data->data.as_uint8 += width;
+    data->size_bytes -= width;
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTemporalKind kind_;
+  bool lossless_;
+  std::optional<int32_t> precision_;
 };
 
 // Reader for Pg->Arrow conversions into a fixed-width Arrow binary type (e.g.
@@ -1032,15 +1309,127 @@ static inline ArrowErrorCode ErrorCantConvert(ArrowError* error,
 
 static inline ArrowErrorCode MakeCopyFieldReader(
     const PostgresType& pg_type, ArrowSchema* schema,
-    std::unique_ptr<PostgresCopyFieldReader>* out, ArrowError* error) {
+    std::unique_ptr<PostgresCopyFieldReader>* out, ArrowError* error,
+    int result_format = 1) {
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, nullptr));
+
+  if (pg_type.encoded_kind() != RedshiftEncodedKind::kNone) {
+    RedshiftEncodedSchema encoded;
+    NANOARROW_RETURN_NOT_OK(RedshiftEncodedSchema::Parse(schema, true, &encoded, error));
+    if (encoded.kind != pg_type.encoded_kind() ||
+        result_format != (encoded.kind == RedshiftEncodedKind::kHll ? 0 : 1))
+      return RedshiftEncodedSchema::Invalid(error);
+    *out = std::make_unique<RedshiftEncodedFieldReader>(encoded.kind);
+    return NANOARROW_OK;
+  }
+  if (pg_type.is_redshift_timetz()) {
+    RedshiftTimetzSchema parsed;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Parse(schema, true, &parsed, error, true));
+    if (!parsed.enabled)
+      return RedshiftTimetzSchema::Invalid(error, "missing read identity");
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    for (const char* key :
+         {"ADBC:redshift:sql_type", "ADBC:redshift:fractional_precision",
+          "ADBC:redshift:type_modifier"}) {
+      std::optional<std::string_view> actual, value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &actual, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &value, error));
+      if (actual != value)
+        return RedshiftTimetzSchema::Invalid(error,
+                                             "read metadata contradicts field context");
+    }
+    *out = std::make_unique<RedshiftTimetzFieldReader>(
+        RedshiftTimetzSchema::ReferencePrecision(pg_type.type_modifier()));
+    return NANOARROW_OK;
+  }
+  if (pg_type.interval_family() != RedshiftIntervalFamily::kNone) {
+    auto constraint = pg_type.interval_constraint();
+    if (constraint.family != pg_type.interval_family())
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "read context and OID family conflict");
+    NANOARROW_RETURN_NOT_OK(constraint.Validate(error));
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    RedshiftIntervalSchema actual;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftIntervalSchema::Parse(schema, true, &actual, error, true));
+    if (std::string_view(schema->format) != expected->format)
+      return RedshiftIntervalConstraint::Invalid(error,
+                                                 "read storage contradicts context");
+    for (const char* key :
+         {"ADBC:redshift:interval_family", "ADBC:redshift:sql_type",
+          "ADBC:redshift:interval_contract_version",
+          "ADBC:redshift:interval_constraint_state", "ADBC:redshift:interval_qualifier",
+          "ADBC:redshift:fractional_precision", "ADBC:redshift:type_modifier",
+          "ADBC:redshift:interval_raw_type", "ADBC:redshift:interval_raw_precision",
+          "ADBC:redshift:interval_raw_datetime_precision"}) {
+      std::optional<std::string_view> value, reference;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &value, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &reference, error));
+      if (value != reference)
+        return RedshiftIntervalConstraint::Invalid(error,
+                                                   "read metadata contradicts context");
+    }
+    *out = std::make_unique<RedshiftIntervalFieldReader>(constraint);
+    return NANOARROW_OK;
+  }
+
+  if (pg_type.is_redshift_descriptor() &&
+      pg_type.temporal_kind() != RedshiftTemporalKind::kNone) {
+    nanoarrow::UniqueSchema expected;
+    ArrowSchemaInit(expected.get());
+    NANOARROW_RETURN_NOT_OK(pg_type.SetSchema(expected.get(), "Redshift"));
+    ArrowSchemaView expected_view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&expected_view, expected.get(), error));
+    auto text = [](ArrowStringView value) {
+      return value.data ? std::string_view(value.data, value.size_bytes)
+                        : std::string_view{};
+    };
+    if (std::string_view(schema->format) != expected->format || schema->dictionary ||
+        schema->n_children ||
+        text(schema_view.extension_name) != text(expected_view.extension_name) ||
+        text(schema_view.extension_metadata) != text(expected_view.extension_metadata))
+      return RedshiftTemporalSchema::Invalid(error,
+                                             "read schema contradicts temporal context");
+    for (const char* key :
+         {"ADBC:redshift:sql_type", "ADBC:redshift:fractional_precision",
+          "ADBC:redshift:type_modifier"}) {
+      std::optional<std::string_view> actual, reference;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &actual, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(expected.get(), key, &reference, error));
+      if (actual != reference)
+        return RedshiftTemporalSchema::Invalid(error,
+                                               "read metadata contradicts descriptor");
+    }
+    const auto precision =
+        adbc::driver::pgwire::BackendProfile::Redshift()
+            .DescribeTypeModifier(pg_type.typname(), pg_type.type_modifier())
+            .fractional_precision;
+    *out = std::make_unique<RedshiftTemporalFieldReader>(
+        pg_type.temporal_kind(),
+        pg_type.temporal_representation() ==
+            adbc::driver::pgwire::TemporalRepresentation::kLossless,
+        precision);
+    return NANOARROW_OK;
+  }
 
   switch (schema_view.type) {
     case NANOARROW_TYPE_BOOL:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kBool:
-          *out = std::make_unique<PostgresCopyBooleanFieldReader>();
+          *out = std::make_unique<PostgresCopyBooleanFieldReader>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1049,7 +1438,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_INT16:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kInt2:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int16_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int16_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1060,7 +1450,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         case PostgresTypeId::kInt4:
         case PostgresTypeId::kOid:
         case PostgresTypeId::kRegproc:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int32_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int32_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1070,7 +1461,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
       switch (pg_type.type_id()) {
         case PostgresTypeId::kInt8:
         case PostgresTypeId::kCash:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1079,7 +1471,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_FLOAT:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kFloat4:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint32_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint32_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1088,7 +1481,8 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_DOUBLE:
       switch (pg_type.type_id()) {
         case PostgresTypeId::kFloat8:
-          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint64_t>>();
+          *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<uint64_t>>(
+              pg_type.is_redshift_descriptor());
           return NANOARROW_OK;
         default:
           return ErrorCantConvert(error, pg_type, schema_view);
@@ -1103,7 +1497,16 @@ static inline ArrowErrorCode MakeCopyFieldReader(
         case PostgresTypeId::kName:
         case PostgresTypeId::kEnum:
         case PostgresTypeId::kJson:
-          *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+          if (pg_type.is_redshift_descriptor() &&
+              pg_type.bytes_kind() != RedshiftBytesKind::kNone) {
+            const auto info =
+                adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+                    pg_type.typname(), pg_type.type_modifier());
+            *out = std::make_unique<PostgresCopyBinaryFieldReader>(
+                RedshiftBytesSchema{pg_type.bytes_kind(), info.byte_width});
+          } else {
+            *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+          }
           return NANOARROW_OK;
         case PostgresTypeId::kNumeric:
           if (pg_type.is_redshift_numeric()) {
@@ -1131,7 +1534,16 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_BINARY:
       // No need to check pg_type here: we can return the bytes of any
       // Postgres type as binary.
-      *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+      if (pg_type.is_redshift_descriptor() &&
+          pg_type.bytes_kind() == RedshiftBytesKind::kVarbyte) {
+        const auto info =
+            adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+                pg_type.typname(), pg_type.type_modifier());
+        *out = std::make_unique<PostgresCopyBinaryFieldReader>(
+            RedshiftBytesSchema{RedshiftBytesKind::kVarbyte, info.byte_width});
+      } else {
+        *out = std::make_unique<PostgresCopyBinaryFieldReader>();
+      }
       return NANOARROW_OK;
 
     case NANOARROW_TYPE_FIXED_SIZE_BINARY:
@@ -1239,16 +1651,12 @@ static inline ArrowErrorCode MakeCopyFieldReader(
     case NANOARROW_TYPE_DURATION:
       if (pg_type.type_id() == PostgresTypeId::kRedshiftIntervalDaySecond &&
           schema_view.time_unit == NANOARROW_TIME_UNIT_MICRO) {
-        *out = std::make_unique<PostgresCopyNetworkEndianFieldReader<int64_t>>();
-        return NANOARROW_OK;
+        return ErrorCantConvert(error, pg_type, schema_view);
       }
       return ErrorCantConvert(error, pg_type, schema_view);
 
     case NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO:
       switch (pg_type.type_id()) {
-        case PostgresTypeId::kRedshiftIntervalYearMonth:
-          *out = std::make_unique<RedshiftIntervalYearMonthFieldReader>();
-          return NANOARROW_OK;
         case PostgresTypeId::kInterval: {
           *out = std::make_unique<PostgresCopyIntervalFieldReader>();
           return NANOARROW_OK;

@@ -31,6 +31,8 @@
 
 #include "../connection.h"
 #include "../postgres_util.h"
+#include "../redshift_hll.h"
+#include "../redshift_spatial.h"
 #include "copy_common.h"
 
 namespace adbcpq {
@@ -290,6 +292,68 @@ class PostgresCopyDoubleFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+// Validated scalar contract: calculate before reserving/emitting bytes, and
+// preserve source semantics only within the same integer/float/boolean family.
+class RedshiftScalarFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftScalarFieldWriter(RedshiftScalarKind source, RedshiftScalarKind target)
+      : source_(source), target_(target) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    if (RedshiftScalarSchema::Integral(target_)) {
+      int64_t value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftScalarInteger(array_view_, index, source_, &value, error));
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftScalarInteger(array_view_, index, target_, &value, error));
+      const int32_t width = target_ == RedshiftScalarKind::kSmallint  ? 2
+                            : target_ == RedshiftScalarKind::kInteger ? 4
+                                                                      : 8;
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, width + 4));
+      WriteUnsafe<int32_t>(buffer, width);
+      if (width == 2)
+        WriteUnsafe<int16_t>(buffer, static_cast<int16_t>(value));
+      else if (width == 4)
+        WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(value));
+      else
+        WriteUnsafe<int64_t>(buffer, value);
+    } else if (target_ == RedshiftScalarKind::kBoolean) {
+      const int64_t value = ArrowArrayViewGetIntUnsafe(array_view_, index);
+      if (value != 0 && value != 1)
+        return RedshiftScalarSchema::Invalid(error, "invalid boolean value");
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 5));
+      WriteUnsafe<int32_t>(buffer, 1);
+      WriteUnsafe<int8_t>(buffer, static_cast<int8_t>(value));
+    } else if (target_ == RedshiftScalarKind::kReal) {
+      float value;
+      NANOARROW_RETURN_NOT_OK(RedshiftScalarFloat32(
+          ArrowArrayViewGetDoubleUnsafe(array_view_, index), &value, error));
+      uint32_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 8));
+      WriteUnsafe<int32_t>(buffer, 4);
+      WriteUnsafe<uint32_t>(buffer, bits);
+    } else if (target_ == RedshiftScalarKind::kDouble) {
+      const double value = ArrowArrayViewGetDoubleUnsafe(array_view_, index);
+      if (source_ == RedshiftScalarKind::kReal) {
+        float source;
+        NANOARROW_RETURN_NOT_OK(RedshiftScalarFloat32(value, &source, error));
+      }
+      uint64_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, 12));
+      WriteUnsafe<int32_t>(buffer, 8);
+      WriteUnsafe<uint64_t>(buffer, bits);
+    } else {
+      return RedshiftScalarSchema::Invalid(error, "unsupported scalar target");
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftScalarKind source_;
+  RedshiftScalarKind target_;
+};
+
 class PostgresCopyIntervalFieldWriter : public PostgresCopyFieldWriter {
  public:
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
@@ -306,6 +370,95 @@ class PostgresCopyIntervalFieldWriter : public PostgresCopyFieldWriter {
 
     return ADBC_STATUS_OK;
   }
+};
+
+// Exact decimal contract used by Redshift and explicitly DECIMAL-marked fields.
+// The wire representation remains PostgreSQL base-10000 numeric reference data.
+class RedshiftDecimalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftDecimalFieldWriter(RedshiftDecimalSchema source,
+                             std::optional<RedshiftDecimalSchema> target,
+                             ArrowType storage)
+      : source_(std::move(source)), target_(std::move(target)), storage_(storage) {}
+
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    RedshiftDecimalValue value;
+    if (source_.text) {
+      const auto text = ArrowArrayViewGetStringUnsafe(array_view_, index);
+      NANOARROW_RETURN_NOT_OK(RedshiftDecimalValue::ParseText(
+          std::string_view(text.data, text.size_bytes), &value, error));
+      if (source_.scale) {
+        NANOARROW_RETURN_NOT_OK(value.Rescale(*source_.scale, error));
+      } else {
+        // Only remove mathematically redundant zeroes when necessary to fit the
+        // closed38-digit value contract; never infer a schema from these rows.
+        while (value.digits.size() > 38 && value.scale > 0 &&
+               value.digits.back() == '0') {
+          value.digits.pop_back();
+          --value.scale;
+        }
+      }
+    } else {
+      ArrowDecimal decimal;
+      ArrowDecimalInit(&decimal, storage_ == NANOARROW_TYPE_DECIMAL128 ? 128 : 256,
+                       *source_.precision, *source_.scale);
+      ArrowArrayViewGetDecimalUnsafe(array_view_, index, &decimal);
+      nanoarrow::UniqueBuffer digits;
+      NANOARROW_RETURN_NOT_OK(ArrowDecimalAppendDigitsToBuffer(&decimal, digits.get()));
+      value.digits.assign(reinterpret_cast<char*>(digits->data), digits->size_bytes);
+      value.negative = !value.digits.empty() && value.digits[0] == '-';
+      if (value.negative) value.digits.erase(0, 1);
+      value.scale = *source_.scale;
+      value.Normalize();
+    }
+    NANOARROW_RETURN_NOT_OK(
+        value.CheckPrecision(source_.precision.value_or(38), false, error));
+    if (target_) {
+      NANOARROW_RETURN_NOT_OK(value.Rescale(*target_->scale, error));
+      NANOARROW_RETURN_NOT_OK(value.CheckPrecision(*target_->precision, true, error));
+    }
+
+    // Work is bounded by38 coefficient/scale digits. Build groups before touching
+    // the output buffer; a rejected value cannot emit a partial parameter.
+    std::string full = value.digits;
+    if (full.size() <= static_cast<size_t>(value.scale)) {
+      full.insert(0, static_cast<size_t>(value.scale) + 1 - full.size(), '0');
+    }
+    const size_t integral = full.size() - value.scale;
+    const size_t left = (4 - integral % 4) % 4;
+    full.insert(0, left, '0');
+    full.append((4 - value.scale % 4) % 4, '0');
+    std::vector<uint16_t> groups;
+    for (size_t i = 0; i < full.size(); i += 4) {
+      uint16_t digit = 0;
+      for (size_t j = 0; j < 4; j++) digit = digit * 10 + full[i + j] - '0';
+      groups.push_back(digit);
+    }
+    int16_t weight = static_cast<int16_t>((integral + left) / 4 - 1);
+    size_t first = 0;
+    size_t last = groups.size();
+    while (first < last && groups[first] == 0) {
+      ++first;
+      --weight;
+    }
+    while (last > first && groups[last - 1] == 0) --last;
+    if (first == last) weight = 0;
+    const int16_t count = static_cast<int16_t>(last - first);
+    const int32_t field_size = 8 + count * 2;
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, field_size + 4));
+    WriteUnsafe<int32_t>(buffer, field_size);
+    WriteUnsafe<int16_t>(buffer, count);
+    WriteUnsafe<int16_t>(buffer, weight);
+    WriteUnsafe<uint16_t>(buffer, value.negative ? 0x4000 : 0);
+    WriteUnsafe<uint16_t>(buffer, static_cast<uint16_t>(value.scale));
+    for (size_t i = first; i < last; i++) WriteUnsafe<uint16_t>(buffer, groups[i]);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftDecimalSchema source_;
+  std::optional<RedshiftDecimalSchema> target_;
+  ArrowType storage_;
 };
 
 // Inspiration for this taken from get_str_from_var in the pg source
@@ -807,6 +960,137 @@ class PostgresCopyDurationFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+class RedshiftTimetzFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftTimetzFieldWriter(
+      RedshiftTimetzSchema source, std::optional<int32_t> target,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : source_(source), target_(target), allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t civil;
+    int32_t east;
+    NANOARROW_RETURN_NOT_OK(source_.Value(array_view_, index, &civil, &east, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::CheckValue(civil, east, target_, error));
+    const auto west = static_cast<int32_t>(-static_cast<int64_t>(east));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, 16, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, 12);
+    WriteUnsafe<int64_t>(buffer, civil);
+    WriteUnsafe<int32_t>(buffer, west);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTimetzSchema source_;
+  std::optional<int32_t> target_;
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftTemporalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftTemporalFieldWriter(RedshiftTemporalSchema source,
+                              std::optional<int32_t> target_precision)
+      : source_(source), target_precision_(target_precision) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t native;
+    NANOARROW_RETURN_NOT_OK(
+        source_.ToNative(ArrowArrayViewGetIntUnsafe(array_view_, index), &native, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTemporalSchema::CheckPrecision(native, target_precision_, error));
+    const int32_t width = source_.kind == RedshiftTemporalKind::kDate ? 4 : 8;
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, width + 4));
+    WriteUnsafe<int32_t>(buffer, width);
+    if (width == 4)
+      WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(native));
+    else
+      WriteUnsafe<int64_t>(buffer, native);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftTemporalSchema source_;
+  std::optional<int32_t> target_precision_;
+};
+
+class RedshiftEncodedFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit RedshiftEncodedFieldWriter(
+      RedshiftEncodedKind kind,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : kind_(kind), allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    const bool hll = kind_ == RedshiftEncodedKind::kHll;
+    if (hll)
+      NANOARROW_RETURN_NOT_OK(RedshiftHll::Validate(bytes, error));
+    else
+      NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(
+          bytes, kind_ == RedshiftEncodedKind::kGeography, true, error));
+    const int64_t physical = hll ? bytes.size_bytes + 1 : bytes.size_bytes;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, physical + 4, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(physical));
+    // Binary VARBYTE constructor parameters contain raw EWKB, not display hex.
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+    if (hll) {
+      const char zero = 0;
+      ArrowBufferAppendUnsafe(buffer, &zero, 1);
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftEncodedKind kind_;
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftSuperFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit RedshiftSuperFieldWriter(
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    NANOARROW_RETURN_NOT_OK(RedshiftSuperSchema::Validate(bytes, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, bytes.size_bytes + 4, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(bytes.size_bytes));
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+    return NANOARROW_OK;
+  }
+
+ private:
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target)
+      : source_(source), target_(target) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::Validate(bytes, source_.kind, source_.width, true, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::Validate(bytes, target_.kind, target_.width, true, error));
+    // All validation precedes buffer mutation; never trim overflow blanks.
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, bytes.size_bytes + 4));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(bytes.size_bytes));
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftBytesSchema source_, target_;
+};
+
 class PostgresCopyBinaryFieldWriter : public PostgresCopyFieldWriter {
  public:
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
@@ -982,13 +1266,263 @@ class PostgresCopyTimestampFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
+// Redshift's reference interval parameters have no generic PostgreSQL body.
+class RedshiftIntervalFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  RedshiftIntervalFieldWriter(RedshiftIntervalSchema source,
+                              std::optional<RedshiftIntervalConstraint> target)
+      : source_(std::move(source)), target_(std::move(target)) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    int64_t native;
+    NANOARROW_RETURN_NOT_OK(source_.ToNative(array_view_, index, &native, error));
+    if (target_) NANOARROW_RETURN_NOT_OK(target_->CheckValue(native, error));
+    const bool months = source_.constraint.family == RedshiftIntervalFamily::kYearMonth;
+    // Reserve before emitting length/body: all value checks precede mutation.
+    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, months ? 8 : 12));
+    NANOARROW_RETURN_NOT_OK(WriteChecked<int32_t>(buffer, months ? 4 : 8, error));
+    if (months) return WriteChecked<int32_t>(buffer, static_cast<int32_t>(native), error);
+    return WriteChecked<int64_t>(buffer, native, error);
+  }
+
+ private:
+  RedshiftIntervalSchema source_;
+  std::optional<RedshiftIntervalConstraint> target_;
+};
+
 static inline ArrowErrorCode MakeCopyFieldWriter(
     struct ArrowSchema* schema, struct ArrowArrayView* array_view,
     const PostgresTypeResolver& type_resolver, const PostgresType* target_type,
     std::unique_ptr<PostgresCopyFieldWriter>* out, bool disable_decimal_fast_path,
-    ArrowError* error) {
+    ArrowError* error, bool generated_super_ingest = false) {
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateVendorWriteSchema(type_resolver, schema, error));
+  RedshiftSuperSchema super;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftSuperSchema::Parse(schema, type_resolver.is_redshift(), &super, error));
+  const auto vendor_target = target_type
+                                 ? target_type->vendor_family()
+                                 : adbc::driver::pgwire::CatalogVendorFamily::kNone;
+  RedshiftEncodedSchema encoded;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftEncodedSchema::Parse(schema, type_resolver.is_redshift(), &encoded, error));
+  if (encoded.enabled()) {
+    PostgresType source;
+    NANOARROW_RETURN_NOT_OK(
+        PostgresType::FromSchema(type_resolver, schema, &source, error));
+    if ((encoded.spatial() && !generated_super_ingest) || !target_type ||
+        target_type->encoded_kind() != encoded.kind || !target_type->oid() ||
+        target_type->oid() != source.oid())
+      return RedshiftEncodedSchema::Invalid(error);
+    *out = PostgresCopyFieldWriter::Create<RedshiftEncodedFieldWriter>(array_view,
+                                                                       encoded.kind);
+    return NANOARROW_OK;
+  }
+  if (super.enabled ||
+      vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kNone) {
+    if (!generated_super_ingest || !super.enabled || !target_type ||
+        vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kSuper ||
+        !target_type->oid() ||
+        target_type->oid() != type_resolver.GetVendorOID(vendor_target))
+      return RedshiftSuperSchema::Invalid(
+          error, "requires generated SUPER ingest and exact target");
+    *out = PostgresCopyFieldWriter::Create<RedshiftSuperFieldWriter>(array_view);
+    return NANOARROW_OK;
+  }
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateDecimalWriteSchema(type_resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateScalarWriteSchema(type_resolver, schema, error));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateBytesWriteSchema(type_resolver, schema, error));
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateTemporalWriteSchema(type_resolver, schema, error, false));
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateIntervalWriteSchema(type_resolver, schema, error));
+  RedshiftTimetzSchema timetz;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftTimetzSchema::Parse(schema, type_resolver.is_redshift(), &timetz, error));
+  if (timetz.enabled || (type_resolver.is_redshift() && target_type &&
+                         target_type->type_id() == PostgresTypeId::kTimetz)) {
+    std::optional<int32_t> target_precision;
+    if (target_type) {
+      if (target_type->type_id() != PostgresTypeId::kTimetz || !target_type->oid() ||
+          target_type->oid() != type_resolver.GetOID(PostgresTypeId::kTimetz))
+        return RedshiftTimetzSchema::Invalid(error, "cross-family/OID actual target");
+      target_precision =
+          RedshiftTimetzSchema::ReferencePrecision(target_type->type_modifier());
+      if (!target_precision)
+        return RedshiftTimetzSchema::Invalid(error, "unknown actual target precision");
+    }
+    if (schema_view.type == NANOARROW_TYPE_NA && target_type) {
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftIntervalSchema::ValidateGenuineNullSource(schema, error));
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!timetz.enabled)
+      return RedshiftTimetzSchema::Invalid(error,
+                                           "actual target needs TIMETZ source identity");
+    *out = PostgresCopyFieldWriter::Create<RedshiftTimetzFieldWriter>(array_view, timetz,
+                                                                      target_precision);
+    return NANOARROW_OK;
+  }
+  RedshiftIntervalSchema interval;
+  NANOARROW_RETURN_NOT_OK(RedshiftIntervalSchema::Parse(
+      schema, type_resolver.is_redshift(), &interval, error));
+  const auto interval_target =
+      target_type ? target_type->interval_family() : RedshiftIntervalFamily::kNone;
+  if (interval.enabled() ||
+      (type_resolver.is_redshift() && interval_target != RedshiftIntervalFamily::kNone)) {
+    std::optional<RedshiftIntervalConstraint> target;
+    if (target_type) {
+      if (interval_target == RedshiftIntervalFamily::kNone)
+        return RedshiftIntervalConstraint::Invalid(error, "cross-family actual target");
+      target = target_type->interval_constraint();
+      if (target->family != interval_target)
+        return RedshiftIntervalConstraint::Invalid(
+            error, "target context and OID family conflict");
+      NANOARROW_RETURN_NOT_OK(target->RequireKnown(error));
+    }
+    // Genuine unmarked NA is only safe after validating this actual target.
+    if (schema_view.type == NANOARROW_TYPE_NA && target && !interval.enabled()) {
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftIntervalSchema::ValidateGenuineNullSource(schema, error));
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!interval.enabled() || (target && interval.constraint.family != target->family))
+      return RedshiftIntervalConstraint::Invalid(error, "cross-family actual target");
+    *out = PostgresCopyFieldWriter::Create<RedshiftIntervalFieldWriter>(array_view,
+                                                                        interval, target);
+    return NANOARROW_OK;
+  }
+  RedshiftTemporalSchema temporal;
+  NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::Parse(
+      schema, type_resolver.is_redshift(), &temporal, error));
+  const auto temporal_target =
+      target_type ? target_type->temporal_kind() : RedshiftTemporalKind::kNone;
+  if (temporal.enabled() ||
+      (type_resolver.is_redshift() && temporal_target != RedshiftTemporalKind::kNone)) {
+    if (schema_view.type == NANOARROW_TYPE_NA &&
+        temporal_target != RedshiftTemporalKind::kNone) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!temporal.enabled() || (target_type && temporal_target != temporal.kind))
+      return RedshiftTemporalSchema::Invalid(error, "cross-family temporal target");
+    std::optional<int32_t> target_precision;
+    if (target_type && temporal.kind != RedshiftTemporalKind::kDate) {
+      NANOARROW_RETURN_NOT_OK(RedshiftTemporalSchema::Precision(
+          target_type->type_modifier(), &target_precision, error));
+      if (!target_precision)
+        return RedshiftTemporalSchema::Invalid(error,
+                                               "unknown target fractional precision");
+    }
+    *out = PostgresCopyFieldWriter::Create<RedshiftTemporalFieldWriter>(
+        array_view, temporal, target_precision);
+    return NANOARROW_OK;
+  }
+
+  RedshiftDecimalSchema source_decimal;
+  NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Parse(
+      schema, type_resolver.is_redshift(), &source_decimal, error));
+  const bool strict_target = target_type &&
+                             target_type->type_id() == PostgresTypeId::kNumeric &&
+                             type_resolver.is_redshift();
+  if (source_decimal.enabled || strict_target) {
+    std::optional<RedshiftDecimalSchema> target_decimal;
+    if (target_type) {
+      if (target_type->type_id() != PostgresTypeId::kNumeric) {
+        return RedshiftDecimalSchema::Invalid(error,
+                                              "decimal source requires numeric target");
+      }
+      const auto info =
+          adbc::driver::pgwire::BackendProfile::Redshift().DescribeTypeModifier(
+              "numeric", target_type->type_modifier());
+      if (!info.precision || !info.scale || *info.scale > 37) {
+        return RedshiftDecimalSchema::Invalid(
+            error, "unknown/unsupported stored target descriptor");
+      }
+      target_decimal = RedshiftDecimalSchema{true, false, info.precision, info.scale};
+    }
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    if (!source_decimal.enabled) {
+      return RedshiftDecimalSchema::Invalid(
+          error, "numeric ingest requires decimal, marked text or null");
+    }
+    *out = PostgresCopyFieldWriter::Create<RedshiftDecimalFieldWriter>(
+        array_view, source_decimal, target_decimal, schema_view.type);
+    return NANOARROW_OK;
+  }
+
+  RedshiftScalarSchema source_scalar;
+  NANOARROW_RETURN_NOT_OK(RedshiftScalarSchema::Parse(schema, type_resolver.is_redshift(),
+                                                      &source_scalar, error));
+  const auto scalar_target =
+      target_type ? target_type->scalar_kind() : RedshiftScalarKind::kNone;
+  if (source_scalar.enabled() ||
+      (type_resolver.is_redshift() && scalar_target != RedshiftScalarKind::kNone)) {
+    if (target_type && scalar_target == RedshiftScalarKind::kNone)
+      return RedshiftScalarSchema::Invalid(error,
+                                           "scalar source requires compatible target");
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    const auto destination = target_type ? scalar_target : source_scalar.kind;
+    if (!source_scalar.enabled() ||
+        !RedshiftScalarSchema::Compatible(source_scalar.kind, destination))
+      return RedshiftScalarSchema::Invalid(error, "unsupported scalar target conversion");
+    *out = PostgresCopyFieldWriter::Create<RedshiftScalarFieldWriter>(
+        array_view, source_scalar.kind, destination);
+    return NANOARROW_OK;
+  }
+
+  RedshiftBytesSchema source_bytes;
+  NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Parse(schema, type_resolver.is_redshift(),
+                                                     &source_bytes, error));
+  const auto bytes_target =
+      target_type ? target_type->bytes_kind() : RedshiftBytesKind::kNone;
+  if (source_bytes.enabled() ||
+      (type_resolver.is_redshift() && bytes_target != RedshiftBytesKind::kNone)) {
+    if (target_type && bytes_target == RedshiftBytesKind::kNone)
+      return RedshiftBytesSchema::Invalid(
+          error, "character/binary source requires compatible target");
+    if (schema_view.type == NANOARROW_TYPE_NA) {
+      *out = PostgresCopyFieldWriter::Create<PostgresCopyNullFieldWriter>(array_view);
+      return NANOARROW_OK;
+    }
+    RedshiftBytesSchema destination = source_bytes;
+    if (target_type) {
+      destination.kind = bytes_target;
+      // Width comes from the actual aligned destination, not source rows/schema.
+      const char* name = bytes_target == RedshiftBytesKind::kChar      ? "bpchar"
+                         : bytes_target == RedshiftBytesKind::kVarchar ? "varchar"
+                                                                       : "varbyte";
+      destination.width = adbc::driver::pgwire::BackendProfile::Redshift()
+                              .DescribeTypeModifier(name, target_type->type_modifier())
+                              .byte_width;
+      // Ordinary PostgreSQL TEXT/BYTEA have no width descriptor; explicit semantic
+      // sources still retain their own limits while these destinations are unbounded.
+      const bool pg_unbounded = !type_resolver.is_redshift() &&
+                                (target_type->type_id() == PostgresTypeId::kText ||
+                                 target_type->type_id() == PostgresTypeId::kBytea);
+      if (!destination.width && !pg_unbounded)
+        return RedshiftBytesSchema::Invalid(error, "unknown destination byte width");
+    }
+    if (!source_bytes.enabled() || ((source_bytes.kind == RedshiftBytesKind::kVarbyte) !=
+                                    (destination.kind == RedshiftBytesKind::kVarbyte)))
+      return RedshiftBytesSchema::Invalid(error, "unsupported text/binary coercion");
+    *out = PostgresCopyFieldWriter::Create<RedshiftBytesFieldWriter>(
+        array_view, source_bytes, destination);
+    return NANOARROW_OK;
+  }
 
   const bool is_arrow_json =
       schema_view.extension_name.data != nullptr &&

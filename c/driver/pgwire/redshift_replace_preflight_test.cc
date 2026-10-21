@@ -222,4 +222,40 @@ TEST(RedshiftReplacePreflightTest, PropagatesSettingReadFailure) {
 }
 
 }  // namespace
+TEST(RedshiftReplacePreflightTest, LookupNamesUseFreshCaseSettingWithoutUnicodeFolding) {
+  for (const std::string setting : {"on", "true", "off", "false"}) {
+    int calls = 0;
+    std::string table = "TÄble", schema = "MiXeD";
+    auto read = [&](std::string_view query, std::string* value) {
+      EXPECT_EQ(query, kRedshiftCaseSettingQuery);
+      ++calls;
+      *value = setting;
+      return Status::Ok();
+    };
+    ASSERT_TRUE(NormalizeRedshiftLookupIdentifiers(&table, &schema, read).ok());
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(table, setting == "off" || setting == "false" ? "tÄble" : "TÄble");
+    EXPECT_EQ(schema, setting == "off" || setting == "false" ? "mixed" : "MiXeD");
+  }
+  std::string table = "lower_Ä", schema = "schema";
+  auto unused = [](std::string_view, std::string*) {
+    ADD_FAILURE() << "Lowercase ASCII names must not query the case setting";
+    return Status::Ok();
+  };
+  ASSERT_TRUE(NormalizeRedshiftLookupIdentifiers(&table, &schema, unused).ok());
+  EXPECT_EQ(table, "lower_Ä");
+}
+TEST(RedshiftReplacePreflightTest, LookupUnknownOrFailedCaseSettingPreservesNames) {
+  for (bool fail : {false, true}) {
+    std::string table = "Table", schema = "Schema";
+    auto read = [&](std::string_view, std::string* value) {
+      *value = "unknown";
+      return fail ? Status::InvalidState("read failed") : Status::Ok();
+    };
+    EXPECT_FALSE(NormalizeRedshiftLookupIdentifiers(&table, &schema, read).ok());
+    EXPECT_EQ(table, "Table");
+    EXPECT_EQ(schema, "Schema");
+  }
+}
+
 }  // namespace adbc::driver::pgwire

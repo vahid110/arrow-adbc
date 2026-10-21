@@ -140,11 +140,13 @@ Status DiscoverPostgresTypes(PGconn* conn,
                              std::shared_ptr<PostgresTypeResolver>* resolver_out) {
   auto resolver = std::make_shared<PostgresTypeResolver>(profile);
 
-  PqResultHelper columns(conn, std::string(kColumnsQuery));
+  PqResultHelper columns(conn, std::string(kColumnsQuery),
+                         profile.kind == adbc::driver::pgwire::BackendKind::kRedshift);
   UNWRAP_STATUS(columns.Execute());
   UNWRAP_STATUS(InsertPgAttributeResult(columns, resolver));
 
-  PqResultHelper types(conn, BuildTypeCatalogQuery(profile));
+  PqResultHelper types(conn, BuildTypeCatalogQuery(profile),
+                       profile.kind == adbc::driver::pgwire::BackendKind::kRedshift);
   constexpr int32_t kMaxAttempts = 3;
   for (int32_t i = 0; i < kMaxAttempts; i++) {
     UNWRAP_STATUS(types.Execute());

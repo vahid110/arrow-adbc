@@ -127,7 +127,69 @@ else()
   set(REDSHIFT_TEST_LINK_LIBS adbc_driver_redshift_static)
 endif()
 
+# Explicitly built noninstalled native discovery dependency; never driver input.
+if(UNIX)
+  add_library(adbc_native_protocol_runner STATIC EXCLUDE_FROM_ALL
+              ../pgwire/native_protocol_capture.cc ../pgwire/native_protocol_runner.cc)
+  target_compile_features(adbc_native_protocol_runner PRIVATE cxx_std_20)
+  target_include_directories(adbc_native_protocol_runner SYSTEM
+                             PRIVATE ${LIBPQ_INCLUDE_DIRS})
+  target_link_libraries(adbc_native_protocol_runner PRIVATE ${LIBPQ_LINK_LIBRARIES})
+endif()
+
 if(ADBC_BUILD_TESTS)
+  # Observer/test code is excluded from both driver source and install lists.
+  add_test_case(native_protocol_capture_test
+                PREFIX
+                adbc
+                EXTRA_LABELS
+                protocol-observation
+                SOURCES
+                ../pgwire/native_protocol_capture.cc
+                ../pgwire/native_protocol_capture_test.cc
+                ../pgwire/native_protocol_plan_test.cc
+                EXTRA_LINK_LIBS
+                ${LIBPQ_LINK_LIBRARIES})
+  target_compile_features(adbc-native-protocol-capture-test PRIVATE cxx_std_20)
+  target_include_directories(adbc-native-protocol-capture-test SYSTEM
+                             PRIVATE ${LIBPQ_INCLUDE_DIRS})
+  if(UNIX)
+    # Test includes runner.cc for translation-unit-private socket-free seams.
+    add_test_case(native_protocol_runner_test
+                  PREFIX
+                  adbc
+                  EXTRA_LABELS
+                  protocol-observation
+                  SOURCES
+                  ../pgwire/native_protocol_capture.cc
+                  ../pgwire/native_protocol_runner_test.cc
+                  EXTRA_LINK_LIBS
+                  ${LIBPQ_LINK_LIBRARIES})
+    target_compile_features(adbc-native-protocol-runner-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-runner-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
+    add_test_case(native_protocol_output_test
+                  PREFIX
+                  adbc
+                  EXTRA_LABELS
+                  protocol-observation
+                  SOURCES
+                  ../pgwire/native_protocol_output.cc
+                  ../pgwire/native_protocol_output_test.cc)
+    target_compile_features(adbc-native-protocol-output-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-output-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
+    # Explicit root-only own-PG test; never a default test or installed client.
+    add_executable(adbc-native-protocol-capture-plumbing-test EXCLUDE_FROM_ALL
+                   ../pgwire/native_protocol_capture.cc
+                   ../pgwire/native_protocol_output.cc
+                   ../pgwire/native_protocol_capture_plumbing_test.cc)
+    target_compile_features(adbc-native-protocol-capture-plumbing-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-native-protocol-capture-plumbing-test SYSTEM
+                               PRIVATE ${LIBPQ_INCLUDE_DIRS})
+    target_link_libraries(adbc-native-protocol-capture-plumbing-test
+                          PRIVATE ${LIBPQ_LINK_LIBRARIES})
+  endif()
   # This small test-only producer exports C Data from the actual catalog/schema/
   # field codec. It is excluded from normal installs and every driver artifact.
   add_library(adbc_redshift_interval_test_fixture SHARED
@@ -198,8 +260,16 @@ if(ADBC_BUILD_TESTS)
                 metadata_test.cc
                 postgres_type_test.cc
                 redshift_interval_test.cc
+                redshift_interval_write_test.cc
                 type_modifier_test.cc
                 redshift_numeric_test.cc
+                redshift_decimal_test.cc
+                redshift_temporal_test.cc
+                redshift_timetz_test.cc
+                redshift_bytes_test.cc
+                redshift_scalar_test.cc
+                redshift_super_test.cc
+                redshift_encoded_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc
@@ -222,6 +292,55 @@ if(ADBC_BUILD_TESTS)
                                      ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
   )
   adbc_configure_target(adbc-driver-postgresql-test)
+
+  # Separate real public entrypoints with only network libpq symbols replaced.
+  # No installed artifact contains this recorder or a fixture authorization path.
+  add_test_case(driver_redshift_interval_recording_test
+                PREFIX
+                adbc
+                EXTRA_LABELS
+                driver-redshift
+                SOURCES
+                redshift_interval_recording_test.cc
+                ${PGWIRE_DRIVER_SOURCES}
+                EXTRA_LINK_LIBS
+                adbc_driver_common
+                adbc_driver_framework
+                ${LIBPQ_LINK_LIBRARIES})
+  target_compile_features(adbc-driver-redshift-interval-recording-test PRIVATE cxx_std_20)
+  target_compile_definitions(adbc-driver-redshift-interval-recording-test
+                             PRIVATE ADBC_EXPORTING)
+  set_target_properties(adbc-driver-redshift-interval-recording-test
+                        PROPERTIES UNITY_BUILD OFF)
+  target_include_directories(adbc-driver-redshift-interval-recording-test SYSTEM
+                             PRIVATE ${REPOSITORY_ROOT}/c/
+                                     ${REPOSITORY_ROOT}/c/include/
+                                     ${REPOSITORY_ROOT}/c/driver
+                                     ${LIBPQ_INCLUDE_DIRS}
+                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+  )
+  foreach(PQ_SYMBOL
+          PQconnectdb
+          PQstatus
+          PQfinish
+          PQparameterStatus
+          PQgetCancel
+          PQfreeCancel
+          PQsetNoticeProcessor
+          PQtransactionStatus
+          PQerrorMessage
+          PQescapeIdentifier
+          PQexec
+          PQexecParams
+          PQprepare
+          PQexecPrepared
+          PQdescribePrepared
+          PQnparams
+          PQparamtype)
+    target_compile_definitions(adbc-driver-redshift-interval-recording-test
+                               PRIVATE ${PQ_SYMBOL}=IntervalRecording_${PQ_SYMBOL})
+  endforeach()
+  adbc_configure_target(adbc-driver-redshift-interval-recording-test)
 
   add_test_case(driver_postgresql_copy_test
                 PREFIX

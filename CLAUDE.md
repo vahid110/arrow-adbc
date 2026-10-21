@@ -34,17 +34,36 @@ framework, and do not add an extension point until two backends need it.
 Keep the fork rebaseable onto Apache `main`: avoid gratuitous renames/moves of
 upstream code.
 
+## Current local-first workflow (human override, 2026-10-18)
+
+Development stays local: no push, PR creation or GitHub Actions dispatch during
+this phase. The coordinator maintains `local/redshift-types-20261018`; workers
+branch from its exact verified commit, never a stale remote ref. One coordinator
+serial O0/g0 build validates immutable checkpoints on this 8 GB host, including
+meaningful native, public API, C Data and rebuilt installed-artifact tests.
+Workers run small seams and pinned changed-file lint; they do not start competing
+full builds. An independent exact-head/tree review is required before the
+coordinator integrates locally.
+
+After development, the coordinator owns the separately admitted finite live
+window on dedicated resources and verified teardown, then the final push and all
+applicable green CI gates. This ordering grants no paid attempt, credentials,
+release or protected-resource authority. The prior Task008 batch is complete and
+spent; its receipts remain immutable. AO/timer and automatic dispatch stay paused.
+The PR/CI conventions below apply to the final remote phase.
+
 ## Roles
 
 - **Coordinator** (the long-running session): owns the queue, writes task briefs,
   merges PRs, runs live Redshift batches, reports to the human. Does not write
   product code.
 - **Worker**: implements exactly one task brief on `task/<nnn>-<slug>`, branched
-  from `feature/pgwire-core-redshift`. Writes the tests with the code. Opens a PR
-  into `feature/pgwire-core-redshift`, makes CI green, answers review.
+  from the coordinator-verified local integration ref during development. Writes
+  tests with the code, freezes immutable checkpoints and answers independent review.
+  The coordinator controls integration and the final remote phase.
 - **Reviewer**: independent; sees only the brief, the PR diff and this file.
-  Posts one PR comment starting with `VERDICT: APPROVE` or
-  `VERDICT: CHANGES REQUESTED`, listing concrete findings with file:line.
+  Records `VERDICT: APPROVE` or `VERDICT: CHANGES REQUESTED` for the exact local
+  head/tree (a PR comment in the remote phase), with concrete file:line findings.
   Reviews correctness, test adequacy, architecture rule, scope creep.
 
 ## Hard rules
@@ -56,9 +75,9 @@ upstream code.
 - Merge requires: every gate below that the PR triggered is green on the PR
   head, reviewer `APPROVE`, and `STATUS.md`/`V1_PLAN.md` updated in the same PR
   if the task changes scope or state.
-- No heavy local builds (the host has 8 GB RAM and other jobs). GitHub Actions is
-  the build and test machine. Before every push, run the pinned linters on the
-  changed files: `SKIP=dotnet-format ~/.venvs/adbc-lint/bin/pre-commit run --files <files>`
+- No worker full builds: the coordinator runs one serial immutable local build.
+  Before each frozen checkpoint and final push, run pinned linters on every
+  task-changed file: `SKIP=dotnet-format ~/.venvs/adbc-lint/bin/pre-commit run --files <files>`
   (clang-format 18.1.7, cpplint, cmake-format, whitespace). Batch fixes into one
   push; each push costs a CI round.
 - AWS: workers/reviewers never run real AWS CLI/SDK calls or access host
@@ -110,10 +129,10 @@ use. Inspect failures with `gh run view <id> --log-failed`.
 
 ## Live Redshift budget
 
-Current Task008c authorization is one dedicated 4-RPU batch, USD 5 incremental
+Historical completed/spent Task008c authorization was one dedicated 4-RPU batch, USD 5 incremental
 target, query at most 15 minutes, host compute at most 60 minutes, daily 4-RPU-hour
 deactivation limit, zero paid retries and verified full teardown. Protected/shared
-resources cannot be used. This finite human-approved brief supersedes the old
+resources cannot be used. It grants no further attempt. The finite human-approved brief superseded the old
 shared-target operating procedure below; historical amounts remain evidence.
 
 Historical shared budget (no current shared-target access):

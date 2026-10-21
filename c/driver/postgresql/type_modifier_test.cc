@@ -197,7 +197,7 @@ TEST(TypeModifierTest, LiteralTypeSpecificBoundsNeverProduceDefaultsOrWrap) {
       {"bpchar", 5, {}, {}, 1},          {"bpchar", 4100, {}, {}, 4096},
       {"bpchar", 4101, {}, {}, 4097},    {"varchar", 65539, {}, {}, 65535},
       {"varchar", 65540, {}, {}, 65536}, {"varchar", 16000004, {}, {}, 16000000},
-      {"varchar", 16000005, {}, {}, {}}, {"varbyte", 100, {}, {}, {}},
+      {"varchar", 16000005, {}, {}, {}}, {"varbyte", 100, {}, {}, 96},
       {"intervald2s", 6, {}, {}, {}},
   };
   for (const auto& item : cases) {

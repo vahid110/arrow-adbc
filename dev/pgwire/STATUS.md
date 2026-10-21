@@ -19,6 +19,26 @@
 
 # Status
 
+
+Task010i1/i2/j/k are locally integrated at `a239f66cc`, after independent exact
+source approval and rebuilt/installed 35-stage offline validation. On 2026-10-21,
+operation `726f4b3594e048e29f4571b2770549c3` passed all 18 fixed installed-driver
+cases on macOS arm64: 15 positive cases and three expected rejection boundaries,
+102 public API calls, no early stop. The tested source is `a239f66cc`; this docs
+update does not represent another binary build or live test. The cases cover
+SUPER JSON-subset generated CREATE/APPEND, spatial CREATE/readback with EWKB,
+metadata and native witnesses, HLL CREATE/readback and typed text parameters,
+and VARBYTE binary CREATE/readback. Spatial/HLL APPEND was not exercised.
+The child was reaped and its fixture and handles cleaned up. A separate admin
+observer and the root's owned-resource checks verified all seven owned resource
+classes absent. Actual billing is not reconciled.
+
+This bounded installed subset does not close all 21 types, full domains/size
+boundaries, every metadata API or portable-platform qualification. Native SUPER
+reads, direct SUPER/spatial binds and mixed HLL output remain explicitly
+unsupported. Vendor REPLACE rejects before ownership/DDL; CREATE residue and
+APPEND ownership remain as documented. The VARBYTE binary codec is unchanged.
+
 Current state only; history is in git and PR descriptions.
 
 ## Active
@@ -48,10 +68,50 @@ Current state only; history is in git and PR descriptions.
   across query/schema/catalog/parameter paths (PR23 merged; offline CI passed).
   Task010c2 adds descriptor-driven decimal128 reads or exact UTF-8 for unknown
   modifiers, with strict finite base-10000 reference decoding and codec-produced
-  C Data/PyArrow tests; review/CI pending. Writes are unchanged. Synthetic descriptors and local PostgreSQL
-  plumbing do not qualify the actual Redshift/libpq path.
-  Interval writes/qualifiers, scalar/modifier, SUPER, HLL and spatial work remains
-  required before Task009. No paid operation is performed or authorized here.
+  C Data/PyArrow tests (PR24 merged; offline CI passed). Task010c3 implements
+  explicit decimal DDL, bounded exact binding and target-aware append, including
+  DECIMAL-marked text and owned rollback uncertainty (locally integrated at d04f2d2;
+  independent review and serial native/installed tests passed). Task010c4 adds
+  checked integer/float/boolean binding, canonical DDL/metadata and target-aware
+  append (locally integrated b90664a; independent review and serial native/installed
+  validation passed). Task010d adds checked character/binary identity, widths, explicit DDL and
+  target-aware append (locally integrated c07f811; independent review and all 20
+  serial native/installed validation steps passed), retaining a provisional
+  VARBYTE plain-route size gate. Task010e1 implements four temporal core families
+  with immutable per-connection Arrow/lossless output contexts, exact binding and
+  target-aware ingest (locally integrated 7fc46fa; independent FULL review and all 22
+  validation steps passed). Task010e2 adds closed interval qualifier/precision
+  schemas, exact reference reads/writes/DDL and bounded raw target observations;
+  locally integrated 35584f5 after independent FULL approval and all 24 serial
+  validation steps. Native interval target constraint producers remain unqualified
+  and actual-target writes fail closed. Task010e3 adds an explicit fixed-offset
+  TIMETZ struct, checked reference reads/writes, source/target precision and
+  bare declaration handling (locally integrated e2df066; independent FULL approval
+  and all 25 serial validation steps passed). Task010f0 adds a separate noninstalled
+  bounded protocol observer/fixed plans (locally integrated 65e7e9b; independent
+  FULL approval and all 30 serial validation steps passed). Task010g0 adds a pure
+  anchored historical local-evidence/package-byte linker (locally integrated
+  1f35366 after independent FULL approval, actual historical receipt linkage and
+  retained 30-step validation). Task010g1 adds trusted in-place install comparisons
+  and a fixed same-host load-only observation (locally integrated 0285eba after
+  exact independent approval and all 30 serial validation steps). Its named G0
+  artifact load observed 328 images: 28 non-OS and 300 OS; collector source is G1.
+  Task010g2 adds a bounded output fd for the existing seven-probe own-PG test
+  (locally integrated cfe9feb after actual seven-record/stale-fd/cleanup checks,
+  all 31 serial validation steps and exact independent approval). Task010g4 adds
+  a noninstalled owned single replay parameter with distinct observed and
+  controlled NULL/empty origins (locally integrated def7084; independent approval,
+  all 31 serial validation steps and ten own-PG echoes/15 calls). Task010h0 adds
+  closed compiled native discovery plans/capture shapes (locally integrated 4bdc23b;
+  independent approval, all 31 serial stages and nine own-PG checks/15 calls).
+  Task010h1's noninstalled closed 715-step async runner and eight bounded output
+  descriptors were locally integrated at `3c956e3` after exact independent approval,
+  all 32 serial stages and controlled own-PG checks. Later private native runs
+  retain protocol observations and failures separately from installed-driver
+  acceptance. Synthetic/local PostgreSQL evidence does not qualify Redshift;
+  platform CI follows the local-first workflow. Full temporal/domain/precision,
+  character/binary size, interval qualifier and lossless native SUPER qualification
+  remain open before Task009. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay

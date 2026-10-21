@@ -36,6 +36,7 @@
 namespace adbcpq {
 
 Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) const {
+  UNWRAP_STATUS(CheckEncoding());
   // TODO: make stmtName a unique identifier?
   adbc::driver::pgwire::UniqueResult result(
       PQprepare(conn_, /*stmtName=*/"", query_.c_str(), n_params, param_oids));
@@ -43,6 +44,7 @@ Status PqResultHelper::PrepareInternal(int n_params, const Oid* param_oids) cons
     return MakeStatus(result.get(), "Failed to prepare query: {}\nQuery was: {}",
                       PQerrorMessage(conn_), query_.c_str());
   }
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
@@ -53,6 +55,7 @@ Status PqResultHelper::Prepare(const std::vector<Oid>& param_oids) const {
 }
 
 Status PqResultHelper::DescribePrepared() {
+  UNWRAP_STATUS(CheckEncoding());
   ClearResult();
   result_.reset(PQdescribePrepared(conn_, /*stmtName=*/""));
   if (PQresultStatus(result_.get()) != PGRES_COMMAND_OK) {
@@ -63,11 +66,13 @@ Status PqResultHelper::DescribePrepared() {
     return status;
   }
 
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
 Status PqResultHelper::Execute(const std::vector<std::string>& params,
                                PostgresType* param_types) {
+  UNWRAP_STATUS(CheckEncoding());
   if (params.size() == 0 && param_types == nullptr && output_format_ == Format::kText) {
     ClearResult();
     result_.reset(PQexec(conn_, query_.c_str()));
@@ -105,10 +110,38 @@ Status PqResultHelper::Execute(const std::vector<std::string>& params,
                       query_.c_str(), PQerrorMessage(conn_));
   }
 
+  UNWRAP_STATUS(CheckEncoding());
+  return Status::Ok();
+}
+
+Status PqResultHelper::ExecutePreparedOutput() {
+  UNWRAP_STATUS(CheckEncoding());
+  ClearResult();
+  result_.reset(PQexecPrepared(conn_, "", 0, nullptr, nullptr, nullptr,
+                               static_cast<int>(output_format_)));
+  const auto status = PQresultStatus(result_.get());
+  if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK)
+    return MakeStatus(result_.get(), "[libpq] Failed prepared result execution");
+  return CheckEncoding();
+}
+Status PqResultHelper::CheckDescriptor(const PGresult* expected, int format) const {
+  if (!expected || !result_ || PQnfields(expected) != PQnfields(result_.get()))
+    return Status::InvalidState("[Redshift] Result descriptor count changed");
+  for (int i = 0; i < PQnfields(expected); ++i) {
+    if (PQftype(expected, i) != PQftype(result_.get(), i) ||
+        PQfmod(expected, i) != PQfmod(result_.get(), i) ||
+        PQftable(expected, i) != PQftable(result_.get(), i) ||
+        PQftablecol(expected, i) != PQftablecol(result_.get(), i) ||
+        std::string_view(PQfname(expected, i)) !=
+            std::string_view(PQfname(result_.get(), i)) ||
+        PQfformat(result_.get(), i) != format)
+      return Status::InvalidState("[Redshift] Result descriptor/format changed");
+  }
   return Status::Ok();
 }
 
 Status PqResultHelper::ExecuteCopy() {
+  UNWRAP_STATUS(CheckEncoding());
   // Remove trailing semicolon(s) from the query before feeding it into COPY
   while (!query_.empty() && query_.back() == ';') {
     query_.pop_back();
@@ -130,11 +163,13 @@ Status PqResultHelper::ExecuteCopy() {
     return status;
   }
 
+  UNWRAP_STATUS(CheckEncoding());
   return Status::Ok();
 }
 
-Status PqResultHelper::ResolveParamTypes(PostgresTypeResolver& type_resolver,
-                                         PostgresType* param_types) {
+Status PqResultHelper::ResolveParamTypes(
+    PostgresTypeResolver& type_resolver, PostgresType* param_types,
+    adbc::driver::pgwire::TemporalRepresentation temporal) {
   struct ArrowError na_error;
   ArrowErrorInit(&na_error);
 
@@ -156,16 +191,18 @@ Status PqResultHelper::ResolveParamTypes(PostgresTypeResolver& type_resolver,
     }
 
     std::string param_name = "$" + std::to_string(i + 1);
-    root_type.AppendChild(param_name, pg_type.WithFieldDescriptor(
-                                          std::nullopt, type_resolver.backend_profile()));
+    root_type.AppendChild(param_name,
+                          pg_type.WithFieldDescriptor(
+                              std::nullopt, type_resolver.backend_profile(), temporal));
   }
 
   *param_types = root_type;
   return Status::Ok();
 }
 
-Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
-                                          PostgresType* result_types) {
+Status PqResultHelper::ResolveOutputTypes(
+    PostgresTypeResolver& type_resolver, PostgresType* result_types,
+    adbc::driver::pgwire::TemporalRepresentation temporal) {
   struct ArrowError na_error;
   ArrowErrorInit(&na_error);
 
@@ -175,15 +212,11 @@ Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
   for (int i = 0; i < num_fields; i++) {
     const Oid pg_oid = PQftype(result_.get(), i);
     PostgresType pg_type;
-    if (type_resolver.Find(pg_oid, &pg_type, &na_error) != NANOARROW_OK) {
-      // We couldn't look up the OID.
-      // TODO(apache/arrow-adbc#1243): issue a warning (maybe reloading the
-      // connection will load the OIDs if it was a newly created type)
-      pg_type = PostgresType::Unnamed(pg_oid);
-    }
+    if (type_resolver.FindOutput(pg_oid, &pg_type, &na_error) != NANOARROW_OK)
+      return Status(ADBC_STATUS_INVALID_DATA, na_error.message);
 
     pg_type = pg_type.WithFieldDescriptor(PQfmod(result_.get(), i),
-                                          type_resolver.backend_profile());
+                                          type_resolver.backend_profile(), temporal);
     root_type.AppendChild(PQfname(result_.get(), i), pg_type);
   }
 
@@ -191,8 +224,9 @@ Status PqResultHelper::ResolveOutputTypes(PostgresTypeResolver& type_resolver,
   return Status::Ok();
 }
 
-Status PqResultHelper::ResolveTableSchema(PostgresTypeResolver& type_resolver,
-                                          PostgresType* result_types) {
+Status PqResultHelper::ResolveTableSchema(
+    PostgresTypeResolver& type_resolver, PostgresType* result_types,
+    adbc::driver::pgwire::TemporalRepresentation temporal) {
   if (NumColumns() != 3)
     return Status(ADBC_STATUS_INVALID_DATA, "Expected name/OID/modifier table schema");
   PostgresType root(PostgresTypeId::kRecord);
@@ -210,8 +244,9 @@ Status PqResultHelper::ResolveTableSchema(PostgresTypeResolver& type_resolver,
     PostgresType type;
     UNWRAP_ERRNO(Internal,
                  type_resolver.FindWithDefault(static_cast<uint32_t>(oid), &type));
-    root.AppendChild(std::string(row[0].data, row[0].len),
-                     type.WithFieldDescriptor(modifier, type_resolver.backend_profile()));
+    root.AppendChild(
+        std::string(row[0].data, row[0].len),
+        type.WithFieldDescriptor(modifier, type_resolver.backend_profile(), temporal));
   }
   *result_types = std::move(root);
   return Status::Ok();

@@ -53,6 +53,7 @@
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
+#include "redshift_interval_catalog.h"
 #include "redshift_replace_preflight.h"
 #include "result_helper.h"
 #include "result_reader.h"
@@ -582,11 +583,51 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
 
+  ArrowError vendor_error{};
+  bool has_super = false;
+  if (type_resolver_ && RedshiftSuperSchema::ValidateRoute(
+                            schema, type_resolver_->is_redshift(),
+                            !ingest_.target.empty(), ingest_.mode == IngestMode::kReplace,
+                            &has_super, &vendor_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", vendor_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
   ArrowError interval_error{};
-  if (type_resolver_ && PostgresType::ValidateIntervalWriteSchema(
+  if (type_resolver_ &&
+      PostgresType::ValidateVendorWriteSchema(*type_resolver_, schema, &interval_error)) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ && PostgresType::ValidateTemporalWriteSchema(
                             *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  const int interval_status = type_resolver_
+                                  ? PostgresType::ValidateIntervalWriteSchema(
+                                        *type_resolver_, schema, &interval_error)
+                                  : NANOARROW_OK;
+  if (interval_status != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return interval_status == ENOTSUP ? ADBC_STATUS_NOT_IMPLEMENTED
+                                      : ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (type_resolver_ && PostgresType::ValidateDecimalWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ && PostgresType::ValidateScalarWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (type_resolver_ && PostgresType::ValidateBytesWriteSchema(
+                            *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
   }
 
   if (bind_.release) bind_.release(&bind_);
@@ -608,11 +649,51 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
   CHECK_NA_DETAIL(INVALID_ARGUMENT,
                   ArrowArrayStreamGetSchema(stream, schema.get(), &interval_error),
                   &interval_error, error);
+  bool has_super = false;
+  if (type_resolver_ && RedshiftSuperSchema::ValidateRoute(
+                            schema.get(), type_resolver_->is_redshift(),
+                            !ingest_.target.empty(), ingest_.mode == IngestMode::kReplace,
+                            &has_super, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ && PostgresType::ValidateVendorWriteSchema(
+                            *type_resolver_, schema.get(), &interval_error)) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
   if (type_resolver_ &&
-      PostgresType::ValidateIntervalWriteSchema(*type_resolver_, schema.get(),
+      PostgresType::ValidateTemporalWriteSchema(*type_resolver_, schema.get(),
                                                 &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  const int interval_status = type_resolver_
+                                  ? PostgresType::ValidateIntervalWriteSchema(
+                                        *type_resolver_, schema.get(), &interval_error)
+                                  : NANOARROW_OK;
+  if (interval_status != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return interval_status == ENOTSUP ? ADBC_STATUS_NOT_IMPLEMENTED
+                                      : ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateDecimalWriteSchema(*type_resolver_, schema.get(),
+                                               &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateScalarWriteSchema(*type_resolver_, schema.get(),
+                                              &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ &&
+      PostgresType::ValidateBytesWriteSchema(*type_resolver_, schema.get(),
+                                             &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
   }
   // Move stream
   if (bind_.release) bind_.release(&bind_);
@@ -631,6 +712,15 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     std::string* escaped_table, std::string* escaped_field_list,
     PostgresType* copy_target_types, bool* has_copy_target_types,
     const std::function<Status()>& before_replace_ddl, struct AdbcError* error) {
+  bool has_super = false;
+  ArrowError super_error{};
+  CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                  RedshiftSuperSchema::ValidateRoute(
+                      &source_schema, type_resolver_->is_redshift(), true,
+                      ingest_.mode == IngestMode::kReplace, &has_super, &super_error),
+                  &super_error, error);
+  if (has_super) RAISE_STATUS(error, CheckSuperParseContext(connection_->conn()));
+
   PGconn* conn = connection_->conn();
   *has_copy_target_types = false;
 
@@ -735,6 +825,88 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     }
   }
 
+  // Interval constraints and temporal precision need an existing-vs-new
+  // distinction: unused CREATE declarations must not erase append semantics.
+  bool append_existing_semantic = false;
+  bool interval_create_append = false;
+  if (ingest_.mode == IngestMode::kCreateAppend) {
+    bool requires_existing = false;
+    for (int64_t i = 0; i < source_schema.n_children; ++i) {
+      RedshiftTemporalSchema temporal;
+      ArrowError na_error{};
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftTemporalSchema::Parse(source_schema.children[i],
+                                                    type_resolver_->is_redshift(),
+                                                    &temporal, &na_error),
+                      &na_error, error);
+      requires_existing |=
+          temporal.enabled() && temporal.precision && *temporal.precision < 6;
+      RedshiftTimetzSchema timetz;
+      CHECK_NA_DETAIL(
+          INVALID_ARGUMENT,
+          RedshiftTimetzSchema::Parse(source_schema.children[i],
+                                      type_resolver_->is_redshift(), &timetz, &na_error),
+          &na_error, error);
+      requires_existing |= timetz.enabled && timetz.precision && *timetz.precision < 6;
+      RedshiftIntervalSchema interval;
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftIntervalSchema::Parse(source_schema.children[i],
+                                                    type_resolver_->is_redshift(),
+                                                    &interval, &na_error),
+                      &na_error, error);
+      interval_create_append |= interval.enabled();
+      requires_existing |= interval.enabled();
+      RedshiftEncodedSchema encoded;
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftEncodedSchema::Parse(source_schema.children[i],
+                                                   type_resolver_->is_redshift(),
+                                                   &encoded, &na_error),
+                      &na_error, error);
+      requires_existing |= encoded.enabled();
+    }
+    requires_existing |= has_super;
+    if (requires_existing) {
+      std::string target = ingest_.target;
+      std::string schema = ingest_.db_schema.empty() ? current_schema : ingest_.db_schema;
+      if (type_resolver_->is_redshift()) {
+        std::string lookup_schema = ingest_.temporary ? "" : schema;
+        auto read_setting = [conn](std::string_view query, std::string* value) -> Status {
+          PqResultHelper setting(conn, std::string(query), true);
+          UNWRAP_STATUS(setting.Execute());
+          if (setting.NumRows() != 1 || setting.NumColumns() != 1 ||
+              setting.Row(0)[0].is_null)
+            return Status(ADBC_STATUS_INVALID_DATA, "Missing identifier-case setting");
+          *value = std::string(setting.Row(0)[0].value());
+          return Status::Ok();
+        };
+        RAISE_STATUS(error, adbc::driver::pgwire::NormalizeRedshiftLookupIdentifiers(
+                                &target, &lookup_schema, read_setting));
+        if (!ingest_.temporary) schema = std::move(lookup_schema);
+      }
+      // Catalog-only query: CURRENT_SCHEMAS is leader-only on Redshift. The
+      // current session's implicit TEMP namespace is the only matching member.
+      // Do not cast a possibly missing relation to regclass or catch SQL errors:
+      // that would abort a caller-owned transaction before the pre-DDL gate.
+      PqResultHelper exists(
+          conn,
+          "SELECT cls.oid FROM pg_catalog.pg_class AS cls "
+          "INNER JOIN pg_catalog.pg_namespace AS ns ON ns.oid=cls.relnamespace "
+          "WHERE cls.relname=$1 AND " +
+              std::string(ingest_.temporary ? "substring(ns.nspname,1,8)='pg_temp_' AND "
+                                              "ns.nspname=ANY(current_schemas(true))"
+                                            : "ns.nspname=$2"),
+          type_resolver_->is_redshift());
+      RAISE_STATUS(error, exists.Execute(ingest_.temporary
+                                             ? std::vector<std::string>{target}
+                                             : std::vector<std::string>{target, schema}));
+      if (exists.NumColumns() != 1 || exists.NumRows() > 1) {
+        InternalAdbcSetError(error, "[libpq] Ambiguous CREATE_APPEND target");
+        return ADBC_STATUS_INVALID_DATA;
+      }
+      append_existing_semantic = exists.NumRows() == 1;
+    }
+  }
+
   std::string create;
 
   if (ingest_.temporary) {
@@ -750,13 +922,16 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       // The replacement DROP is deferred until column mapping succeeds.
       break;
     case IngestMode::kCreateAppend:
-      create += "IF NOT EXISTS ";
+      // An absent interval target uses plain CREATE; a concurrent appearance
+      // errors instead of silently replacing the requested declaration.
+      if (!interval_create_append) create += "IF NOT EXISTS ";
       break;
   }
   create += *escaped_table;
   create += " (";
   std::vector<std::string> source_field_names;
   source_field_names.reserve(source_schema.n_children);
+  bool has_semantic_schema = false;
 
   for (int64_t i = 0; i < source_schema.n_children; i++) {
     if (i > 0) {
@@ -782,15 +957,102 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                     PostgresType::FromSchema(*type_resolver_, source_schema.children[i],
                                              &pg_type, &na_error),
                     &na_error, error);
-    create += " " + pg_type.sql_type_name();
+    RedshiftDecimalSchema decimal;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftDecimalSchema::Parse(source_schema.children[i],
+                                     type_resolver_->is_redshift(), &decimal, &na_error),
+        &na_error, error);
+    RedshiftScalarSchema scalar;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftScalarSchema::Parse(source_schema.children[i],
+                                    type_resolver_->is_redshift(), &scalar, &na_error),
+        &na_error, error);
+    RedshiftBytesSchema bytes;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftBytesSchema::Parse(source_schema.children[i],
+                                   type_resolver_->is_redshift(), &bytes, &na_error),
+        &na_error, error);
+    if (bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte)
+      RAISE_STATUS(error, CheckUtf8Encoding(conn));
+    RedshiftTemporalSchema temporal;
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    RedshiftTemporalSchema::Parse(source_schema.children[i],
+                                                  type_resolver_->is_redshift(),
+                                                  &temporal, &na_error),
+                    &na_error, error);
+    RedshiftIntervalSchema interval;
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    RedshiftIntervalSchema::Parse(source_schema.children[i],
+                                                  type_resolver_->is_redshift(),
+                                                  &interval, &na_error),
+                    &na_error, error);
+    RedshiftTimetzSchema timetz;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftTimetzSchema::Parse(source_schema.children[i],
+                                    type_resolver_->is_redshift(), &timetz, &na_error),
+        &na_error, error);
+    RedshiftSuperSchema super;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftSuperSchema::Parse(source_schema.children[i],
+                                   type_resolver_->is_redshift(), &super, &na_error),
+        &na_error, error);
+    RedshiftEncodedSchema encoded;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftEncodedSchema::Parse(source_schema.children[i],
+                                     type_resolver_->is_redshift(), &encoded, &na_error),
+        &na_error, error);
+    has_semantic_schema |= encoded.enabled() || super.enabled || decimal.enabled ||
+                           scalar.enabled() || bytes.enabled() || temporal.enabled() ||
+                           interval.enabled() || timetz.enabled;
+    std::string declaration = super.enabled ? "SUPER"
+                              : encoded.enabled()
+                                  ? RedshiftEncodedSchema::Family(encoded.kind)
+                                  : pg_type.sql_type_name();
+    if (decimal.enabled && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic) {
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
+                      &na_error, error);
+    }
+    if (scalar.enabled()) declaration = RedshiftScalarSchema::SqlName(scalar.kind);
+    if (temporal.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, temporal.Declaration(&declaration, &na_error),
+                      &na_error, error);
+    if (bytes.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic) {
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, bytes.Declaration(&declaration, &na_error),
+                      &na_error, error);
+      // PostgreSQL has BYTEA without a width declaration. Keep the explicit
+      // semantic source envelope while exercising the shared path on PostgreSQL.
+      if (!type_resolver_->is_redshift() && bytes.kind == RedshiftBytesKind::kVarbyte)
+        declaration = "BYTEA";
+    }
+    if (interval.enabled() && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      interval.constraint.Declaration(&declaration, &na_error), &na_error,
+                      error);
+    if (timetz.enabled && ingest_.mode != IngestMode::kAppend &&
+        !append_existing_semantic)
+      CHECK_NA_DETAIL(INVALID_ARGUMENT, timetz.Declaration(&declaration, &na_error),
+                      &na_error, error);
+    create += " " + declaration;
   }
 
-  if (ingest_.mode == IngestMode::kAppend) {
+  if (ingest_.mode == IngestMode::kAppend || append_existing_semantic) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {
       return status;
     }
+    RAISE_STATUS(error, ValidateVendorTargets(&source_schema, *copy_target_types,
+                                              type_resolver_->is_redshift()));
     *has_copy_target_types = true;
     return ADBC_STATUS_OK;
   }
@@ -835,12 +1097,15 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     return failure.ToAdbc(error);
   }
   RAISE_STATUS(error, ddl_transaction.Commit());
-  if (ingest_.mode == IngestMode::kCreateAppend) {
+  if (ingest_.mode == IngestMode::kCreateAppend || type_resolver_->is_redshift() ||
+      has_semantic_schema) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,
                                                    copy_target_types, error);
     if (status != ADBC_STATUS_OK) {
       return status;
     }
+    RAISE_STATUS(error, ValidateVendorTargets(&source_schema, *copy_target_types,
+                                              type_resolver_->is_redshift()));
     *has_copy_target_types = true;
   }
   return ADBC_STATUS_OK;
@@ -850,42 +1115,35 @@ AdbcStatusCode PostgresStatement::ResolveCopyTargetTypes(
     const std::string& escaped_table, const std::vector<std::string>& source_field_names,
     PostgresType* copy_target_types, struct AdbcError* error) {
   PqResultHelper result_helper{connection_->conn(),
-                               "SELECT attr.attname, attr.atttypid "
+                               "SELECT attr.attname, attr.atttypid, attr.atttypmod "
                                "FROM pg_catalog.pg_attribute AS attr "
                                "WHERE attr.attrelid = $1::regclass::oid "
-                               "AND attr.attnum > 0 AND NOT attr.attisdropped"};
+                               "AND attr.attnum > 0 AND NOT attr.attisdropped "
+                               "ORDER BY attr.attnum"};
+  result_helper.set_require_utf8(type_resolver_->is_redshift());
   RAISE_STATUS(error, result_helper.Execute({escaped_table}));
-
-  std::vector<std::pair<std::string, uint32_t>> table_fields;
-  table_fields.reserve(result_helper.NumRows());
-  for (auto row : result_helper) {
-    table_fields.emplace_back(
-        row[0].data, static_cast<uint32_t>(std::strtol(row[1].data, /*str_end=*/nullptr,
-                                                       /*base=*/10)));
-  }
-
+  PostgresType table;
+  RAISE_STATUS(error, result_helper.ResolveTableSchema(*type_resolver_, &table));
   *copy_target_types = PostgresType(PostgresTypeId::kRecord);
   for (const auto& field_name : source_field_names) {
-    auto it = std::find_if(table_fields.begin(), table_fields.end(),
-                           [&](const auto& item) { return item.first == field_name; });
-    if (it == table_fields.end()) {
+    const PostgresType* target = nullptr;
+    for (int64_t i = 0; i < table.n_children(); i++) {
+      if (table.child(i).field_name() == field_name) {
+        target = &table.child(i);
+        break;
+      }
+    }
+    if (!target) {
       InternalAdbcSetError(error,
                            "[libpq] Column \"%s\" does not exist in target table %s",
                            field_name.c_str(), escaped_table.c_str());
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
-
-    PostgresType pg_type;
-    if (type_resolver_->FindWithDefault(it->second, &pg_type) != NANOARROW_OK) {
-      InternalAdbcSetError(error,
-                           "[libpq] Could not resolve PostgreSQL type oid %" PRIu32
-                           " for column \"%s\"",
-                           it->second, field_name.c_str());
-      return ADBC_STATUS_NOT_IMPLEMENTED;
-    }
-    copy_target_types->AppendChild(field_name, pg_type);
+    copy_target_types->AppendChild(field_name, *target);
   }
-
+  if (type_resolver_->is_redshift())
+    RAISE_STATUS(error, ObserveIntervalTargets(connection_->conn(), escaped_table, table,
+                                               copy_target_types));
   return ADBC_STATUS_OK;
 }
 
@@ -898,7 +1156,8 @@ AdbcStatusCode PostgresStatement::ExecuteBind(struct ArrowArrayStream* stream,
                          "[libpq] Release the bound result stream before another query");
     return ADBC_STATUS_INVALID_STATE;
   }
-  PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+  PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                             connection_->temporal_representation());
   reader.SetAutocommit(connection_->autocommit());
   reader.SetConnection(connection_, std::move(lease));
   reader.SetBind(&bind_);
@@ -915,6 +1174,24 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
     return ADBC_STATUS_INVALID_STATE;
   }
   ClearResult();
+  if (bind_.release) {
+    nanoarrow::UniqueSchema schema;
+    ArrowError na_error{};
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    ArrowArrayStreamGetSchema(&bind_, schema.get(), &na_error), &na_error,
+                    error);
+    bool has_super = false;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftSuperSchema::ValidateRoute(
+            schema.get(), type_resolver_->is_redshift(), !ingest_.target.empty(),
+            ingest_.mode == IngestMode::kReplace, &has_super, &na_error),
+        &na_error, error);
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        PostgresType::ValidateVendorWriteSchema(*type_resolver_, schema.get(), &na_error),
+        &na_error, error);
+  }
 
   // Use a dedicated path to handle bulk ingest
   if (!ingest_.target.empty()) {
@@ -939,13 +1216,14 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
   // Text results are the portable PostgreSQL-wire path. Binary COPY is an
   // optional backend capability and remains PostgreSQL's default fast path.
   if (result_mode == adbc::driver::pgwire::QueryResultMode::kText) {
-    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                               connection_->temporal_representation());
     reader.SetVendorName(connection_->VendorName());
     RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));
     return ADBC_STATUS_OK;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
   RAISE_STATUS(error, helper.Prepare());
   RAISE_STATUS(error, helper.DescribePrepared());
 
@@ -953,12 +1231,14 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
   // unsupported types before issuing the COPY query). This could be lazier
   // (i.e., executed on the first call to GetSchema() or GetNext()).
   PostgresType root_type;
-  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &root_type));
+  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &root_type,
+                                                connection_->temporal_representation()));
 
   // If there will be no columns in the result, we can also avoid COPY
   if (root_type.n_children() == 0) {
     // Could/should move the helper into the reader instead of repreparing
-    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_);
+    PqResultArrayReader reader(connection_->conn(), type_resolver_, query_,
+                               connection_->temporal_representation());
     reader.SetVendorName(connection_->VendorName());
     RAISE_STATUS(error, reader.ToArrayStream(rows_affected, stream));
     return ADBC_STATUS_OK;
@@ -1001,7 +1281,7 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
 
   if (bind_.release) {
     nanoarrow::UniqueSchema param_schema;
@@ -1034,7 +1314,8 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
   RAISE_STATUS(error, helper.DescribePrepared());
 
   PostgresType output_type;
-  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &output_type));
+  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &output_type,
+                                                connection_->temporal_representation()));
 
   nanoarrow::UniqueSchema tmp;
   ArrowSchemaInit(tmp.get());
@@ -1075,7 +1356,8 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   // This is a little unfortunate; we need another DB roundtrip
   std::string current_schema;
   {
-    PqResultHelper result_helper{connection_->conn(), "SELECT CURRENT_SCHEMA()"};
+    PqResultHelper result_helper{connection_->conn(), "SELECT CURRENT_SCHEMA()",
+                                 type_resolver_->is_redshift()};
     RAISE_STATUS(error, result_helper.Execute());
     auto it = result_helper.begin();
     if (it == result_helper.end()) {
@@ -1087,6 +1369,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
   }
 
   BindStream bind_stream;
+  bind_stream.generated_super_ingest = type_resolver_->is_redshift();
   bind_stream.SetBind(&bind_);
   std::memset(&bind_, 0, sizeof(bind_));
   std::string escaped_table;
@@ -1130,9 +1413,10 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
           connection_->conn(), escaped_table, escaped_field_list,
           *connection_->type_resolver(), connection_->autocommit(),
           connection_->backend_profile().capabilities.parameterized_ingest_batch_rows,
-          rows_affected);
+          rows_affected, has_copy_target_types ? &copy_target_types : nullptr);
     }
 
+    UNWRAP_STATUS(bind_stream.CheckTextEncoding(connection_->conn(), *type_resolver_));
     std::string query = "COPY ";
     query += escaped_table;
     query += " (";
@@ -1155,7 +1439,7 @@ AdbcStatusCode PostgresStatement::ExecuteIngest(struct ArrowArrayStream* stream,
                                    &copy_cleanup_failed);
   }();
 
-  if (copy_cleanup_failed) {
+  if (copy_cleanup_failed || bind_stream.cleanup_failed) {
     connection_->MarkCopyIngestCleanupFailed();
     replace_transaction.Abandon();
     replace_savepoint.Abandon();
@@ -1256,12 +1540,13 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_);
+  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
   RAISE_STATUS(error, helper.Prepare());
   RAISE_STATUS(error, helper.DescribePrepared());
   PostgresType param_types;
   RAISE_STATUS(error,
-               helper.ResolveParamTypes(*connection_->type_resolver(), &param_types));
+               helper.ResolveParamTypes(*connection_->type_resolver(), &param_types,
+                                        connection_->temporal_representation()));
 
   nanoarrow::UniqueSchema tmp;
   ArrowSchemaInit(tmp.get());

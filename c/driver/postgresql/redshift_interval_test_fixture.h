@@ -71,9 +71,11 @@ inline ArrowErrorCode FixtureResolver(const adbc::driver::pgwire::BackendProfile
 
 inline ArrowErrorCode FixtureFromQuery(
     PqResultHelper& query, const std::shared_ptr<PostgresTypeResolver>& resolver,
-    ArrowArray* out, ArrowSchema* schema, ArrowError* error) {
+    ArrowArray* out, ArrowSchema* schema, ArrowError* error,
+    adbc::driver::pgwire::TemporalRepresentation temporal =
+        adbc::driver::pgwire::TemporalRepresentation::kArrow) {
   PostgresType root;
-  if (!query.ResolveOutputTypes(*resolver, &root).ok()) return EINVAL;
+  if (!query.ResolveOutputTypes(*resolver, &root, temporal).ok()) return EINVAL;
   nanoarrow::UniqueSchema tmp_schema;
   ArrowSchemaInit(tmp_schema.get());
   NANOARROW_RETURN_NOT_OK(root.SetSchema(tmp_schema.get(), "Redshift"));

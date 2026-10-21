@@ -32,6 +32,7 @@
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
+#include "redshift_vendor.h"
 #include "result_helper.h"
 
 namespace adbcpq {
@@ -40,16 +41,25 @@ namespace adbcpq {
 constexpr int kPgBinaryFormat = 1;
 
 // table and fields must be SQL identifiers escaped by CreateBulkTable().
-inline std::string BuildParameterizedInsertQuery(const std::string& table,
-                                                 const std::string& fields,
-                                                 size_t columns, size_t rows) {
+inline std::string BuildParameterizedInsertQuery(
+    const std::string& table, const std::string& fields, size_t columns, size_t rows,
+    const std::vector<bool>& json_parse = {},
+    const std::vector<RedshiftEncodedKind>& encoded = {}) {
   std::string query = "INSERT INTO " + table + " (" + fields + ") VALUES ";
   for (size_t row = 0; row < rows; row++) {
     if (row > 0) query += ", ";
     query += "(";
     for (size_t col = 0; col < columns; col++) {
       if (col > 0) query += ", ";
+      const bool super = col < json_parse.size() && json_parse[col];
+      const auto kind = col < encoded.size() ? encoded[col] : RedshiftEncodedKind::kNone;
+      const bool spatial = kind == RedshiftEncodedKind::kGeometry ||
+                           kind == RedshiftEncodedKind::kGeography;
+      if (super) query += "JSON_PARSE(";
+      if (spatial) query += "ST_GeomFromEWKB(";
       query += "$" + std::to_string(row * columns + col + 1);
+      if (super || spatial) query += ")";
+      if (kind == RedshiftEncodedKind::kGeography) query += "::GEOGRAPHY";
     }
     query += ")";
   }
@@ -83,7 +93,13 @@ struct BindStream {
 
   // Expected types from PostgreSQL (after DESCRIBE); used to resolve NA params
   PostgresType expected_param_types;
+  std::vector<bool> timetz_fields;
   bool has_expected_types = false;
+  bool generated_super_ingest = false;
+  std::vector<bool> json_parse_fields;
+  bool has_super_fields = false;
+  bool has_encoded_fields = false;
+  std::vector<RedshiftEncodedKind> encoded_fields;
 
   struct ArrowError na_error;
 
@@ -141,25 +157,73 @@ struct BindStream {
     return std::move(callback)();
   }
 
+  bool validate_redshift_bytes = false;
+  bool require_utf8 = false;
+
+  Status CheckTextEncoding(PGconn* conn, const PostgresTypeResolver& resolver) {
+    require_utf8 = resolver.is_redshift();
+    validate_redshift_bytes = resolver.is_redshift();
+    for (int64_t i = 0; i < bind_schema->n_children; ++i) {
+      RedshiftBytesSchema bytes;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftBytesSchema::Parse(bind_schema->children[i], resolver.is_redshift(),
+                                     &bytes, &na_error));
+      require_utf8 |= bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte;
+    }
+    return require_utf8 ? CheckUtf8Encoding(conn) : Status::Ok();
+  }
+
   Status SetParamTypes(PGconn* pg_conn, const PostgresTypeResolver& type_resolver,
-                       const bool autocommit) {
+                       const bool autocommit,
+                       const PostgresType* ingest_targets = nullptr) {
+    validate_redshift_bytes = type_resolver.is_redshift();
+    if (PostgresType::ValidateTemporalWriteSchema(type_resolver, &bind_schema.value,
+                                                  &na_error) != NANOARROW_OK)
+      return Status::InvalidArgument(na_error.message);
+    require_utf8 = type_resolver.is_redshift();
     if (PostgresType::ValidateIntervalWriteSchema(type_resolver, &bind_schema.value,
                                                   &na_error) != NANOARROW_OK) {
       return Status::NotImplemented(na_error.message);
+    }
+    if (PostgresType::ValidateDecimalWriteSchema(type_resolver, &bind_schema.value,
+                                                 &na_error) != NANOARROW_OK) {
+      return Status::InvalidArgument(na_error.message);
+    }
+    if (PostgresType::ValidateScalarWriteSchema(type_resolver, &bind_schema.value,
+                                                &na_error) != NANOARROW_OK) {
+      return Status::InvalidArgument(na_error.message);
+    }
+    if (PostgresType::ValidateBytesWriteSchema(type_resolver, &bind_schema.value,
+                                               &na_error) != NANOARROW_OK)
+      return Status::InvalidArgument(na_error.message);
+    if (ingest_targets && ingest_targets->n_children() != bind_schema->n_children) {
+      return Status::InvalidArgument("Ingest target/source column count mismatch");
     }
     param_types.resize(bind_schema->n_children);
     param_values.resize(bind_schema->n_children);
     param_lengths.resize(bind_schema->n_children);
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
     bind_field_writers.resize(bind_schema->n_children);
+    timetz_fields.resize(bind_schema->n_children, false);
+    json_parse_fields.assign(bind_schema->n_children, false);
+    has_super_fields = false;
+    has_encoded_fields = false;
+    encoded_fields.assign(bind_schema->n_children, RedshiftEncodedKind::kNone);
     bool needs_utc_timezone = false;
 
     for (size_t i = 0; i < bind_field_writers.size(); i++) {
       PostgresType type;
 
-      // Handle NA type by using expected parameter type from PostgreSQL
-      if (has_expected_types && bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
-          i < static_cast<size_t>(expected_param_types.n_children())) {
+      // Genuine NA ingest uses the actual interval OID; the writer factory must
+      // still validate its known constraint before selecting the null writer.
+      if (ingest_targets && type_resolver.is_redshift() &&
+          bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
+          (ingest_targets->child(i).interval_family() != RedshiftIntervalFamily::kNone ||
+           ingest_targets->child(i).type_id() == PostgresTypeId::kTimetz)) {
+        type = ingest_targets->child(i);
+      } else if (has_expected_types && bind_schema_fields[i].type == NANOARROW_TYPE_NA &&
+                 i < static_cast<size_t>(expected_param_types.n_children())) {
         const auto& expected_type = expected_param_types.child(i);
         // If PostgreSQL couldn't infer a concrete type (e.g., SELECT $1), don't
         // force an "expected" type; fall back to Arrow-derived mapping.
@@ -179,19 +243,115 @@ struct BindStream {
                                                   &type, &na_error));
       }
 
+      if (!generated_super_ingest &&
+          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
+          type.encoded_kind() != RedshiftEncodedKind::kHll)
+        return Status::NotImplemented(
+            "[Redshift] Direct vendor parameter binding is unsupported");
       // Delay the session change until all parameter types and writers are valid.
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
 
+      RedshiftSuperSchema super;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftSuperSchema::Parse(bind_schema->children[i],
+                                     type_resolver.is_redshift(), &super, &na_error));
+      RedshiftEncodedSchema encoded;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftEncodedSchema::Parse(bind_schema->children[i],
+                                       type_resolver.is_redshift(), &encoded, &na_error));
+      encoded_fields[i] = encoded.kind;
+      has_encoded_fields |= encoded.enabled();
+      if (type.encoded_kind() != RedshiftEncodedKind::kNone &&
+          type.encoded_kind() != encoded.kind)
+        return Status::InvalidArgument(
+            "[Redshift] Known vendor parameter requires exact marked source, including "
+            "NULL");
+      json_parse_fields[i] = super.enabled;
+      has_super_fields |= super.enabled;
+
+      // Exact semantic writers select destination OID and wire layout together.
+      // Other parameters retain their existing source-derived wire type.
+      RedshiftScalarSchema scalar;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftScalarSchema::Parse(bind_schema->children[i],
+                                      type_resolver.is_redshift(), &scalar, &na_error));
+      RedshiftBytesSchema bytes;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftBytesSchema::Parse(bind_schema->children[i],
+                                     type_resolver.is_redshift(), &bytes, &na_error));
+      require_utf8 |= bytes.enabled() && bytes.kind != RedshiftBytesKind::kVarbyte;
+      RedshiftTemporalSchema temporal;
+      UNWRAP_NANOARROW(na_error, InvalidArgument,
+                       RedshiftTemporalSchema::Parse(bind_schema->children[i],
+                                                     type_resolver.is_redshift(),
+                                                     &temporal, &na_error));
+      RedshiftIntervalSchema interval;
+      UNWRAP_NANOARROW(na_error, InvalidArgument,
+                       RedshiftIntervalSchema::Parse(bind_schema->children[i],
+                                                     type_resolver.is_redshift(),
+                                                     &interval, &na_error));
+      RedshiftTimetzSchema timetz;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftTimetzSchema::Parse(bind_schema->children[i],
+                                      type_resolver.is_redshift(), &timetz, &na_error));
+      timetz_fields[i] = timetz.enabled;
+      const PostgresType* writer_target = nullptr;
+      if (ingest_targets &&
+          (encoded.enabled() || super.enabled ||
+           ingest_targets->child(i).vendor_family() !=
+               adbc::driver::pgwire::CatalogVendorFamily::kNone ||
+           ((timetz.enabled || type_resolver.is_redshift()) &&
+            (type.type_id() == PostgresTypeId::kTimetz ||
+             ingest_targets->child(i).type_id() == PostgresTypeId::kTimetz)) ||
+           ((interval.enabled() || type_resolver.is_redshift()) &&
+            (type.interval_family() != RedshiftIntervalFamily::kNone ||
+             ingest_targets->child(i).interval_family() !=
+                 RedshiftIntervalFamily::kNone)) ||
+           type.type_id() == PostgresTypeId::kNumeric ||
+           ingest_targets->child(i).type_id() == PostgresTypeId::kNumeric ||
+           ((temporal.enabled() || type_resolver.is_redshift()) &&
+            (type.temporal_kind() != RedshiftTemporalKind::kNone ||
+             ingest_targets->child(i).temporal_kind() != RedshiftTemporalKind::kNone)) ||
+           ((bytes.enabled() || type_resolver.is_redshift()) &&
+            (type.bytes_kind() != RedshiftBytesKind::kNone ||
+             ingest_targets->child(i).bytes_kind() != RedshiftBytesKind::kNone)) ||
+           ((scalar.enabled() || type_resolver.is_redshift()) &&
+            (type.scalar_kind() != RedshiftScalarKind::kNone ||
+             ingest_targets->child(i).scalar_kind() != RedshiftScalarKind::kNone)))) {
+        writer_target = &ingest_targets->child(i);
+      }
+      if (!ingest_targets && encoded.kind == RedshiftEncodedKind::kHll)
+        writer_target = &type;
       std::unique_ptr<PostgresCopyFieldWriter> writer;
       UNWRAP_NANOARROW(
           na_error, Internal,
           MakeCopyFieldWriter(bind_schema->children[i], array_view->children[i],
-                              type_resolver, nullptr, &writer,
-                              /*disable_decimal_fast_path=*/false, &na_error));
+                              type_resolver, writer_target, &writer,
+                              /*disable_decimal_fast_path=*/false, &na_error,
+                              generated_super_ingest));
 
-      param_types[i] = type.oid();
-      param_formats[i] = kPgBinaryFormat;
+      param_types[i] =
+          writer_target &&
+                  (writer_target->type_id() == PostgresTypeId::kTimetz ||
+                   writer_target->interval_family() != RedshiftIntervalFamily::kNone ||
+                   writer_target->type_id() == PostgresTypeId::kNumeric ||
+                   writer_target->scalar_kind() != RedshiftScalarKind::kNone ||
+                   writer_target->bytes_kind() != RedshiftBytesKind::kNone ||
+                   writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
+              ? writer_target->oid()
+              : type.oid();
+      if (super.enabled || encoded.spatial()) {
+        param_types[i] = type_resolver.GetBytesOID(RedshiftBytesKind::kVarbyte);
+        if (!param_types[i])
+          return Status::InvalidState("[Redshift] VARBYTE OID unavailable");
+      }
+      param_formats[i] = encoded.kind == RedshiftEncodedKind::kHll ? 0 : kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
     }
 
@@ -201,6 +361,22 @@ struct BindStream {
       this->autocommit = autocommit;
     }
 
+    return Status::Ok();
+  }
+
+  bool HasHllParameters() const {
+    return std::find(encoded_fields.begin(), encoded_fields.end(),
+                     RedshiftEncodedKind::kHll) != encoded_fields.end();
+  }
+  Status ValidateHllParameters(const PostgresType& described) const {
+    if (described.n_children() != static_cast<int>(param_types.size()))
+      return Status::InvalidArgument("[Redshift] Parameter descriptor count changed");
+    for (size_t i = 0; i < encoded_fields.size(); ++i)
+      if (encoded_fields[i] == RedshiftEncodedKind::kHll &&
+          (described.child(i).encoded_kind() != RedshiftEncodedKind::kHll ||
+           !described.child(i).oid() || described.child(i).oid() != param_types[i]))
+        return Status::InvalidArgument(
+            "[Redshift] HLL parameter Describe consistency mismatch");
     return Status::Ok();
   }
 
@@ -238,7 +414,22 @@ struct BindStream {
   Status Prepare(PGconn* pg_conn, const std::string& query) {
     PqResultHelper helper(pg_conn, query);
     UNWRAP_STATUS(helper.Prepare(param_types));
-    return Status::Ok();
+    return CheckHllPrepared(pg_conn, param_types);
+  }
+
+  Status CheckHllPrepared(PGconn* conn, const std::vector<Oid>& types) const {
+    if (!HasHllParameters()) return Status::Ok();
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(conn));
+    adbc::driver::pgwire::UniqueResult result(PQdescribePrepared(conn, ""));
+    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK)
+      return MakeStatus(result.get(), "[Redshift] HLL parameter Describe failed");
+    if (PQnparams(result.get()) != static_cast<int>(types.size()))
+      return Status::InvalidArgument("[Redshift] HLL parameter Describe count mismatch");
+    for (size_t i = 0; i < types.size(); ++i)
+      if (encoded_fields[i % encoded_fields.size()] == RedshiftEncodedKind::kHll &&
+          PQparamtype(result.get(), i) != types[i])
+        return Status::InvalidArgument("[Redshift] HLL parameter Describe OID mismatch");
+    return require_utf8 ? CheckUtf8Encoding(conn) : Status::Ok();
   }
 
   Status PullNextArray() {
@@ -251,6 +442,28 @@ struct BindStream {
       UNWRAP_NANOARROW(
           na_error, Internal,
           ArrowArrayViewSetArray(&array_view.value, &current.value, &na_error));
+      for (int64_t i = 0; i < bind_schema->n_children; ++i) {
+        RedshiftBytesSchema bytes;
+        UNWRAP_NANOARROW(
+            na_error, InvalidArgument,
+            RedshiftBytesSchema::Parse(bind_schema->children[i], validate_redshift_bytes,
+                                       &bytes, &na_error));
+        RedshiftSuperSchema super;
+        UNWRAP_NANOARROW(
+            na_error, InvalidArgument,
+            RedshiftSuperSchema::Parse(bind_schema->children[i], validate_redshift_bytes,
+                                       &super, &na_error));
+        RedshiftEncodedSchema encoded;
+        UNWRAP_NANOARROW(
+            na_error, InvalidArgument,
+            RedshiftEncodedSchema::Parse(bind_schema->children[i],
+                                         validate_redshift_bytes, &encoded, &na_error));
+        if (bytes.enabled() || super.enabled || encoded.enabled())
+          UNWRAP_NANOARROW(
+              na_error, InvalidArgument,
+              ArrowArrayViewValidate(array_view->children[i],
+                                     NANOARROW_VALIDATION_LEVEL_FULL, &na_error));
+      }
     }
 
     return Status::Ok();
@@ -277,15 +490,49 @@ struct BindStream {
     return Status::Ok();
   }
 
+  Status ParameterRow(size_t column, int64_t row, int64_t* field_row) {
+    *field_row = row;
+    if ((has_super_fields || has_encoded_fields) &&
+        ArrowArrayViewIsNull(&array_view.value, row))
+      return Status::InvalidArgument(
+          "[Redshift] SUPER ingest requires nonnull relation rows");
+    if (timetz_fields[column] || has_super_fields || has_encoded_fields) {
+      // Struct child accessors add only their own offsets. Carry the containing
+      // relation offset once here; field accessors carry their own offset.
+      if (row < 0 || array_view->offset < 0 || array_view->offset > INT64_MAX - row)
+        return Status::InvalidArgument("TIMETZ relation offset overflow");
+      *field_row = array_view->offset + row;
+      if (*field_row >= array_view->children[column]->length)
+        return Status::InvalidArgument("TIMETZ relation/field coverage mismatch");
+    }
+    return Status::Ok();
+  }
+
+  Status WriteParameter(size_t column, int64_t field_row) {
+    const int code =
+        bind_field_writers[column]->Write(&param_buffer.value, field_row, &na_error);
+    // These schema-selected writers validate application payloads before writing.
+    // Keep allocator/other failures and ordinary writers on the Internal path.
+    if (code == EINVAL && (json_parse_fields[column] ||
+                           encoded_fields[column] != RedshiftEncodedKind::kNone)) {
+      return Status::InvalidArgument(na_error.message);
+    }
+    UNWRAP_NANOARROW(na_error, Internal, code);
+    return Status::Ok();
+  }
+
   Status BindAndExecuteCurrentRow(PGconn* pg_conn,
                                   adbc::driver::pgwire::UniqueResult* result_out,
                                   int result_format) {
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     param_buffer->size_bytes = 0;
     int64_t last_offset = 0;
     std::vector<bool> is_null_param(array_view->n_children);
 
     for (int64_t col = 0; col < array_view->n_children; col++) {
-      is_null_param[col] = ArrowArrayViewIsNull(array_view->children[col], current_row);
+      int64_t field_row;
+      UNWRAP_STATUS(ParameterRow(col, current_row, &field_row));
+      is_null_param[col] = ArrowArrayViewIsNull(array_view->children[col], field_row);
 
       // Safety check: NA type arrays should only contain nulls
       if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null_param[col]) {
@@ -297,9 +544,7 @@ struct BindStream {
       if (!is_null_param[col]) {
         // Note that this Write() call currently writes the (int32_t) byte size of the
         // field in addition to the serialized value.
-        UNWRAP_NANOARROW(
-            na_error, Internal,
-            bind_field_writers[col]->Write(&param_buffer.value, current_row, &na_error));
+        UNWRAP_STATUS(WriteParameter(col, field_row));
       } else {
         UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
       }
@@ -324,6 +569,8 @@ struct BindStream {
       last_offset += param_lengths[col];
     }
 
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecPrepared(pg_conn, /*stmtName=*/"",
                        /*nParams=*/bind_schema->n_children, param_values.data(),
@@ -336,6 +583,7 @@ struct BindStream {
                         PQresStatus(pg_status), PQerrorMessage(pg_conn));
     }
 
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     *result_out = std::move(result);
     return Status::Ok();
   }
@@ -379,6 +627,7 @@ struct BindStream {
     // protocol before another SQL command (including ROLLBACK) can be issued.
     // Keep the primary stream/writer error if COPY abort itself also fails.
     Status execution_status = [&]() -> Status {
+      UNWRAP_STATUS(CheckTextEncoding(pg_conn, type_resolver));
       PostgresCopyStreamWriter writer;
       UNWRAP_ERRNO(Internal, writer.Init(&bind_schema.value));
       UNWRAP_NANOARROW(na_error, Internal,
@@ -391,6 +640,7 @@ struct BindStream {
         UNWRAP_STATUS(PullNextArray());
         if (!current->release) break;
 
+        if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
         UNWRAP_ERRNO(Internal, writer.SetArray(&current.value));
 
         // build writer buffer
@@ -454,6 +704,8 @@ struct BindStream {
       return Status::IO("[libpq] COPY protocol cleanup could not be confirmed: ",
                         PQerrorMessage(pg_conn));
     }
+    if (execution_status.ok() && require_utf8)
+      execution_status = CheckUtf8Encoding(pg_conn);
     if (execution_status.ok() && rows_affected) *rows_affected = copied_rows;
     return execution_status;
   }
@@ -461,6 +713,7 @@ struct BindStream {
   Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,
                                  const std::string& fields, size_t max_rows,
                                  int64_t* executed_rows) {
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     *executed_rows = 0;
     param_buffer->size_bytes = 0;
     std::vector<Oid> batch_types;
@@ -482,7 +735,9 @@ struct BindStream {
       if (current->release == nullptr) break;
 
       for (size_t col = 0; col < columns; col++) {
-        const bool is_null = ArrowArrayViewIsNull(array_view->children[col], current_row);
+        int64_t field_row;
+        UNWRAP_STATUS(ParameterRow(col, current_row, &field_row));
+        const bool is_null = ArrowArrayViewIsNull(array_view->children[col], field_row);
         if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null) {
           return Status::InvalidArgument("Parameter $", row * columns + col + 1,
                                          " has null type but contains a non-null value");
@@ -492,9 +747,7 @@ struct BindStream {
         if (is_null) {
           UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
         } else {
-          UNWRAP_NANOARROW(na_error, Internal,
-                           bind_field_writers[col]->Write(&param_buffer.value,
-                                                          current_row, &na_error));
+          UNWRAP_STATUS(WriteParameter(col, field_row));
         }
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {
@@ -520,7 +773,15 @@ struct BindStream {
     }
 
     const std::string query = BuildParameterizedInsertQuery(
-        table, fields, columns, static_cast<size_t>(*executed_rows));
+        table, fields, columns, static_cast<size_t>(*executed_rows), json_parse_fields,
+        encoded_fields);
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    if (HasHllParameters()) {
+      PqResultHelper prepared(pg_conn, query, require_utf8);
+      UNWRAP_STATUS(prepared.Prepare(batch_types));
+      UNWRAP_STATUS(CheckHllPrepared(pg_conn, batch_types));
+    }
+    if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecParams(pg_conn, query.c_str(), static_cast<int>(batch_values.size()),
                      batch_types.data(), batch_values.data(), batch_lengths.data(),
@@ -531,6 +792,7 @@ struct BindStream {
                         "[libpq] Failed to execute parameterized ingest batch: {} {}",
                         PQresStatus(pg_status), PQerrorMessage(pg_conn));
     }
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     return Status::Ok();
   }
 
@@ -538,7 +800,8 @@ struct BindStream {
                              const std::string& fields,
                              const PostgresTypeResolver& type_resolver,
                              bool connection_autocommit, size_t max_batch_rows,
-                             int64_t* rows_affected) {
+                             int64_t* rows_affected,
+                             const PostgresType* ingest_targets = nullptr) {
     if (rows_affected) *rows_affected = 0;
     const size_t columns = static_cast<size_t>(bind_schema->n_children);
     constexpr size_t kMaxParameters = 32767;
@@ -546,8 +809,6 @@ struct BindStream {
       return Status::InvalidArgument("Invalid parameterized ingest dimensions");
     }
     max_batch_rows = (std::min)(max_batch_rows, kMaxParameters / columns);
-    const std::string one_row_query =
-        BuildParameterizedInsertQuery(table, fields, columns, 1);
 
     // Both the single-row prepared path and the multi-row parameterized path
     // must preserve statement-level atomicity across the whole Arrow stream.
@@ -560,16 +821,19 @@ struct BindStream {
     auto rollback_if_owned = [&]() {
       if (!connection_autocommit) return;
       PqResultHelper rollback(pg_conn, "ROLLBACK");
-      // Preserve the ingestion error if rollback also fails.
-      (void)rollback.Execute();
+      // Preserve the ingestion error and report uncertainty if rollback fails.
+      if (!rollback.Execute().ok()) cleanup_failed = true;
       if (rows_affected) *rows_affected = 0;
     };
 
     // The transaction is already open in autocommit mode, so timezone cleanup
     // must not independently commit it.
-    Status execution_status = SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false);
+    Status execution_status =
+        SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false, ingest_targets);
     if (execution_status.ok() && max_batch_rows == 1) {
-      execution_status = Prepare(pg_conn, one_row_query);
+      execution_status = Prepare(
+          pg_conn, BuildParameterizedInsertQuery(table, fields, columns, 1,
+                                                 json_parse_fields, encoded_fields));
     }
     while (true) {
       if (!execution_status.ok()) break;

@@ -79,11 +79,14 @@ struct TableTypeMapping {
   std::string_view relkind;
 };
 
+enum class TemporalRepresentation { kArrow, kLossless };
+
 struct TypeModifierMetadata {
   std::string_view sql_type;
   std::optional<int32_t> precision;
   std::optional<int32_t> scale;
   std::optional<int32_t> byte_width;
+  std::optional<int32_t> fractional_precision;
 };
 
 enum class CatalogIntervalFamily { kNone, kYearMonth, kDaySecond };
@@ -106,6 +109,8 @@ inline constexpr TableTypeMapping kRedshiftTableTypes[] = {
 inline constexpr TypeReceiveAlias kRedshiftTypeReceiveAliases[] = {
     {"varbyte_recv", "bytearecv"},
 };
+
+enum class CatalogVendorFamily { kNone, kSuper, kHll, kGeometry, kGeography };
 
 struct BackendProfile {
   BackendKind kind;
@@ -138,7 +143,43 @@ struct BackendProfile {
                                             std::optional<int32_t> raw) const {
     TypeModifierMetadata out;
     if (kind != BackendKind::kRedshift) return out;
-    if (typname == "numeric" || typname == "decimal") {
+    if (typname == "super") {
+      out.sql_type = "SUPER";
+    } else if (typname == "hllsketch") {
+      out.sql_type = "HLLSKETCH";
+    } else if (typname == "geometry") {
+      out.sql_type = "GEOMETRY";
+    } else if (typname == "geography") {
+      out.sql_type = "GEOGRAPHY";
+    } else if (typname == "int2") {
+      out.sql_type = "SMALLINT";
+    } else if (typname == "int4") {
+      out.sql_type = "INTEGER";
+    } else if (typname == "int8") {
+      out.sql_type = "BIGINT";
+    } else if (typname == "float4") {
+      out.sql_type = "REAL";
+    } else if (typname == "float8") {
+      out.sql_type = "DOUBLE PRECISION";
+    } else if (typname == "bool") {
+      out.sql_type = "BOOLEAN";
+    } else if (typname == "date") {
+      out.sql_type = "DATE";
+    } else if (typname == "time" || typname == "timetz" || typname == "timestamp" ||
+               typname == "timestamptz") {
+      out.sql_type = typname == "timetz"      ? "TIMETZ"
+                     : typname == "time"      ? "TIME"
+                     : typname == "timestamp" ? "TIMESTAMP"
+                                              : "TIMESTAMPTZ";
+      // Pinned AWS JDBC TypeInfoCache773fa16 getScale reference; native modifier
+      // qualification remains open. Missing OID-only modifiers stay unknown.
+      if (raw && (*raw == -1 || (*raw >= 0 && *raw <= 6)))
+        out.fractional_precision = *raw == -1 ? 6 : *raw;
+    } else if (typname == "intervaly2m" || typname == "intervald2s") {
+      out.sql_type =
+          typname == "intervaly2m" ? "INTERVAL YEAR TO MONTH" : "INTERVAL DAY TO SECOND";
+      // No qualified native qualifier/precision producer exists yet. Raw only.
+    } else if (typname == "numeric" || typname == "decimal") {
       out.sql_type = "DECIMAL";
       if (!raw || *raw < 4) return out;
       const uint32_t encoded = static_cast<uint32_t>(*raw - 4);
@@ -148,11 +189,13 @@ struct BackendProfile {
         out.precision = precision;
         out.scale = scale;
       }
-    } else if (typname == "bpchar" || typname == "varchar") {
-      out.sql_type = typname == "bpchar" ? "CHAR" : "VARCHAR";
+    } else if (typname == "bpchar" || typname == "varchar" || typname == "varbyte") {
+      out.sql_type = typname == "bpchar"    ? "CHAR"
+                     : typname == "varchar" ? "VARCHAR"
+                                            : "VARBYTE";
       if (!raw || *raw < 5) return out;
       const int32_t width = *raw - 4;
-      if (width <= 16000000) out.byte_width = width;
+      if (width <= (typname == "varbyte" ? 16777216 : 16000000)) out.byte_width = width;
     }
     return out;
   }
@@ -164,6 +207,15 @@ struct BackendProfile {
     if (typname == "intervaly2m") return CatalogIntervalFamily::kYearMonth;
     if (typname == "intervald2s") return CatalogIntervalFamily::kDaySecond;
     return CatalogIntervalFamily::kNone;
+  }
+
+  constexpr CatalogVendorFamily VendorFamily(std::string_view name) const {
+    if (kind != BackendKind::kRedshift) return CatalogVendorFamily::kNone;
+    if (name == "super") return CatalogVendorFamily::kSuper;
+    if (name == "hllsketch") return CatalogVendorFamily::kHll;
+    if (name == "geometry") return CatalogVendorFamily::kGeometry;
+    if (name == "geography") return CatalogVendorFamily::kGeography;
+    return CatalogVendorFamily::kNone;
   }
 
   constexpr std::string_view CanonicalTypeReceive(std::string_view vendor_receive) const {

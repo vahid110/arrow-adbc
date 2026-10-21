@@ -39,6 +39,14 @@ using adbc::driver::Status;
 
 namespace adbcpq {
 
+inline Status CheckUtf8Encoding(PGconn* conn) {
+  const char* encoding = conn ? PQparameterStatus(conn, "client_encoding") : nullptr;
+  if (!encoding || std::string_view(encoding) != "UTF8")
+    return Status::InvalidState(
+        "[Redshift] Arrow text requires client_encoding UTF8; reopen the connection");
+  return Status::Ok();
+}
+
 /// \brief A single column in a single row of a result set.
 struct PqRecord {
   const char* data;
@@ -136,17 +144,24 @@ class PqResultHelper {
     kBinary = 1,
   };
 
-  explicit PqResultHelper(PGconn* conn, std::string query)
-      : conn_(conn), query_(std::move(query)) {}
+  explicit PqResultHelper(PGconn* conn, std::string query, bool require_utf8 = false)
+      : conn_(conn), query_(std::move(query)), require_utf8_(require_utf8) {}
 
   PqResultHelper(PqResultHelper&& other) noexcept
       : conn_(other.conn_),
         query_(std::move(other.query_)),
         result_(std::move(other.result_)),
         param_format_(other.param_format_),
-        output_format_(other.output_format_) {}
+        output_format_(other.output_format_),
+        require_utf8_(other.require_utf8_) {}
 
   ~PqResultHelper() = default;
+
+  void set_require_utf8(bool required) { require_utf8_ = required; }
+  bool require_utf8() const { return require_utf8_; }
+  Status CheckEncoding() const {
+    return require_utf8_ ? CheckUtf8Encoding(conn_) : Status::Ok();
+  }
 
   void set_param_format(Format format) { param_format_ = format; }
   void set_output_format(Format format) { output_format_ = format; }
@@ -157,10 +172,18 @@ class PqResultHelper {
   Status Execute(const std::vector<std::string>& params = {},
                  PostgresType* param_types = nullptr);
   Status ExecuteCopy();
-  Status ResolveParamTypes(PostgresTypeResolver& type_resolver,
-                           PostgresType* param_types);
+  Status ExecutePreparedOutput();
+  PGresult* CopyDescriptor() const {
+    return PQcopyResult(result_.get(), PG_COPYRES_ATTRS);
+  }
+  Status CheckDescriptor(const PGresult* expected, int format) const;
+  Status ResolveParamTypes(PostgresTypeResolver& type_resolver, PostgresType* param_types,
+                           adbc::driver::pgwire::TemporalRepresentation temporal =
+                               adbc::driver::pgwire::TemporalRepresentation::kArrow);
   Status ResolveOutputTypes(PostgresTypeResolver& type_resolver,
-                            PostgresType* result_types);
+                            PostgresType* result_types,
+                            adbc::driver::pgwire::TemporalRepresentation temporal =
+                                adbc::driver::pgwire::TemporalRepresentation::kArrow);
 
   bool HasResult() const { return result_ != nullptr; }
 
@@ -172,7 +195,9 @@ class PqResultHelper {
 
   // Resolve the exact name/OID/modifier catalog projection used by GetTableSchema.
   Status ResolveTableSchema(PostgresTypeResolver& type_resolver,
-                            PostgresType* result_types);
+                            PostgresType* result_types,
+                            adbc::driver::pgwire::TemporalRepresentation temporal =
+                                adbc::driver::pgwire::TemporalRepresentation::kArrow);
 
   int64_t AffectedRows() const;
 
@@ -224,6 +249,8 @@ class PqResultHelper {
   adbc::driver::pgwire::UniqueResult result_;
   Format param_format_ = Format::kText;
   Format output_format_ = Format::kText;
+
+  bool require_utf8_ = false;
 
   Status PrepareInternal(int n_params, const Oid* param_oids) const;
 };

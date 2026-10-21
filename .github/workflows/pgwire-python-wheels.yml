@@ -271,7 +271,7 @@ jobs:
           brew install --quiet postgresql@18
           PATH="$(brew --prefix postgresql@18)/bin:$PATH"
           echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
-          initdb -D "$RUNNER_TEMP/pgdata" --auth=trust --locale=C --no-instructions
+          initdb -D "$RUNNER_TEMP/pgdata" --auth=trust --locale=C --encoding=UTF8 --no-instructions
           pg_ctl -D "$RUNNER_TEMP/pgdata" -o "-h 127.0.0.1 -p 55433" \
             -l "$RUNNER_TEMP/postgres.log" -w start
           echo "ADBC_POSTGRESQL_TEST_URI=postgresql://127.0.0.1:55433/postgres?user=$(whoami)" >> "$GITHUB_ENV"
@@ -349,7 +349,7 @@ jobs:
           }
           $data = Join-Path $env:RUNNER_TEMP "pgdata"
           $log = Join-Path $env:RUNNER_TEMP "postgres.log"
-          & (Join-Path $pgBin "initdb.exe") -D $data -A trust -U postgres --no-instructions
+          & (Join-Path $pgBin "initdb.exe") -D $data -A trust -U postgres --encoding=UTF8 --no-instructions
           if ($LASTEXITCODE -ne 0) { throw "failed to initialize PostgreSQL" }
           & (Join-Path $pgBin "pg_ctl.exe") -D $data -o "-h 127.0.0.1 -p 55433" -l $log -w start
           if ($LASTEXITCODE -ne 0) { throw "failed to start PostgreSQL" }

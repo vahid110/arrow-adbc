@@ -51,10 +51,53 @@ guards (PR #22 merged; offline CI passed). Task010c1 adds per-field modifiers an
 bounded numeric/character schema/catalog metadata, with parameter identity and
 unknowns retained (PR23 merged; offline CI passed). Task010c2 adds known-p/s
 decimal128 reads and strict exact-text unknowns with reference codec/C Data tests
-(review/CI pending); writes stay unchanged.
-Actual libpq-path/boundary qualification, interval writes/qualifiers and remaining
-scalar/decimal value/write gaps, SUPER, HLL and spatial work remain open before
-separately authorized installed-artifact qualification.
+(PR24 merged; offline CI passed). Task010c3 adds explicit legal decimal DDL,
+exact decimal128/256 and DECIMAL-text binding, target-aware append and owned
+rollback uncertainty handling (locally integrated d04f2d2; independent review and
+serial native/installed validation passed). Task010c4 adds checked integer/float/
+boolean read/bind/target-aware ingest and canonical identity (locally integrated
+b90664a; independent review and serial native/installed validation passed).
+Task010d adds character/binary identity, checked widths and explicit target-aware
+ingest (locally integrated c07f811; independent review and all 20 serial
+native/installed validation steps passed). Its provisional plain VARBYTE limit
+is a native/release gate. Task010e1 implements DATE/TIME/TIMESTAMP/TIMESTAMPTZ
+with field-local Arrow/lossless modes, checked units/epochs and source/target
+precision (locally integrated 7fc46fa; independent FULL review and all 22
+validation steps passed). Task010e2 supplies versioned interval contracts for all
+13 qualifiers and exact reference codecs/DDL (locally integrated 35584f5;
+independent FULL approval and all 24 serial validation steps passed).
+Task010e3 implements the fixed-offset TIMETZ struct/reference codec, explicit
+source precision, actual-target precision checks and bounded bare declarations;
+locally integrated e2df066 after independent FULL approval and all 25 serial
+validation steps. Task010f0 adds a noninstalled bounded protocol observer and
+fixed plans (locally integrated 65e7e9b; independent FULL approval and all 30
+serial validation steps passed). Task010g0 links anchored historical local
+source/review/validation/log/package bytes (locally integrated 1f35366 after
+independent FULL approval, actual historical linkage and retained validation).
+Task010g1 adds trusted in-place install comparisons and fixed same-host load-only
+observations (locally integrated 0285eba after actual named G0 artifact load,
+retained 30-step validation and exact independent approval). Collector G1 and
+artifact G0 identities remain distinct. Task010g2 adds a bounded output fd for
+the existing fixed seven-probe own-PG plumbing test (locally integrated cfe9feb;
+actual channel/stale-fd/cleanup checks, all 31 validation steps and exact independent
+approval). Task010g4 adds a noninstalled owned single raw replay parameter with
+separate controlled NULL/empty trials (locally integrated def7084; independent
+approval, all 31 validation steps and ten own-PG echoes/15 calls). Task010h0 adds
+closed compiled discovery plans/capture shapes (locally integrated 4bdc23b;
+independent approval, all 31 serial stages and nine own-PG checks/15 calls).
+Task010h1's noninstalled closed 715-step async runner and eight bounded output
+files are locally integrated at `3c956e3` after exact independent approval and all 32
+serial validation stages. Later private admitted runs retain raw native protocol
+observations separately from installed-driver acceptance; see
+[the local evidence boundary](local-qualification-evidence.md). These components
+grant no live authority. Native interval constraint
+producers remain unqualified, blocking actual
+target writes even for NULL/empty input. Native temporal endpoints,
+sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
+Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
+native character/binary boundaries, TIMETZ layout/domain/offset/precision, SUPER, HLL and spatial
+full-envelope qualification remain open; the bounded installed vendor subset
+below does not close the full 21-type milestone.
 Task009 publication and shared-auth work follow that milestone. This roadmap
 grants no new AWS/spending, live dispatch, tag or publication authority; AO/timer
 remain paused. No release-ready claim is made.
@@ -106,3 +149,15 @@ replace ingest, remaining timezone bound-query cleanup edges (output-schema fail
 concurrent use), deterministic lost-reply injection. Each needs a concrete user
 need before it is scheduled. Type-specific large-value transport requirements
 identified by Task010 are release decisions, not a blanket type deferral.
+
+
+Task010i1/i2/j/k are locally integrated at `a239f66cc` with independent source
+approval and rebuilt/installed offline validation. Operation `726f4b3594e048e29f4571b2770549c3` on 2026-10-21
+passed the fixed 18-case macOS arm64 installed-driver subset: SUPER JSON-subset
+CREATE/APPEND, spatial CREATE/readback, HLL CREATE/readback/text parameters,
+VARBYTE binary readback and three explicit rejection boundaries. The actual
+binary source remains `a239f66cc`, not this later docs-only checkpoint.
+All seven owned resource classes were verified absent after child reap.
+Full 21-type/domain/boundary/platform acceptance remains open. Mixed HLL output, direct SUPER/spatial binds and lossless
+native SUPER reads stay unsupported; no arbitrary SQL rewrite or fallback is
+selected. Existing size caps, NULL semantics and transaction ownership remain.
