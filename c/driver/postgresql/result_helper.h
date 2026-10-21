@@ -172,6 +172,11 @@ class PqResultHelper {
   Status Execute(const std::vector<std::string>& params = {},
                  PostgresType* param_types = nullptr);
   Status ExecuteCopy();
+  Status ExecutePreparedOutput();
+  PGresult* CopyDescriptor() const {
+    return PQcopyResult(result_.get(), PG_COPYRES_ATTRS);
+  }
+  Status CheckDescriptor(const PGresult* expected, int format) const;
   Status ResolveParamTypes(PostgresTypeResolver& type_resolver, PostgresType* param_types,
                            adbc::driver::pgwire::TemporalRepresentation temporal =
                                adbc::driver::pgwire::TemporalRepresentation::kArrow);

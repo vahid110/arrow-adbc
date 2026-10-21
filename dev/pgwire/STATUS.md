@@ -20,14 +20,15 @@
 # Status
 
 
-Task010i1 is implementing a deliberately write-only SUPER JSON-subset contract:
-`adbc.redshift.super.json` over `large_utf8`, generated `JSON_PARSE` ingest with
-binary VARBYTE input, strict read-only parse-setting checks, and explicit vendor
-boundaries. SUPER REPLACE is rejected before ownership/DDL. CREATE or missing
-CREATE_APPEND can leave a new empty table after a later invalid payload under the
-existing nontransactional-DDL policy. This work is not yet independently source
-reviewed or installed/live qualified. Native SUPER read losslessness, spatial and
-HLL first-class support remain open; the existing VARBYTE binary codec is unchanged.
+Task010i1 SUPER JSON-subset generated ingest is locally integrated after independent
+source approval and full rebuilt/installed offline validation. Native acceptance
+is still pending; it is not lossless native SUPER reading. Task010i2 adds bounded
+spatial EWKB read/generated-constructor write and HLL serialization text binds,
+generated ingest and all-HLL result projections. Its source/full installed/native
+validation is pending. Mixed HLL projections, direct spatial/SUPER binds and
+native SUPER read losslessness remain unsupported. Vendor REPLACE rejects before
+ownership/DDL; CREATE residue and APPEND ownership remain as documented. The
+existing VARBYTE binary codec is unchanged.
 
 Current state only; history is in git and PR descriptions.
 

@@ -208,6 +208,33 @@ const char* PqResultArrayReader::GetLastError() {
   }
 }
 
+Status PqResultArrayReader::SelectDescribedResult() {
+  PostgresType output;
+  UNWRAP_STATUS(
+      helper_.ResolveOutputTypes(*type_resolver_, &output, temporal_representation_));
+  UNWRAP_STATUS(SelectVendorResultFormat(output, &result_format_));
+  bool encoded = false;
+  for (int i = 0; i < output.n_children(); ++i)
+    encoded |= output.child(i).encoded_kind() != RedshiftEncodedKind::kNone;
+  if (encoded) {
+    described_.reset(helper_.CopyDescriptor());
+    if (!described_)
+      return Status::Internal("[Redshift] Could not retain described result attributes");
+  }
+  helper_.set_output_format(result_format_ == 0 ? PqResultHelper::Format::kText
+                                                : PqResultHelper::Format::kBinary);
+  return Status::Ok();
+}
+Status PqResultArrayReader::CheckHllParamDescriptor() {
+  if (!bind_stream_ || !bind_stream_->HasHllParameters()) return Status::Ok();
+  // Typed Prepare can impose an OID: consistency only, not relation provenance.
+  UNWRAP_STATUS(helper_.DescribePrepared());
+  PostgresType params;
+  UNWRAP_STATUS(
+      helper_.ResolveParamTypes(*type_resolver_, &params, temporal_representation_));
+  return bind_stream_->ValidateHllParameters(params);
+}
+
 Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   helper_.set_output_format(PqResultHelper::Format::kBinary);
   helper_.set_param_format(PqResultHelper::Format::kBinary);
@@ -249,11 +276,9 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
 
     if (type_resolver_->is_redshift()) {
       UNWRAP_STATUS(helper_.DescribePrepared());
-      PostgresType described;
-      UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &described,
-                                               temporal_representation_));
-      UNWRAP_STATUS(CheckVendorReadBoundary(described));
+      UNWRAP_STATUS(SelectDescribedResult());
     }
+    UNWRAP_STATUS(CheckHllParamDescriptor());
     UNWRAP_STATUS(BindNextAndExecute(nullptr));
 
     // If there were no arrays in the bind stream, we still need a result
@@ -273,12 +298,15 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     if (type_resolver_->is_redshift()) {
       UNWRAP_STATUS(helper_.Prepare());
       UNWRAP_STATUS(helper_.DescribePrepared());
-      PostgresType described;
-      UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &described,
-                                               temporal_representation_));
-      UNWRAP_STATUS(CheckVendorReadBoundary(described));
+      UNWRAP_STATUS(SelectDescribedResult());
     }
-    UNWRAP_STATUS(helper_.Execute());
+    if (result_format_ == 0 && described_) {
+      UNWRAP_STATUS(helper_.ExecutePreparedOutput());
+    } else {
+      UNWRAP_STATUS(helper_.Execute());
+    }
+    if (described_)
+      UNWRAP_STATUS(helper_.CheckDescriptor(described_.get(), result_format_));
     if (rows_affected != nullptr) {
       *rows_affected = helper_.AffectedRows();
     }
@@ -302,9 +330,9 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     const PostgresType& child_type = output_type.child(i);
 
     std::unique_ptr<PostgresCopyFieldReader> child_reader;
-    UNWRAP_NANOARROW(
-        na_error_, Internal,
-        MakeCopyFieldReader(child_type, schema_->children[i], &child_reader, &na_error_));
+    UNWRAP_NANOARROW(na_error_, Internal,
+                     MakeCopyFieldReader(child_type, schema_->children[i], &child_reader,
+                                         &na_error_, result_format_));
 
     child_reader->Init(child_type);
     UNWRAP_NANOARROW(na_error_, Internal, child_reader->InitSchema(schema_->children[i]));
@@ -363,12 +391,16 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
     }
 
     adbc::driver::pgwire::UniqueResult result;
-    Status execute_status = bind_stream_->BindAndExecuteCurrentRow(
-        conn_, &result, /*result_format*/ kPgBinaryFormat);
+    Status execute_status =
+        bind_stream_->BindAndExecuteCurrentRow(conn_, &result, result_format_);
     if (!execute_status.ok()) {
       return fail_bind(std::move(execute_status));
     }
     helper_.SetResult(result.release());
+    if (described_) {
+      Status descriptor = helper_.CheckDescriptor(described_.get(), result_format_);
+      if (!descriptor.ok()) return fail_bind(std::move(descriptor));
+    }
     materialized_encoding_valid_ = true;
     if (affected_rows) {
       (*affected_rows) += helper_.AffectedRows();
@@ -407,6 +439,7 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
       return prepare_status;
     }
 
+    UNWRAP_STATUS(CheckHllParamDescriptor());
     // Reset affected rows to zero before binding and executing any
     if (affected_rows) {
       (*affected_rows) = 0;

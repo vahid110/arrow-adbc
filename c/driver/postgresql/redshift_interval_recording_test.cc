@@ -42,6 +42,8 @@ struct RecordedParameter {
   Oid oid;
   bool null;
   std::string bytes;
+  int format = 1;
+  int physical_length = 0;
 };
 struct Recording {
   std::vector<std::string> queries;
@@ -51,6 +53,9 @@ struct Recording {
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
   bool super_target = false;
+  Oid encoded_target = 0;
+  int vendor_result_calls = 0, vendor_result_drift = 0;
+  bool vendor_result_error = false, hll_param_mismatch = false;
   std::string super_setting = "off";
   int super_setting_shape = 0, super_reads = 0, super_drift_after_reads = 0;
   std::string encoding = "UTF8";
@@ -90,9 +95,52 @@ PGresult* TimetzResult(bool empty = false, ExecStatusType status = PGRES_TUPLES_
   }
   return out;
 }
+constexpr const char* kSparseHll =
+    R"({"version":1,"logm":15,"sparse":{"indices":[],"values":[]}})";
+PGresult* VendorResult(std::string_view query, int format,
+                       ExecStatusType status = PGRES_TUPLES_OK) {
+  const bool describe = status == PGRES_COMMAND_OK;
+  if (!describe && recording.vendor_result_error)
+    return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
+  const bool spatial = query == "SELECT owned_geometry";
+  const bool mixed = query == "SELECT owned_hll_mixed";
+  const int columns = mixed || query == "SELECT owned_hll_pair" ? 2 : 1;
+  auto* out = PQmakeEmptyPGresult(nullptr, status);
+  std::vector<PGresAttDesc> attrs(columns);
+  for (int i = 0; i < columns; ++i) {
+    attrs[i].name = const_cast<char*>(i ? "other" : "amount");
+    attrs[i].typid = spatial ? 72113 : mixed && i ? 67009 : 72115;
+    attrs[i].format = format;
+    attrs[i].atttypmod = -1;
+  }
+  if (!describe && recording.vendor_result_drift) {
+    if (recording.vendor_result_drift == 1) attrs[0].name = const_cast<char*>("changed");
+    if (recording.vendor_result_drift == 2) attrs[0].typid = 72111;
+    if (recording.vendor_result_drift == 3) attrs[0].format = 1 - format;
+    if (recording.vendor_result_drift == 4) attrs[0].atttypmod = 9;
+    if (recording.vendor_result_drift == 5) attrs[0].tableid = 123;
+  }
+  if (!PQsetResultAttrs(out, columns, attrs.data())) std::abort();
+  if (!describe && query != "SELECT owned_hll_empty") {
+    const std::string value =
+        spatial
+            ? adbcpq::testing::NumericHex("0101000000000000000000f03f000000000000f03f")
+            : std::string(kSparseHll);
+    for (int i = 0; i < columns; ++i) {
+      if (!PQsetvalue(out, 0, i, const_cast<char*>(value.data()), value.size()) ||
+          !PQsetvalue(out, 1, i, nullptr, -1))
+        std::abort();
+    }
+  }
+  return out;
+}
 PGresult* Query(const char* query) {
   std::string q(query);
   recording.queries.push_back(q);
+  if (q == "SELECT owned_geometry") {
+    ++recording.vendor_result_calls;
+    return VendorResult(q, 1);
+  }
   if (q.starts_with("SHOW parse_super_null_on_error") ||
       q.starts_with("SHOW json_parse_dedup_attributes") ||
       q.starts_with("SHOW json_parse_truncate_strings")) {
@@ -119,7 +167,10 @@ PGresult* Query(const char* query) {
                     {"75001", "bpchar", "bpcharrecv", "0", "0"},
                     {"75002", "text", "textrecv", "0", "0"},
                     {"72111", "super", "fixture_only", "0", "0"},
-                    {"72112", "varbyte", "varbyte_recv", "0", "0"}});
+                    {"72112", "varbyte", "varbyte_recv", "0", "0"},
+                    {"72113", "geometry", "fixture_only", "0", "0"},
+                    {"72114", "geography", "fixture_only", "0", "0"},
+                    {"72115", "hllsketch", "fixture_only", "0", "0"}});
   if (q == "SELECT CURRENT_SCHEMA()") return Rows(1, {{"public"}});
   if (q.find("SHOW enable_case_sensitive_identifier") != std::string::npos)
     return Rows(1, {{"on"}});
@@ -130,6 +181,10 @@ PGresult* Query(const char* query) {
       q.find("SELECT attname, atttypid, atttypmod") != std::string::npos) {
     if (!recording.exists) return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
     if (recording.super_target) return Rows(3, {{"amount", "72111", "-1"}});
+    if (recording.encoded_target) {
+      auto oid = std::to_string(recording.encoded_target);
+      return Rows(3, {{"amount", oid.c_str(), "-1"}});
+    }
     if (recording.timetz_target) {
       const auto raw =
           recording.timetz_raw ? std::to_string(*recording.timetz_raw) : std::string{};
@@ -177,9 +232,13 @@ PGresult* Parameters(int n, const Oid* types, const char* const* values,
                      const int* lengths, const int* formats) {
   std::vector<RecordedParameter> row;
   for (int col = 0; col < n; ++col) {
-    EXPECT_EQ(formats[col], 1);
+    EXPECT_EQ(formats[col], types[col] == 72115 ? 0 : 1);
     row.push_back({types[col], values[col] == nullptr,
-                   values[col] ? std::string(values[col], lengths[col]) : std::string{}});
+                   values[col] ? std::string(values[col], formats[col] == 0
+                                                              ? std::strlen(values[col])
+                                                              : lengths[col])
+                               : std::string{},
+                   formats[col], lengths[col]});
   }
   recording.executions.push_back(std::move(row));
   if (recording.transaction == PQTRANS_INTRANS)
@@ -239,8 +298,16 @@ PGresult* PQprepare(PGconn*, const char*, const char* query, int n, const Oid* t
   return Command();
 }
 PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
-                         const int* lengths, const int* formats, int) {
+                         const int* lengths, const int* formats, int result_format) {
   EXPECT_EQ(recording.prepared.size(), static_cast<size_t>(n));
+  if (recording.prepared_query.starts_with("SELECT owned_hll")) {
+    ++recording.vendor_result_calls;
+    if (n) {
+      auto* captured = Parameters(n, recording.prepared.data(), values, lengths, formats);
+      PQclear(captured);
+    }
+    return VendorResult(recording.prepared_query, result_format);
+  }
   if (recording.prepared_query.starts_with("SELECT owned_timetz")) {
     if (n) {
       auto* captured = Parameters(n, recording.prepared.data(), values, lengths, formats);
@@ -251,6 +318,9 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
 PGresult* PQdescribePrepared(PGconn*, const char*) {
+  if (recording.prepared_query.starts_with("SELECT owned_hll") ||
+      recording.prepared_query == "SELECT owned_geometry")
+    return VendorResult(recording.prepared_query, 0, PGRES_COMMAND_OK);
   if (recording.prepared_query == "SELECT owned_super") {
     auto* result = Command();
     PGresAttDesc attr{};
@@ -265,9 +335,19 @@ PGresult* PQdescribePrepared(PGconn*, const char*) {
              : Command();
 }
 int PQnparams(const PGresult*) {
+  if (recording.prepared_query.starts_with("SELECT owned_hll") ||
+      std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
+          recording.prepared.end())
+    return recording.prepared.size();
   return recording.prepared_query == "SELECT owned_timetz_param" ? 1 : 0;
 }
-Oid PQparamtype(const PGresult*, int) { return 65113; }
+Oid PQparamtype(const PGresult*, int index) {
+  if (recording.prepared_query.starts_with("SELECT owned_hll") ||
+      std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
+          recording.prepared.end())
+    return recording.hll_param_mismatch ? 72111 : recording.prepared[index];
+  return 65113;
+}
 }
 
 namespace adbcpq {
@@ -1331,6 +1411,295 @@ TEST_F(IntervalPublicRecordingTest,
       }
     }
   }
+}
+void EncodedSchema(ArrowSchema* schema, const std::vector<RedshiftEncodedKind>& kinds) {
+  ArrowSchemaInit(schema);
+  ASSERT_EQ(ArrowSchemaSetTypeStruct(schema, kinds.size()), 0);
+  for (size_t i = 0; i < kinds.size(); ++i) {
+    if (kinds[i] == RedshiftEncodedKind::kNone) {
+      ASSERT_EQ(ArrowSchemaSetType(schema->children[i], NANOARROW_TYPE_INT64), 0);
+    } else {
+      ASSERT_EQ(RedshiftEncodedSchema::SetSchema(schema->children[i], kinds[i]), 0);
+      nanoarrow::UniqueBuffer m;
+      ASSERT_EQ(ArrowMetadataBuilderInit(m.get(), schema->children[i]->metadata), 0);
+      ASSERT_EQ(ArrowMetadataBuilderAppend(
+                    m.get(), ArrowCharView("ADBC:redshift:sql_type"),
+                    ArrowCharView(RedshiftEncodedSchema::Family(kinds[i]))),
+                0);
+      ASSERT_EQ(
+          ArrowSchemaSetMetadata(schema->children[i], reinterpret_cast<char*>(m->data)),
+          0);
+    }
+    ASSERT_EQ(ArrowSchemaSetName(schema->children[i], i == 0 ? "amount" : "other"), 0);
+  }
+}
+TEST_F(IntervalPublicRecordingTest,
+       HllAdjacentMixedParametersPreservePhysicalNulStrideAndNulls) {
+  for (bool stream : {false, true})
+    for (int null_at : {-1, 0, 1, 2}) {
+      nanoarrow::UniqueSchema schema;
+      EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll, RedshiftEncodedKind::kHll,
+                                   RedshiftEncodedKind::kNone});
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+      ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+      for (int i = 0; i < 3; ++i) {
+        if (i == null_at)
+          ASSERT_EQ(ArrowArrayAppendNull(array->children[i], 1), 0);
+        else if (i == 2)
+          ASSERT_EQ(ArrowArrayAppendInt(array->children[i], 42), 0);
+        else
+          ASSERT_EQ(ArrowArrayAppendString(array->children[i], ArrowCharView(kSparseHll)),
+                    0);
+      }
+      ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+      ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+      ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_param", &error),
+                ADBC_STATUS_OK);
+      if (stream) {
+        nanoarrow::UniqueArrayStream input;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+        ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                  ADBC_STATUS_OK)
+            << Message();
+      } else
+        ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                  ADBC_STATUS_OK)
+            << Message();
+      recording.executions.clear();
+      nanoarrow::UniqueArrayStream output;
+      ASSERT_EQ(driver.StatementExecuteQuery(&statement, output.get(), nullptr, &error),
+                ADBC_STATUS_OK)
+          << Message();
+      ASSERT_EQ(recording.executions.size(), 1);
+      const auto& params = recording.executions[0];
+      ASSERT_EQ(params.size(), 3);
+      for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(params[i].null, i == null_at);
+        if (i < 2) {
+          EXPECT_EQ(params[i].oid, 72115);
+          EXPECT_EQ(params[i].format, 0);
+          EXPECT_EQ(params[i].physical_length,
+                    i == null_at ? 0 : std::strlen(kSparseHll) + 1);
+          if (i != null_at) EXPECT_EQ(params[i].bytes, kSparseHll);
+        } else if (i != null_at)
+          EXPECT_EQ(params[i].bytes, testing::NumericHex("000000000000002a"));
+      }
+      nanoarrow::UniqueSchema actual;
+      ASSERT_EQ(output->get_schema(output.get(), actual.get()), 0);
+      EXPECT_STREQ(actual->children[0]->format, "U");
+      nanoarrow::UniqueArray rows;
+      ASSERT_EQ(output->get_next(output.get(), rows.get()), 0);
+      EXPECT_EQ(rows->length, 2);
+    }
+}
+TEST_F(IntervalPublicRecordingTest,
+       AllHllMultipleEmptyAndSpatialResultsUseSingleExactFormat) {
+  for (const char* query :
+       {"SELECT owned_hll_pair", "SELECT owned_hll_empty", "SELECT owned_geometry"}) {
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, query, &error), ADBC_STATUS_OK);
+    recording.vendor_result_calls = 0;
+    nanoarrow::UniqueArrayStream output;
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, output.get(), nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    EXPECT_EQ(recording.vendor_result_calls, 1);
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(output->get_schema(output.get(), schema.get()), 0);
+    EXPECT_STREQ(schema->children[0]->format,
+                 std::string_view(query) == "SELECT owned_geometry" ? "Z" : "U");
+    nanoarrow::UniqueArray rows;
+    ASSERT_EQ(output->get_next(output.get(), rows.get()), 0);
+    EXPECT_EQ(rows->release != nullptr,
+              std::string_view(query) != "SELECT owned_hll_empty");
+  }
+}
+TEST_F(IntervalPublicRecordingTest, HllMixedDescriptorDriftAndServerFailureNeverRetry) {
+  ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_mixed", &error),
+            ADBC_STATUS_OK);
+  nanoarrow::UniqueArrayStream out;
+  EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(recording.vendor_result_calls, 0);
+  for (int fault = 1; fault <= 6; ++fault) {
+    recording.vendor_result_drift = fault < 6 ? fault : 0;
+    recording.vendor_result_error = fault == 6;
+    recording.vendor_result_calls = 0;
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_pair", &error),
+              ADBC_STATUS_OK);
+    EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+              ADBC_STATUS_OK);
+    EXPECT_EQ(recording.vendor_result_calls, 1);
+  }
+}
+TEST_F(IntervalPublicRecordingTest,
+       SpatialGeneratedConstructorAndHllTypeUseActualTarget) {
+  for (auto kind : {RedshiftEncodedKind::kGeometry, RedshiftEncodedKind::kGeography,
+                    RedshiftEncodedKind::kHll})
+    for (bool stream : {false, true}) {
+      recording.encoded_target = kind == RedshiftEncodedKind::kGeometry    ? 72113
+                                 : kind == RedshiftEncodedKind::kGeography ? 72114
+                                                                           : 72115;
+      nanoarrow::UniqueSchema schema;
+      EncodedSchema(schema.get(), {kind});
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+      ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+      const auto value =
+          kind == RedshiftEncodedKind::kHll
+              ? std::string(kSparseHll)
+              : testing::NumericHex("0101000020e6100000000000000000f03f000000000000f03f");
+      ArrowBufferView bytes{};
+      bytes.data.as_char = value.data();
+      bytes.size_bytes = value.size();
+      ASSERT_EQ(ArrowArrayAppendBytes(array->children[0], bytes), 0);
+      ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+      ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                          "owned", &error),
+                ADBC_STATUS_OK);
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                          ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                ADBC_STATUS_OK);
+      if (stream) {
+        nanoarrow::UniqueArrayStream in;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), in.get());
+        ASSERT_EQ(driver.StatementBindStream(&statement, in.get(), &error),
+                  ADBC_STATUS_OK)
+            << Message();
+      } else
+        ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                  ADBC_STATUS_OK)
+            << Message();
+      recording.executions.clear();
+      recording.queries.clear();
+      ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                ADBC_STATUS_OK)
+          << Message();
+      ASSERT_EQ(recording.executions.size(), 1);
+      const auto& p = recording.executions[0][0];
+      EXPECT_EQ(p.oid, kind == RedshiftEncodedKind::kHll ? 72115 : 72112);
+      EXPECT_EQ(p.format, kind == RedshiftEncodedKind::kHll ? 0 : 1);
+      if (kind == RedshiftEncodedKind::kHll)
+        EXPECT_EQ(p.bytes, value);
+      else {
+        EXPECT_EQ(testing::NumericHex(p.bytes.c_str()), value);
+        const auto it =
+            std::find_if(recording.queries.begin(), recording.queries.end(),
+                         [](const auto& q) { return q.starts_with("INSERT "); });
+        ASSERT_NE(it, recording.queries.end());
+        EXPECT_NE(it->find("ST_GeomFromEWKB($1)"), std::string::npos);
+        EXPECT_EQ(it->find("::GEOGRAPHY") != std::string::npos,
+                  kind == RedshiftEncodedKind::kGeography);
+      }
+    }
+}
+TEST_F(IntervalPublicRecordingTest, HllVarbyteBothOrdersGrowthAndNullPositions) {
+  for (bool reverse : {false, true})
+    for (int null_at : {-1, 0, 1, 2}) {
+      nanoarrow::UniqueSchema schema;
+      EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll, RedshiftEncodedKind::kHll,
+                                   RedshiftEncodedKind::kHll});
+      const int binary = reverse ? 0 : 1;
+      auto* field = schema->children[binary];
+      ASSERT_EQ(ArrowSchemaSetType(field, NANOARROW_TYPE_LARGE_BINARY), 0);
+      ASSERT_EQ(ArrowSchemaSetMetadata(field, nullptr), 0);
+      ASSERT_EQ(testing::DecimalMetadata(field, "ADBC:redshift:sql_type", "VARBYTE"), 0);
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+      ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+      const std::string large = "\"" + std::string(10000, 'A') + "\"";
+      const auto literal = testing::NumericHex("0080ff");
+      for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 3; ++col) {
+          if (col == null_at) {
+            ASSERT_EQ(ArrowArrayAppendNull(array->children[col], 1), 0);
+          } else {
+            const auto& value = col == binary ? literal : large;
+            ArrowBufferView bytes{};
+            bytes.data.as_char = value.data();
+            bytes.size_bytes = value.size();
+            ASSERT_EQ(ArrowArrayAppendBytes(array->children[col], bytes), 0);
+          }
+        }
+        ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+      }
+      ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+      ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_param", &error),
+                ADBC_STATUS_OK);
+      ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                ADBC_STATUS_OK)
+          << Message();
+      recording.executions.clear();
+      nanoarrow::UniqueArrayStream out;
+      ASSERT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+                ADBC_STATUS_OK)
+          << Message();
+      while (true) {
+        nanoarrow::UniqueArray rows;
+        ASSERT_EQ(out->get_next(out.get(), rows.get()), 0)
+            << out->get_last_error(out.get());
+        if (!rows->release) break;
+      }
+      ASSERT_EQ(recording.executions.size(), 2);
+      for (const auto& params : recording.executions)
+        for (int col = 0; col < 3; ++col) {
+          EXPECT_EQ(params[col].null, col == null_at);
+          EXPECT_EQ(params[col].oid, col == binary ? 72112 : 72115);
+          EXPECT_EQ(params[col].format, col == binary ? 1 : 0);
+          if (col != null_at)
+            EXPECT_EQ(params[col].bytes, col == binary ? literal : large);
+        }
+    }
+}
+TEST_F(IntervalPublicRecordingTest,
+       HllParameterMismatchAndVendorMutationRejectBeforeDispatch) {
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll});
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
+    ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_param", &error),
+              ADBC_STATUS_OK);
+    if (stream) {
+      nanoarrow::UniqueArrayStream in;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), in.get());
+      ASSERT_EQ(driver.StatementBindStream(&statement, in.get(), &error), ADBC_STATUS_OK);
+    } else
+      ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                ADBC_STATUS_OK);
+    recording.hll_param_mismatch = true;
+    recording.executions.clear();
+    nanoarrow::UniqueArrayStream out;
+    EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+              ADBC_STATUS_OK);
+    EXPECT_TRUE(recording.executions.empty());
+    recording.hll_param_mismatch = false;
+  }
+  nanoarrow::UniqueSchema schema;
+  EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll});
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+  ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+  ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
+  ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+  ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+  ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                      "owned", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+            ADBC_STATUS_OK);
+  recording.queries.clear();
+  EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_OK);
+  EXPECT_TRUE(recording.queries.empty());
 }
 }  // namespace
 }  // namespace adbcpq

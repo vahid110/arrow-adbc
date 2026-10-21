@@ -150,10 +150,12 @@ need before it is scheduled. Type-specific large-value transport requirements
 identified by Task010 are release decisions, not a blanket type deferral.
 
 
-Task010i1 introduces an application-asserted SUPER JSON-subset input for generated
-ingest only, not a lossless native SUPER mapping. Raw SUPER reads/direct semantic
-vendor binds stay explicit unsupported routes; no arbitrary query is rewritten or
-retried. SUPER REPLACE rejects before DROP. Strict parser/context and target guards,
-public consumers, independent source review and actual installed native acceptance
-are required before reporting this slice verified. Spatial EWKB and HLL serialized
-support remain bounded successors under the all21 goal, not completed by rejection.
+Task010i1's bounded SUPER JSON-subset generated-ingest slice is locally integrated
+and independently reviewed with rebuilt/installed offline gates. Native acceptance
+and lossless SUPER reads remain open. Task010i2 adds useful bounded EWKB spatial
+read/generated hex-VARBYTE constructor writes and HLL serialization text writes
+plus all-HLL projection reads. Mixed HLL results and direct spatial/SUPER binds
+remain unsupported; no arbitrary SQL rewrite or binary fallback is selected.
+Vendor REPLACE still rejects before DROP, with existing CREATE residue/APPEND
+ownership boundaries. Exact source review, full rebuild and installed native
+acceptance remain required; none of these subsets implies all21 qualification.

@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "redshift_bytes.h"
+#include "redshift_vendor_schema.h"
 
 namespace adbcpq {
 
@@ -54,6 +55,10 @@ struct RedshiftSuperSchema {
         schema, "ARROW:extension:name", &extension, error));
     NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
         schema, "ARROW:extension:metadata", &metadata, error));
+    RedshiftEncodedSchema encoded;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftEncodedSchema::Parse(schema, redshift, &encoded, error));
+    if (encoded.enabled()) return NANOARROW_OK;
     const bool super_extension =
         extension && extension->starts_with("adbc.redshift.super");
     const bool vendor_family =
@@ -97,6 +102,12 @@ struct RedshiftSuperSchema {
       if (!node) return NANOARROW_OK;
       RedshiftSuperSchema field;
       NANOARROW_RETURN_NOT_OK(Parse(node, redshift, &field, error));
+      RedshiftEncodedSchema encoded;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftEncodedSchema::Parse(node, redshift, &encoded, error));
+      if (encoded.enabled() && (!direct || dictionary || (generated_ingest && replace) ||
+                                (encoded.spatial() && !generated_ingest)))
+        return Invalid(error, "unsupported spatial/HLL route, nested source or REPLACE");
       if (field.enabled) {
         if (!direct || dictionary) return Invalid(error, "nested semantic field");
         if (!generated_ingest || replace)

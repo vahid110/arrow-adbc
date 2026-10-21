@@ -63,11 +63,11 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-DDL / target producer N | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-DDL / target producer N | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
-| HLLSKETCH | C-opaque,NQ | N | N / N | C-name only | proposed versioned sketch serialization |
+| HLLSKETCH | C-serialization all-HLL only,NQ | C-text subset,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_utf8 serialized sketch |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
 | VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,NQ | C-raw/provisional size cap,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
-| GEOMETRY | C-opaque,NQ | N | N / N | C-name only | typed WKB/SRID representation |
-| GEOGRAPHY | C-opaque,NQ | N | N / N | C-name only | typed WKB/SRID + geodetic identity |
+| GEOMETRY | C-bounded EWKB,NQ | C-generated hex constructor,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, per-value SRID |
+| GEOGRAPHY | C-bounded EWKB,NQ | C-generated constructor/cast,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, explicit per-value SRID |
 
 L covers installed C archive and Linux x86-64 wheel, temporary IAM/verify-full TLS,
 query/parameter value 42, small int64 create+append, schema/roundtrip and owned
@@ -689,3 +689,35 @@ created empty table following a later payload failure. APPEND keeps the existing
 data transaction owner. Native read losslessness and installed qualification stay
 open. HLL's documented24,580-byte number is a raw sketch-object bound, not the
 serialized UTF8 budget (retained dense examples exceed it).
+
+### Task010i2 bounded spatial and HLL subsets
+
+Spatial output uses `large_binary` with exact `adbc.redshift.geometry.ewkb` or
+`adbc.redshift.geography.ewkb`, canonical SQL family and version1 metadata
+`{"version":1,"encoding":"ewkb","family":"GEOMETRY","srid":"per-value","axes":"native"}`
+(GEOGRAPHY changes the family). Bytes, axes and SRID are preserved. The complete
+PostGIS EWKB structural subset includes seven shapes/Z/M/both endian orders;
+ISO offset variants and conflicting nested SRIDs reject. A missing top-level
+GEOMETRY SRID means0; GEOGRAPHY requires an embedded SRID. Empty POINT requires
+all ordinates NaN, other coordinates finite. Structure validation is not topology
+or reprojection. The local read payload cap is1,048,447 bytes, not full native
+boundary proof. Generated writes cap raw bytes at500,000, emit owned ASCIIhex as
+VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
+spatial binding stays unsupported; live constructor semantics remain unqualified.
+
+HLL uses `large_utf8`, `adbc.redshift.hllsketch` and exact
+`{"version":1,"encoding":"redshift-serialized","logm":15}` plus HLLSKETCH identity.
+A bounded sparse JSON/quoted canonical Base64 lexical subset preserves bytes up
+to1,000,000 encoded bytes, with actual server sketch semantics still authoritative.
+Typed direct HLL binds require backend cache identity and actual typed-Prepare /
+Describe consistency; this is not independent target or native provenance.
+Format0 values own their NUL terminator (physical framed length n+1, logical
+Arrow length n), while NULL keeps the existing zero-placeholder/separate-nullptr
+framing. Generated ingest separately verifies actual relation targets.
+
+Result-returning queries describe first. All-HLL nonempty projections execute
+once in global text format and validate actual descriptor/format before reading.
+Mixed HLL/non-HLL projections reject before execution; normal scalar expressions
+remain normal scalars. No SQL rewrite, retry or unrelated text fallback occurs.
+These source subsets await full/installed/native qualification and do not close
+lossless SUPER reads or all21 acceptance.

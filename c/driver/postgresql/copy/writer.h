@@ -31,6 +31,8 @@
 
 #include "../connection.h"
 #include "../postgres_util.h"
+#include "../redshift_hll.h"
+#include "../redshift_spatial.h"
 #include "copy_common.h"
 
 namespace adbcpq {
@@ -1011,6 +1013,46 @@ class RedshiftTemporalFieldWriter : public PostgresCopyFieldWriter {
   std::optional<int32_t> target_precision_;
 };
 
+class RedshiftEncodedFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit RedshiftEncodedFieldWriter(
+      RedshiftEncodedKind kind,
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : kind_(kind), allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    const bool hll = kind_ == RedshiftEncodedKind::kHll;
+    if (hll)
+      NANOARROW_RETURN_NOT_OK(RedshiftHll::Validate(bytes, error));
+    else
+      NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(
+          bytes, kind_ == RedshiftEncodedKind::kGeography, true, error));
+    const int64_t physical = hll ? bytes.size_bytes + 1 : bytes.size_bytes * 2;
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, physical + 4, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(physical));
+    if (hll) {
+      ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+      const char zero = 0;
+      ArrowBufferAppendUnsafe(buffer, &zero, 1);
+    } else {
+      static constexpr char hex[] = "0123456789abcdef";
+      for (int64_t i = 0; i < bytes.size_bytes; ++i) {
+        const uint8_t b = bytes.data.as_uint8[i];
+        const char pair[2] = {hex[b >> 4], hex[b & 15]};
+        ArrowBufferAppendUnsafe(buffer, pair, 2);
+      }
+    }
+    return NANOARROW_OK;
+  }
+
+ private:
+  RedshiftEncodedKind kind_;
+  ArrowBufferAllocator allocation_;
+};
+
 class RedshiftSuperFieldWriter : public PostgresCopyFieldWriter {
  public:
   explicit RedshiftSuperFieldWriter(
@@ -1266,6 +1308,21 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
   const auto vendor_target = target_type
                                  ? target_type->vendor_family()
                                  : adbc::driver::pgwire::CatalogVendorFamily::kNone;
+  RedshiftEncodedSchema encoded;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftEncodedSchema::Parse(schema, type_resolver.is_redshift(), &encoded, error));
+  if (encoded.enabled()) {
+    PostgresType source;
+    NANOARROW_RETURN_NOT_OK(
+        PostgresType::FromSchema(type_resolver, schema, &source, error));
+    if ((encoded.spatial() && !generated_super_ingest) || !target_type ||
+        target_type->encoded_kind() != encoded.kind || !target_type->oid() ||
+        target_type->oid() != source.oid())
+      return RedshiftEncodedSchema::Invalid(error);
+    *out = PostgresCopyFieldWriter::Create<RedshiftEncodedFieldWriter>(array_view,
+                                                                       encoded.kind);
+    return NANOARROW_OK;
+  }
   if (super.enabled ||
       vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kNone) {
     if (!generated_super_ingest || !super.enabled || !target_type ||

@@ -221,7 +221,8 @@ Type mapping (query results)
      - ``date32``, ``time64[us]``, ``timestamp[us]``, ``timestamp[us, UTC]``
 
 Timestamps outside Arrow's signed 64-bit microsecond range return an error.
-``SUPER``, ``GEOMETRY`` and ``GEOGRAPHY`` have no native mapping. Explicit
+``SUPER`` has no lossless native read mapping. Spatial EWKB and HLL serialization
+subsets are described below. Explicit
 ``JSON_SERIALIZE(super_column)`` can return text for values that fit Redshift's
 ``VARCHAR`` limit; it is not a lossless strategy for arbitrary ``SUPER`` values.
 
@@ -303,6 +304,42 @@ Full numeric subtype/precision and native read losslessness are not promised.
 
 SUPER REPLACE is rejected before DROP. CREATE and missing CREATE_APPEND may leave
 a new empty table after a subsequent payload failure; APPEND retains existing data
-transaction ownership. Raw native SUPER reads and direct semantic vendor binding
-remain unsupported. Spatial and HLL implementations and installed native
-qualification are separate unfinished work.
+transaction ownership. Raw native SUPER reads and direct SUPER/spatial binding remain unsupported.
+Installed native qualification remains pending.
+
+
+Spatial EWKB and HLL serialization subsets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+GEOMETRY/GEOGRAPHY use ``large_binary`` with exact extension names
+``adbc.redshift.geometry.ewkb`` / ``adbc.redshift.geography.ewkb``, matching
+``ADBC:redshift:sql_type`` and version1 metadata (change family for GEOGRAPHY)::
+
+   {"version":1,"encoding":"ewkb","family":"GEOMETRY","srid":"per-value","axes":"native"}
+
+The bounded structural reader preserves bytes, Z/M axes and per-value SRID in
+both endian orders. Missing top-level GEOMETRY SRID means0; GEOGRAPHY requires
+an embedded SRID. It does not reproject, validate topology or infer a column CRS.
+The selected read payload cap is1,048,447 bytes. Generated writes accept at most
+500,000 EWKB bytes, passing owned ASCIIhex VARBYTE to ``ST_GeomFromEWKB`` and an
+explicit ``::GEOGRAPHY`` cast where selected. Direct spatial parameter SQL is
+unsupported. Constructor/native boundary qualification remains pending.
+
+HLLSKETCH uses ``large_utf8``, extension ``adbc.redshift.hllsketch``, matching SQL
+family and exact metadata::
+
+   {"version":1,"encoding":"redshift-serialized","logm":15}
+
+The driver retains a bounded sparse JSON or quoted canonical Base64 lexical
+serialization (up to1,000,000 encoded bytes). The server validates sketch semantics;
+the extension is an application assertion, not authenticated native provenance.
+HLL parameters own NUL-terminated text format0 storage; ordinary parameters keep
+their formats. Generated writes validate the actual relation target; direct HLL
+binds validate server parameter Describe consistency after typed Prepare.
+
+An output projection containing only HLL columns is described upfront and executed
+once in text format, with actual descriptor checks. Mixed HLL/non-HLL projections
+reject before execution, without retry, rewrite or scalar text fallback. Empty
+results retain the typed schema. Vendor REPLACE remains rejected before DROP;
+CREATE residue and APPEND transaction ownership follow the SUPER policy above.
+These bounded capabilities do not imply full mixed-HLL or all-type qualification.

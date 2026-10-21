@@ -94,6 +94,10 @@ class PqResultArrayReader {
   nanoarrow::UniqueSchema schema_;
   bool autocommit_;
   bool materialized_encoding_valid_ = false;
+  int result_format_ = kPgBinaryFormat;
+  adbc::driver::pgwire::UniqueResult described_;
+  Status SelectDescribedResult();
+  Status CheckHllParamDescriptor();
   adbc::driver::pgwire::TemporalRepresentation temporal_representation_;
   std::string vendor_name_;
   struct AdbcError error_;
@@ -110,6 +114,8 @@ class PqResultArrayReader {
         schema_(std::move(other->schema_)),
         autocommit_(other->autocommit_),
         materialized_encoding_valid_(other->materialized_encoding_valid_),
+        result_format_(other->result_format_),
+        described_(std::move(other->described_)),
         temporal_representation_(other->temporal_representation_),
         vendor_name_(std::move(other->vendor_name_)) {
     ArrowErrorInit(&na_error_);

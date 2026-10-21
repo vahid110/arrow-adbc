@@ -593,6 +593,11 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
   ArrowError interval_error{};
+  if (type_resolver_ &&
+      PostgresType::ValidateVendorWriteSchema(*type_resolver_, schema, &interval_error)) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
   if (type_resolver_ && PostgresType::ValidateTemporalWriteSchema(
                             *type_resolver_, schema, &interval_error) != NANOARROW_OK) {
     InternalAdbcSetError(error, "%s", interval_error.message);
@@ -649,6 +654,11 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
                             schema.get(), type_resolver_->is_redshift(),
                             !ingest_.target.empty(), ingest_.mode == IngestMode::kReplace,
                             &has_super, &interval_error) != NANOARROW_OK) {
+    InternalAdbcSetError(error, "%s", interval_error.message);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (type_resolver_ && PostgresType::ValidateVendorWriteSchema(
+                            *type_resolver_, schema.get(), &interval_error)) {
     InternalAdbcSetError(error, "%s", interval_error.message);
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
@@ -846,6 +856,13 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                       &na_error, error);
       interval_create_append |= interval.enabled();
       requires_existing |= interval.enabled();
+      RedshiftEncodedSchema encoded;
+      CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                      RedshiftEncodedSchema::Parse(source_schema.children[i],
+                                                   type_resolver_->is_redshift(),
+                                                   &encoded, &na_error),
+                      &na_error, error);
+      requires_existing |= encoded.enabled();
     }
     requires_existing |= has_super;
     if (requires_existing) {
@@ -984,10 +1001,19 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
         RedshiftSuperSchema::Parse(source_schema.children[i],
                                    type_resolver_->is_redshift(), &super, &na_error),
         &na_error, error);
-    has_semantic_schema |= super.enabled || decimal.enabled || scalar.enabled() ||
-                           bytes.enabled() || temporal.enabled() || interval.enabled() ||
-                           timetz.enabled;
-    std::string declaration = super.enabled ? "SUPER" : pg_type.sql_type_name();
+    RedshiftEncodedSchema encoded;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftEncodedSchema::Parse(source_schema.children[i],
+                                     type_resolver_->is_redshift(), &encoded, &na_error),
+        &na_error, error);
+    has_semantic_schema |= encoded.enabled() || super.enabled || decimal.enabled ||
+                           scalar.enabled() || bytes.enabled() || temporal.enabled() ||
+                           interval.enabled() || timetz.enabled;
+    std::string declaration = super.enabled ? "SUPER"
+                              : encoded.enabled()
+                                  ? RedshiftEncodedSchema::Family(encoded.kind)
+                                  : pg_type.sql_type_name();
     if (decimal.enabled && ingest_.mode != IngestMode::kAppend &&
         !append_existing_semantic) {
       CHECK_NA_DETAIL(INVALID_ARGUMENT, decimal.Declaration(&declaration, &na_error),
@@ -1160,6 +1186,10 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
         RedshiftSuperSchema::ValidateRoute(
             schema.get(), type_resolver_->is_redshift(), !ingest_.target.empty(),
             ingest_.mode == IngestMode::kReplace, &has_super, &na_error),
+        &na_error, error);
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        PostgresType::ValidateVendorWriteSchema(*type_resolver_, schema.get(), &na_error),
         &na_error, error);
   }
 

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "copy/reader.h"
 #include "copy/writer.h"
 #include "redshift_bytes_test_fixture.h"
 #include "redshift_interval_test_fixture.h"
@@ -386,6 +387,83 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftSuperWriteFixture(
       value.data.data = bytes->data;
       value.size_bytes = bytes->size_bytes;
       NANOARROW_RETURN_NOT_OK(ArrowArrayAppendBytes(output->children[0], value));
+    }
+    NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(output.get()));
+  }
+  NANOARROW_RETURN_NOT_OK(ArrowArrayFinishBuildingDefault(output.get(), &error));
+  ArrowArrayMove(output.get(), array);
+  ArrowSchemaMove(output_schema.get(), schema);
+  return NANOARROW_OK;
+}
+
+// Test-only constructed catalog and native payload path. No server roundtrip or
+// native-origin assertion: consumer input exercises actual writer and reader.
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftEncodedFixture(
+    ArrowArray* input, ArrowSchema* input_schema, ArrowArray* array,
+    ArrowSchema* schema) {
+  if (!input || !input_schema || !array || !schema) return EINVAL;
+  ArrowError error{};
+  adbcpq::RedshiftEncodedSchema encoded;
+  if (input_schema->n_children != 1) return EINVAL;
+  NANOARROW_RETURN_NOT_OK(adbcpq::RedshiftEncodedSchema::Parse(input_schema->children[0],
+                                                               true, &encoded, &error));
+  if (!encoded.enabled()) return EINVAL;
+  const bool hll = encoded.kind == adbcpq::RedshiftEncodedKind::kHll;
+  const char* name = hll ? "hllsketch"
+                     : encoded.kind == adbcpq::RedshiftEncodedKind::kGeometry
+                         ? "geometry"
+                         : "geography";
+  adbcpq::PostgresTypeResolver resolver(adbc::driver::pgwire::BackendProfile::Redshift());
+  NANOARROW_RETURN_NOT_OK(
+      resolver.Insert({72123, name, "fixture_only", 0, 0, 0}, &error));
+  adbcpq::PostgresType target;
+  NANOARROW_RETURN_NOT_OK(resolver.Find(72123, &target, &error));
+  target = target.WithFieldDescriptor(-1, resolver.backend_profile());
+  nanoarrow::UniqueArrayView view;
+  NANOARROW_RETURN_NOT_OK(ArrowArrayViewInitFromSchema(view.get(), input_schema, &error));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayViewSetArray(view.get(), input, &error));
+  std::unique_ptr<adbcpq::PostgresCopyFieldWriter> writer;
+  NANOARROW_RETURN_NOT_OK(
+      adbcpq::MakeCopyFieldWriter(input_schema->children[0], view->children[0], resolver,
+                                  &target, &writer, false, &error, true));
+  nanoarrow::UniqueSchema output_schema;
+  ArrowSchemaInit(output_schema.get());
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(output_schema.get(), 2));
+  NANOARROW_RETURN_NOT_OK(
+      ArrowSchemaSetType(output_schema->children[0], NANOARROW_TYPE_BINARY));
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(output_schema->children[0], "wire"));
+  NANOARROW_RETURN_NOT_OK(target.SetSchema(output_schema->children[1], "Redshift"));
+  NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(output_schema->children[1], "value"));
+  std::unique_ptr<adbcpq::PostgresCopyFieldReader> reader;
+  NANOARROW_RETURN_NOT_OK(adbcpq::MakeCopyFieldReader(target, output_schema->children[1],
+                                                      &reader, &error, hll ? 0 : 1));
+  NANOARROW_RETURN_NOT_OK(reader->InitSchema(output_schema->children[1]));
+  nanoarrow::UniqueArray output;
+  NANOARROW_RETURN_NOT_OK(
+      ArrowArrayInitFromSchema(output.get(), output_schema.get(), &error));
+  NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(output.get()));
+  NANOARROW_RETURN_NOT_OK(reader->InitArray(output->children[1]));
+  for (int64_t row = 0; row < input->length; ++row) {
+    if (ArrowArrayViewIsNull(view.get(), row) || view->offset < 0 ||
+        row > INT64_MAX - view->offset)
+      return EINVAL;
+    const int64_t child = row + view->offset;
+    if (child >= view->children[0]->length) return EINVAL;
+    if (ArrowArrayViewIsNull(view->children[0], child)) {
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendNull(output->children[0], 1));
+      ArrowBufferView empty{};
+      NANOARROW_RETURN_NOT_OK(reader->Read(&empty, -1, output->children[1], &error));
+    } else {
+      nanoarrow::UniqueBuffer wire;
+      NANOARROW_RETURN_NOT_OK(writer->Write(wire.get(), child, &error));
+      ArrowBufferView bytes{};
+      bytes.data.data = wire->data;
+      bytes.size_bytes = wire->size_bytes;
+      NANOARROW_RETURN_NOT_OK(ArrowArrayAppendBytes(output->children[0], bytes));
+      NANOARROW_RETURN_NOT_OK(adbcpq::RedshiftBytesSchema::GetBytes(
+          view->children[0], child, &bytes, &error));
+      NANOARROW_RETURN_NOT_OK(
+          reader->Read(&bytes, bytes.size_bytes, output->children[1], &error));
     }
     NANOARROW_RETURN_NOT_OK(ArrowArrayFinishElement(output.get()));
   }

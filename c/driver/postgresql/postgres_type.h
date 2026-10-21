@@ -182,6 +182,20 @@ class PostgresType {
     out.vendor_family_ = family;
     return out;
   }
+  RedshiftEncodedKind encoded_kind() const {
+    using F = adbc::driver::pgwire::CatalogVendorFamily;
+    switch (vendor_family_) {
+      case F::kGeometry:
+        return RedshiftEncodedKind::kGeometry;
+      case F::kGeography:
+        return RedshiftEncodedKind::kGeography;
+      case F::kHll:
+        return RedshiftEncodedKind::kHll;
+      default:
+        return RedshiftEncodedKind::kNone;
+    }
+  }
+
   adbc::driver::pgwire::CatalogVendorFamily vendor_family() const {
     return vendor_family_;
   }
@@ -329,7 +343,9 @@ class PostgresType {
         temporal_kind() != RedshiftTemporalKind::kDate &&
         temporal_representation_ ==
             adbc::driver::pgwire::TemporalRepresentation::kLossless;
-    if (is_redshift_timetz()) {
+    if (encoded_kind() != RedshiftEncodedKind::kNone) {
+      NANOARROW_RETURN_NOT_OK(RedshiftEncodedSchema::SetSchema(schema, encoded_kind()));
+    } else if (is_redshift_timetz()) {
       NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::SetSchema(schema));
     } else if (lossless_temporal) {
       NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_INT64));
@@ -588,8 +604,9 @@ class PostgresType {
       return ArrowMetadataBuilderAppend(buffer.get(), ArrowCharView(key),
                                         ArrowCharView(text.c_str()));
     };
-    NANOARROW_RETURN_NOT_OK(
-        append_integer("ADBC:redshift:type_modifier", type_modifier_));
+    if (encoded_kind() == RedshiftEncodedKind::kNone)
+      NANOARROW_RETURN_NOT_OK(
+          append_integer("ADBC:redshift:type_modifier", type_modifier_));
     NANOARROW_RETURN_NOT_OK(
         append_integer("ADBC:redshift:precision", modifier_metadata_.precision));
     NANOARROW_RETURN_NOT_OK(
@@ -931,6 +948,17 @@ inline ArrowErrorCode PostgresType::ValidateVendorWriteSchema(
   RedshiftSuperSchema super;
   NANOARROW_RETURN_NOT_OK(
       RedshiftSuperSchema::Parse(schema, resolver.is_redshift(), &super, error));
+  RedshiftEncodedSchema encoded;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftEncodedSchema::Parse(schema, resolver.is_redshift(), &encoded, error));
+  if (encoded.enabled()) {
+    auto family = encoded.kind == RedshiftEncodedKind::kHll
+                      ? adbc::driver::pgwire::CatalogVendorFamily::kHll
+                  : encoded.kind == RedshiftEncodedKind::kGeometry
+                      ? adbc::driver::pgwire::CatalogVendorFamily::kGeometry
+                      : adbc::driver::pgwire::CatalogVendorFamily::kGeography;
+    if (!resolver.GetVendorOID(family)) return RedshiftEncodedSchema::Invalid(error);
+  }
   for (int64_t i = 0; i < schema->n_children; ++i)
     NANOARROW_RETURN_NOT_OK(
         ValidateVendorWriteSchema(resolver, schema->children[i], error));
@@ -1076,6 +1104,17 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
   RedshiftSuperSchema super;
   NANOARROW_RETURN_NOT_OK(
       RedshiftSuperSchema::Parse(schema, resolver.is_redshift(), &super, error));
+  RedshiftEncodedSchema encoded;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftEncodedSchema::Parse(schema, resolver.is_redshift(), &encoded, error));
+  if (encoded.enabled()) {
+    const auto family = encoded.kind == RedshiftEncodedKind::kHll
+                            ? adbc::driver::pgwire::CatalogVendorFamily::kHll
+                        : encoded.kind == RedshiftEncodedKind::kGeometry
+                            ? adbc::driver::pgwire::CatalogVendorFamily::kGeometry
+                            : adbc::driver::pgwire::CatalogVendorFamily::kGeography;
+    return resolver.Find(resolver.GetVendorOID(family), out, error);
+  }
   if (super.enabled)
     return resolver.Find(
         resolver.GetVendorOID(adbc::driver::pgwire::CatalogVendorFamily::kSuper), out,
