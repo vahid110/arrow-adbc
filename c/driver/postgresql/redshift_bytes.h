@@ -194,13 +194,20 @@ struct RedshiftBytesSchema {
         return Invalid(error, "plain INSERT binary envelope exceeded");
       return NANOARROW_OK;
     }
+    return ValidateUtf8(bytes, kind == RedshiftBytesKind::kChar, error);
+  }
+  // Encoding only: each caller retains its own byte/domain bounds.
+  static ArrowErrorCode ValidateUtf8(ArrowBufferView bytes, bool single_byte,
+                                     ArrowError* error) {
+    if (bytes.size_bytes < 0 || (bytes.size_bytes && !bytes.data.data))
+      return Invalid(error, "invalid UTF-8 buffer");
     const uint8_t* p = bytes.data.as_uint8;
     int64_t i = 0;
     while (i < bytes.size_bytes) {
       const uint8_t first = p[i++];
       if (first == 0) return Invalid(error, "NUL text unsupported");
       if (first < 0x80) continue;
-      if (kind == RedshiftBytesKind::kChar) return Invalid(error, "multibyte CHAR");
+      if (single_byte) return Invalid(error, "multibyte CHAR");
       int continuation;
       uint32_t value, minimum;
       if (first >= 0xc2 && first <= 0xdf) {

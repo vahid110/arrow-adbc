@@ -23,10 +23,12 @@
 #include <vector>
 
 #include "bind_stream.h"
+#include "copy/reader.h"
 #include "redshift_super_allocation_test.h"
 
 namespace adbcpq {
 namespace {
+#include "redshift_super_native_corpus_test.inc"
 using adbc::driver::pgwire::BackendProfile;
 using adbc::driver::pgwire::CatalogVendorFamily;
 
@@ -336,6 +338,184 @@ TEST(RedshiftSuperTest, ReplacementAllocatorMatchesAllDeleteFormsAndResetsFailur
   std::unique_ptr<char[]> recovered(new char[19]);
   recovered[18] = 'z';
   EXPECT_EQ(recovered[18], 'z');
+}
+
+ArrowBufferView NativeBytes(std::string_view text) {
+  ArrowBufferView out{};
+  out.data.as_char = text.data();
+  out.size_bytes = text.size();
+  return out;
+}
+int NativeJson(std::string_view text) {
+  ArrowError error{};
+  return RedshiftSuperResultSchema::Validate(NativeBytes(text), &error);
+}
+TEST(RedshiftSuperTest, NativeGrammarPreservesDistinctWritePolicyAndFullDepth) {
+  for (const char* json : {"null", "true", "false", "[]", "{}", "-0.000E+123",
+                           R"({"a":1,"\u0061":2})", R"("\ud83d\ude00")"}) {
+    EXPECT_EQ(NativeJson(json), 0) << json;
+  }
+  EXPECT_NE(Json(R"({"a":1,"\u0061":2})"), 0);
+  std::string prefix, suffix;
+  for (int i = 0; i < 1000; ++i) {
+    prefix += i % 2 ? "[" : "{\"n\":";
+    suffix = (i % 2 ? "]" : "}") + suffix;
+  }
+  EXPECT_EQ(NativeJson(prefix + "1.2200" + suffix), 0);
+  EXPECT_EQ(NativeJson(prefix + R"("\ud83d\ude00")" + suffix), 0);
+  EXPECT_NE(NativeJson(prefix + "[0]" + suffix), 0);
+  EXPECT_NE(NativeJson(prefix + "[0,]" + suffix), 0);
+  EXPECT_NE(Json(std::string(129, '[') + "0" + std::string(129, ']')), 0);
+  for (const char* json : {"",      " ",        "null false",  "nullx",       "[",
+                           "{",     "[1,]",     "{\"a\":1,}",  "{\"a\" 1}",   "[1 2]",
+                           "[1}",   "01",       "-",           "1.",          "1e+",
+                           "NaN",   "Infinity", R"("\ud800")", R"("\udc00")", R"("\x20")",
+                           "\"\n\""}) {
+    EXPECT_NE(NativeJson(json), 0) << json;
+  }
+  EXPECT_NE(NativeJson(std::string("\"\xc0\x80\"", 4)), 0);
+  EXPECT_NE(NativeJson(std::string("\"\xed\xa0\x80\"", 5)), 0);
+  EXPECT_NE(NativeJson(std::string("null\0", 5)), 0);
+}
+TEST(RedshiftSuperTest, NativeReceivedByteLimitIsSeparateFromVarcharAndInput) {
+  const auto limit = RedshiftSuperResultSchema::kMaxBytes;
+  std::string text = "\"" + std::string(limit - 2, 'a') + "\"";
+  EXPECT_EQ(NativeJson(text), 0);
+  EXPECT_NE(Json(text), 0);
+  text.insert(text.size() - 1, "a");
+  EXPECT_NE(NativeJson(text), 0);
+}
+TEST(RedshiftSuperTest, NativeSchemaIsBackendCatalogScopedAndNotWriteInput) {
+  ArrowError error{};
+  for (bool redshift : {false, true}) {
+    PostgresTypeResolver resolver(redshift ? BackendProfile::Redshift()
+                                           : BackendProfile::PostgreSQL());
+    ASSERT_EQ(resolver.Insert({72131, "super", "json_recv", 0, 0, 0}, &error), 0);
+    PostgresType type;
+    ASSERT_EQ(resolver.Find(72131, &type, &error), 0);
+    type = type.WithFieldDescriptor(123, resolver.backend_profile());
+    EXPECT_EQ(type.is_redshift_super(), redshift);
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(type.SetSchema(schema.get(), redshift ? "Redshift" : "PostgreSQL"), 0);
+    if (!redshift) {
+      EXPECT_NE(RedshiftSuperResultSchema::Parse(schema.get(), &error), 0);
+      continue;
+    }
+    EXPECT_STREQ(schema->format, "U");
+    EXPECT_EQ(type.oid(), 72131U);
+    EXPECT_EQ(type.type_modifier(), 123);
+    ASSERT_EQ(RedshiftSuperResultSchema::Parse(schema.get(), &error), 0);
+    RedshiftSuperSchema input;
+    EXPECT_NE(RedshiftSuperSchema::Parse(schema.get(), true, &input, &error), 0);
+    std::unique_ptr<PostgresCopyFieldReader> reader;
+    EXPECT_EQ(MakeCopyFieldReader(type, schema.get(), &reader, &error, 1), 0);
+    EXPECT_NE(MakeCopyFieldReader(type, schema.get(), &reader, &error, 0), 0);
+    nanoarrow::UniqueBuffer changed;
+    ASSERT_EQ(ArrowMetadataBuilderInit(changed.get(), schema->metadata), 0);
+    ASSERT_EQ(ArrowMetadataBuilderSet(changed.get(),
+                                      ArrowCharView("ADBC:redshift:type_modifier"),
+                                      ArrowCharView("124")),
+              0);
+    ASSERT_EQ(
+        ArrowSchemaSetMetadata(schema.get(), reinterpret_cast<char*>(changed->data)), 0);
+    EXPECT_EQ(RedshiftSuperResultSchema::Parse(schema.get(), &error), 0);
+    EXPECT_NE(MakeCopyFieldReader(type, schema.get(), &reader, &error, 1), 0);
+    ASSERT_EQ(ArrowSchemaSetMetadata(schema.get(), nullptr), 0);
+    EXPECT_NE(MakeCopyFieldReader(type, schema.get(), &reader, &error, 1), 0);
+  }
+}
+TEST(RedshiftSuperTest, NativeRetainedLexemesAndWireNullAreNotReserialized) {
+  ArrowError error{};
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(RedshiftSuperResultSchema::SetSchema(schema.get()), 0);
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
+  ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+  RedshiftSuperFieldReader reader;
+  ASSERT_EQ(reader.InitSchema(schema.get()), 0);
+  ASSERT_EQ(reader.InitArray(array.get()), 0);
+  std::vector<std::optional<std::string>> expected;
+  for (const auto* cell : kNativeSuperCells)
+    expected.push_back(cell ? std::optional<std::string>(cell) : std::nullopt);
+  // Synthetic non-null JSON null proves it is not confused with a NULL pointer;
+  // actual fixtures1/2 both remain Arrow NULL, as the server transmitted them.
+  expected.insert(expected.end(), {"null", R"("null")", R"("")", " -0.000e+5 "});
+  for (const auto& cell : expected) {
+    auto bytes = NativeBytes(cell ? std::string_view(*cell) : std::string_view{});
+    ASSERT_EQ(reader.Read(&bytes, cell ? bytes.size_bytes : -1, array.get(), &error), 0)
+        << error.message;
+    if (cell) {
+      EXPECT_EQ(bytes.size_bytes, 0);
+    }
+  }
+  ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), &error), 0);
+  nanoarrow::UniqueArrayView view;
+  ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), &error), 0);
+  ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), &error), 0);
+  ASSERT_EQ(view->length, static_cast<int64_t>(expected.size()));
+  for (int64_t i = 0; i < view->length; ++i) {
+    EXPECT_EQ(ArrowArrayViewIsNull(view.get(), i), !expected[i]);
+    if (expected[i]) {
+      const auto bytes = ArrowArrayViewGetStringUnsafe(view.get(), i);
+      EXPECT_EQ(std::string_view(bytes.data, bytes.size_bytes), *expected[i]);
+    }
+  }
+}
+TEST(RedshiftSuperTest, NativeMalformedAndReserveFailuresPreservePrefixAndCursor) {
+  ArrowError error{};
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(RedshiftSuperResultSchema::SetSchema(schema.get()), 0);
+  for (int fail = 0; fail < 3; ++fail) {
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    ASSERT_EQ(ArrowArrayAppendString(array.get(), ArrowCharView("0")), 0);
+    for (int i : {1, 2})
+      ArrowArrayBuffer(array.get(), i)->capacity_bytes =
+          ArrowArrayBuffer(array.get(), i)->size_bytes;
+    int remaining = fail;
+    auto allocation = ArrowBufferAllocatorDefault();
+    allocation.private_data = &remaining;
+    allocation.reallocate = [](ArrowBufferAllocator* a, uint8_t* old, int64_t,
+                               int64_t size) -> uint8_t* {
+      EXPECT_EQ(old, nullptr);
+      auto& count = *static_cast<int*>(a->private_data);
+      if (count-- == 0) return nullptr;
+      return static_cast<uint8_t*>(std::malloc(size));
+    };
+    RedshiftSuperFieldReader reader(allocation);
+    ASSERT_EQ(reader.InitSchema(schema.get()), 0);
+    ASSERT_EQ(reader.InitArray(array.get()), 0);
+    for (const char* bad : {"{", "NaN", "", "[1,]"}) {
+      auto bytes = NativeBytes(bad);
+      const auto before = bytes;
+      EXPECT_EQ(reader.Read(&bytes, bytes.size_bytes, array.get(), &error), EINVAL);
+      EXPECT_EQ(bytes.data.data, before.data.data);
+      EXPECT_EQ(bytes.size_bytes, before.size_bytes);
+      EXPECT_EQ(array->length, 1);
+    }
+    auto bytes = NativeBytes("1.2200");
+    const auto* cursor = bytes.data.data;
+    EXPECT_EQ(reader.Read(&bytes, bytes.size_bytes, array.get(), &error), ENOMEM);
+    EXPECT_EQ(bytes.data.data, cursor);
+    EXPECT_EQ(bytes.size_bytes, 6);
+    EXPECT_EQ(array->length, 1);
+    EXPECT_EQ(array->null_count, 0);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 1)->size_bytes, 16);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 2)->size_bytes, 1);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 2)->data[0], '0');
+    EXPECT_EQ(ArrowArrayValidityBitmap(array.get())->buffer.data, nullptr);
+    remaining = 10;
+    ASSERT_EQ(reader.Read(&bytes, bytes.size_bytes, array.get(), &error), 0);
+    auto null = NativeBytes("");
+    ASSERT_EQ(reader.Read(&null, -1, array.get(), &error), 0);
+    EXPECT_EQ(array->length, 3);
+    EXPECT_EQ(array->null_count, 1);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), &error), 0);
+  }
 }
 }  // namespace
 }  // namespace adbcpq

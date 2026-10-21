@@ -225,6 +225,10 @@ class PostgresType {
   adbc::driver::pgwire::TemporalRepresentation temporal_representation() const {
     return temporal_representation_;
   }
+  bool is_redshift_super() const {
+    return redshift_descriptor_ &&
+           vendor_family_ == adbc::driver::pgwire::CatalogVendorFamily::kSuper;
+  }
   bool is_redshift_timetz() const {
     return redshift_descriptor_ && type_id_ == PostgresTypeId::kTimetz;
   }
@@ -343,7 +347,9 @@ class PostgresType {
         temporal_kind() != RedshiftTemporalKind::kDate &&
         temporal_representation_ ==
             adbc::driver::pgwire::TemporalRepresentation::kLossless;
-    if (encoded_kind() != RedshiftEncodedKind::kNone) {
+    if (is_redshift_super()) {
+      NANOARROW_RETURN_NOT_OK(RedshiftSuperResultSchema::SetSchema(schema));
+    } else if (encoded_kind() != RedshiftEncodedKind::kNone) {
       NANOARROW_RETURN_NOT_OK(RedshiftEncodedSchema::SetSchema(schema, encoded_kind()));
     } else if (is_redshift_timetz()) {
       NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::SetSchema(schema));
@@ -593,7 +599,7 @@ class PostgresType {
         interval_family() != RedshiftIntervalFamily::kNone
             ? std::string_view(RedshiftIntervalConstraint::SqlName(interval_family()))
             : modifier_metadata_.sql_type;
-    if (!family.empty()) {
+    if (!family.empty() && !is_redshift_super()) {
       NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
           buffer.get(), ArrowCharView("ADBC:redshift:sql_type"),
           ArrowStringView{family.data(), static_cast<int64_t>(family.size())}));

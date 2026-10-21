@@ -24,8 +24,7 @@ Task010i1/i2/j/k are locally integrated at `a239f66cc`, after independent exact
 source approval and rebuilt/installed 35-stage offline validation. On 2026-10-21,
 operation `726f4b3594e048e29f4571b2770549c3` passed all 18 fixed installed-driver
 cases on macOS arm64: 15 positive cases and three expected rejection boundaries,
-102 public API calls, no early stop. The tested source is `a239f66cc`; this docs
-update does not represent another binary build or live test. The cases cover
+102 public API calls, no early stop. That batch tested `a239f66cc`; it does not verify Task010q. The cases cover
 SUPER JSON-subset generated CREATE/APPEND, spatial CREATE/readback with EWKB,
 metadata and native witnesses, HLL CREATE/readback and typed text parameters,
 and VARBYTE binary CREATE/readback. Spatial/HLL APPEND was not exercised.
@@ -34,9 +33,11 @@ observer and the root's owned-resource checks verified all seven owned resource
 classes absent. Actual billing is not reconciled.
 
 This bounded installed subset does not close all 21 types, full domains/size
-boundaries, every metadata API or portable-platform qualification. Native SUPER
-reads, direct SUPER/spatial binds and mixed HLL output remain explicitly
-unsupported. Vendor REPLACE rejects before ownership/DDL; CREATE residue and
+boundaries, every metadata API or portable-platform qualification. Task010q adds native SUPER observable JSON-wire reads, preserving received numeric
+spellings and wire NULLs with a separate output-only schema. Corrected installed
+live verification is pending. The retained protocol collapses SQL NULL and parsed
+JSON null; native subtype/input-lexeme losslessness is not claimed. Direct
+SUPER/spatial binds and mixed HLL output remain explicitly unsupported. Vendor REPLACE rejects before ownership/DDL; CREATE residue and
 APPEND ownership remain as documented. The VARBYTE binary codec is unchanged.
 
 Current state only; history is in git and PR descriptions.

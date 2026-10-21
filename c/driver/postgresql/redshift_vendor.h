@@ -82,9 +82,9 @@ inline Status CheckVendorReadBoundary(const PostgresType& output) {
   for (int i = 0; i < output.n_children(); ++i) {
     const auto& child = output.child(i);
     if (child.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
-        child.encoded_kind() == RedshiftEncodedKind::kNone)
+        child.encoded_kind() == RedshiftEncodedKind::kNone && !child.is_redshift_super())
       return Status::NotImplemented(
-          "[Redshift] Native SUPER result losslessness is unsupported");
+          "[Redshift] Unqualified vendor result identity is unsupported");
     if (child.n_children()) {
       // No nested vendor reader/array encoding is selected by the scalar contract.
       auto reject_nested = [&](auto&& self, const PostgresType& node) -> bool {

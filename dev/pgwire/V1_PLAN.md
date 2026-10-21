@@ -155,9 +155,10 @@ Task010i1/i2/j/k are locally integrated at `a239f66cc` with independent source
 approval and rebuilt/installed offline validation. Operation `726f4b3594e048e29f4571b2770549c3` on 2026-10-21
 passed the fixed 18-case macOS arm64 installed-driver subset: SUPER JSON-subset
 CREATE/APPEND, spatial CREATE/readback, HLL CREATE/readback/text parameters,
-VARBYTE binary readback and three explicit rejection boundaries. The actual
-binary source remains `a239f66cc`, not this later docs-only checkpoint.
+VARBYTE binary readback and three explicit rejection boundaries. That batch tested `a239f66cc`; it does not verify Task010q.
 All seven owned resource classes were verified absent after child reap.
-Full 21-type/domain/boundary/platform acceptance remains open. Mixed HLL output, direct SUPER/spatial binds and lossless
-native SUPER reads stay unsupported; no arbitrary SQL rewrite or fallback is
-selected. Existing size caps, NULL semantics and transaction ownership remain.
+Full 21-type/domain/boundary/platform acceptance remains open. Task010q adds
+native SUPER observable JSON-wire reads with exact received lexemes, an output-only
+schema and explicit wire-NULL/subtype limits; corrected installed live proof is
+pending. Mixed HLL output and direct SUPER/spatial binds remain unsupported.
+No arbitrary SQL rewrite or fallback is selected. Existing size caps, NULL semantics and transaction ownership remain.
