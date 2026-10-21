@@ -17,6 +17,10 @@
 
 libpq_dep = dependency('libpq')
 
+# Shared PgWire schema/reader headers require the same C++20 mode as CMake.
+# Keep this requirement local so unrelated drivers retain the project default.
+pgwire_cpp_options = ['cpp_std=c++20']
+
 pgwire_driver_sources = [
     'connection.cc',
     'error.cc',
@@ -36,6 +40,7 @@ adbc_postgres_driver_lib = library(
     include_directories: [include_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_framework_lib],
     dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
+    override_options: pgwire_cpp_options,
     install: true,
 )
 
@@ -52,6 +57,7 @@ adbc_redshift_driver_lib = library(
     link_with: [adbc_common_lib, adbc_framework_lib],
     dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
     cpp_args: ['-DADBC_PGWIRE_DEFAULT_REDSHIFT'],
+    override_options: pgwire_cpp_options,
     install: true,
 )
 
@@ -125,6 +131,7 @@ foreach name, conf : postgres_tests
         link_with: [adbc_common_lib, adbc_postgres_driver_lib],
         dependencies: [libpq_dep, adbc_validation_dep, fmt_dep],
         cpp_args: cpp_args,
+        override_options: pgwire_cpp_options,
     )
     # The full integration suite includes large decimal/result round trips.
     # Sanitized CI can exceed Meson's 30-second default; retain a bounded
@@ -162,6 +169,7 @@ interval_recording = executable(
     link_with: [adbc_common_lib, adbc_framework_lib],
     dependencies: [nanoarrow_dep, libpq_dep, gtest_main_dep, gmock_dep, fmt_dep],
     cpp_args: interval_recording_args,
+    override_options: pgwire_cpp_options,
 )
 test('adbc-driver-redshift-interval-recording', interval_recording, timeout: 30)
 
@@ -185,6 +193,7 @@ redshift_exc = executable(
     include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
     link_with: [adbc_common_lib, adbc_framework_lib, adbc_redshift_driver_lib],
     dependencies: [libpq_dep, gtest_main_dep, fmt_dep, nanoarrow_dep],
+    override_options: pgwire_cpp_options,
 )
 test('adbc-driver-redshift', redshift_exc)
 
