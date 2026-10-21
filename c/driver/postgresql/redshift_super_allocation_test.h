@@ -39,3 +39,5 @@ void* operator new(size_t size) {
 void* operator new[](size_t size) { return ::operator new(size); }
 void operator delete(void* value) noexcept { std::free(value); }
 void operator delete[](void* value) noexcept { std::free(value); }
+void operator delete(void* value, size_t) noexcept { std::free(value); }
+void operator delete[](void* value, size_t) noexcept { std::free(value); }

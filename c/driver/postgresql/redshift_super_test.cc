@@ -295,5 +295,37 @@ TEST(RedshiftSuperTest, ScannerKeyNodeAndBucketFailuresReturnEnomem) {
   EXPECT_TRUE(succeeded);
   EXPECT_GE(failed, 3);  // Decoded key storage, node and bucket allocations.
 }
+TEST(RedshiftSuperTest, ReplacementAllocatorMatchesAllDeleteFormsAndResetsFailure) {
+  auto* scalar = static_cast<char*>(::operator new(17));
+  scalar[16] = 'x';
+  EXPECT_EQ(scalar[16], 'x');
+  ::operator delete(scalar);
+  scalar = static_cast<char*>(::operator new(17));
+  scalar[16] = 'y';
+  EXPECT_EQ(scalar[16], 'y');
+  ::operator delete(scalar, size_t{17});
+
+  auto* array = static_cast<char*>(::operator new[](19));
+  array[18] = 'x';
+  EXPECT_EQ(array[18], 'x');
+  ::operator delete[](array);
+  array = static_cast<char*>(::operator new[](19));
+  array[18] = 'y';
+  EXPECT_EQ(array[18], 'y');
+  ::operator delete[](array, size_t{19});
+  ::operator delete(nullptr, size_t{0});
+  ::operator delete[](nullptr, size_t{0});
+
+  testing::super_allocation_fail_after = 0;
+  EXPECT_THROW(::operator new(17), std::bad_alloc);
+  EXPECT_EQ(testing::super_allocation_fail_after, -1);
+  testing::super_allocation_fail_after = 0;
+  EXPECT_THROW(::operator new[](19), std::bad_alloc);
+  EXPECT_EQ(testing::super_allocation_fail_after, -1);
+  // The one-shot failure must leave subsequent real allocations usable.
+  std::unique_ptr<char[]> recovered(new char[19]);
+  recovered[18] = 'z';
+  EXPECT_EQ(recovered[18], 'z');
+}
 }  // namespace
 }  // namespace adbcpq
