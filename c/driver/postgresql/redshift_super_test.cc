@@ -317,10 +317,20 @@ TEST(RedshiftSuperTest, ReplacementAllocatorMatchesAllDeleteFormsAndResetsFailur
   ::operator delete[](nullptr, size_t{0});
 
   testing::super_allocation_fail_after = 0;
-  EXPECT_THROW(::operator new(17), std::bad_alloc);
+  EXPECT_THROW(
+      {
+        auto* value = ::operator new(17);
+        ::operator delete(value);
+      },
+      std::bad_alloc);
   EXPECT_EQ(testing::super_allocation_fail_after, -1);
   testing::super_allocation_fail_after = 0;
-  EXPECT_THROW(::operator new[](19), std::bad_alloc);
+  EXPECT_THROW(
+      {
+        auto* value = ::operator new[](19);
+        ::operator delete[](value);
+      },
+      std::bad_alloc);
   EXPECT_EQ(testing::super_allocation_fail_after, -1);
   // The one-shot failure must leave subsequent real allocations usable.
   std::unique_ptr<char[]> recovered(new char[19]);
