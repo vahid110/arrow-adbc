@@ -426,17 +426,32 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftEncodedFixture(
   NANOARROW_RETURN_NOT_OK(
       adbcpq::MakeCopyFieldWriter(input_schema->children[0], view->children[0], resolver,
                                   &target, &writer, false, &error, true));
+  // A constructed RowDescription exercises the same output resolver as public
+  // reads. GEOMETRY's3999 output identity differs from its cached catalog OID;
+  // the writer above must continue using that unchanged catalog identity.
+  adbcpq::PqResultHelper result(nullptr, "");
+  auto* raw = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  PGresAttDesc attr{};
+  attr.name = const_cast<char*>("value");
+  attr.typid = encoded.kind == adbcpq::RedshiftEncodedKind::kGeometry ? 3999 : 72123;
+  attr.format = hll ? 0 : 1;
+  attr.atttypmod = -1;
+  result.SetResult(raw);
+  if (!PQsetResultAttrs(raw, 1, &attr)) return ENOMEM;
+  adbcpq::PostgresType result_type;
+  if (!result.ResolveOutputTypes(resolver, &result_type).ok()) return EINVAL;
+  const auto& read_type = result_type.child(0);
   nanoarrow::UniqueSchema output_schema;
   ArrowSchemaInit(output_schema.get());
   NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeStruct(output_schema.get(), 2));
   NANOARROW_RETURN_NOT_OK(
       ArrowSchemaSetType(output_schema->children[0], NANOARROW_TYPE_BINARY));
   NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(output_schema->children[0], "wire"));
-  NANOARROW_RETURN_NOT_OK(target.SetSchema(output_schema->children[1], "Redshift"));
+  NANOARROW_RETURN_NOT_OK(read_type.SetSchema(output_schema->children[1], "Redshift"));
   NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(output_schema->children[1], "value"));
   std::unique_ptr<adbcpq::PostgresCopyFieldReader> reader;
-  NANOARROW_RETURN_NOT_OK(adbcpq::MakeCopyFieldReader(target, output_schema->children[1],
-                                                      &reader, &error, hll ? 0 : 1));
+  NANOARROW_RETURN_NOT_OK(adbcpq::MakeCopyFieldReader(
+      read_type, output_schema->children[1], &reader, &error, hll ? 0 : 1));
   NANOARROW_RETURN_NOT_OK(reader->InitSchema(output_schema->children[1]));
   nanoarrow::UniqueArray output;
   NANOARROW_RETURN_NOT_OK(

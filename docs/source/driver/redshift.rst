@@ -324,8 +324,9 @@ The selected read payload cap is1,048,447 bytes. Generated writes accept at most
 500,000 EWKB bytes, passing owned raw EWKB VARBYTE to ``ST_GeomFromEWKB`` and an
 explicit ``::GEOGRAPHY`` cast where selected. Direct spatial parameter SQL is
 unsupported. Installed point controls accepted raw binary VARBYTE and rejected
-ASCIIhex VARBYTE; corrected generated-ingest roundtrip and full native boundary
-qualification remain pending. Invalid vendor payloads report INVALID_ARGUMENT;
+ASCIIhex VARBYTE. Installed evidence preserves spatial bytes and witnesses;
+the GEOMETRY output-metadata correction awaits fresh live acceptance, and full
+native boundary qualification remains pending. Invalid vendor payloads report INVALID_ARGUMENT;
 allocation and other internal failures retain INTERNAL status.
 
 HLLSKETCH uses ``large_utf8``, extension ``adbc.redshift.hllsketch``, matching SQL

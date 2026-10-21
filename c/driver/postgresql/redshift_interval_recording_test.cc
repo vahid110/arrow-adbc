@@ -55,6 +55,8 @@ struct Recording {
   bool super_target = false;
   Oid encoded_target = 0;
   int vendor_result_calls = 0, vendor_result_drift = 0;
+  Oid geometry_result_oid = 72113;
+  bool geometry_result_invalid = false;
   bool vendor_result_error = false, hll_param_mismatch = false;
   std::string super_setting = "off";
   int super_setting_shape = 0, super_reads = 0, super_drift_after_reads = 0;
@@ -109,7 +111,7 @@ PGresult* VendorResult(std::string_view query, int format,
   std::vector<PGresAttDesc> attrs(columns);
   for (int i = 0; i < columns; ++i) {
     attrs[i].name = const_cast<char*>(i ? "other" : "amount");
-    attrs[i].typid = spatial ? 72113 : mixed && i ? 67009 : 72115;
+    attrs[i].typid = spatial ? recording.geometry_result_oid : mixed && i ? 67009 : 72115;
     attrs[i].format = format;
     attrs[i].atttypmod = -1;
   }
@@ -123,7 +125,8 @@ PGresult* VendorResult(std::string_view query, int format,
   if (!PQsetResultAttrs(out, columns, attrs.data())) std::abort();
   if (!describe && query != "SELECT owned_hll_empty") {
     const std::string value =
-        spatial
+        spatial && recording.geometry_result_invalid ? std::string("not EWKB")
+        : spatial
             ? adbcpq::testing::NumericHex("0101000000000000000000f03f000000000000f03f")
             : std::string(kSparseHll);
     for (int i = 0; i < columns; ++i) {
@@ -1531,6 +1534,46 @@ TEST_F(IntervalPublicRecordingTest, HllMixedDescriptorDriftAndServerFailureNever
     EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
               ADBC_STATUS_OK);
     EXPECT_EQ(recording.vendor_result_calls, 1);
+  }
+}
+TEST_F(IntervalPublicRecordingTest,
+       GeometryResultAliasPreservesTypedSchemaAndValidation) {
+  // The real Redshift catalog and protocol identities differ. A dynamic catalog
+  // OID here also ensures the output alias cannot become a parameter/catalog OID.
+  recording.geometry_result_oid = 3999;
+  for (bool invalid : {false, true}) {
+    recording.geometry_result_invalid = invalid;
+    recording.vendor_result_calls = 0;
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_geometry", &error),
+              ADBC_STATUS_OK);
+    nanoarrow::UniqueArrayStream output;
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, output.get(), nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    EXPECT_EQ(recording.vendor_result_calls, 1);
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(output->get_schema(output.get(), schema.get()), 0);
+    EXPECT_STREQ(schema->children[0]->format, "Z");
+    ArrowError parse_error{};
+    RedshiftEncodedSchema parsed;
+    EXPECT_EQ(
+        RedshiftEncodedSchema::Parse(schema->children[0], true, &parsed, &parse_error),
+        0);
+    EXPECT_EQ(parsed.kind, RedshiftEncodedKind::kGeometry);
+    nanoarrow::UniqueArray rows;
+    if (invalid) {
+      EXPECT_NE(output->get_next(output.get(), rows.get()), 0);
+      continue;
+    }
+    ASSERT_EQ(output->get_next(output.get(), rows.get()), 0);
+    ASSERT_EQ(rows->length, 2);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), &parse_error), 0);
+    ASSERT_EQ(ArrowArrayViewSetArray(view.get(), rows.get(), &parse_error), 0);
+    auto actual = ArrowArrayViewGetBytesUnsafe(view->children[0], 0);
+    EXPECT_EQ(std::string_view(actual.data.as_char, actual.size_bytes),
+              testing::NumericHex("0101000000000000000000f03f000000000000f03f"));
+    EXPECT_TRUE(ArrowArrayViewIsNull(view->children[0], 1));
   }
 }
 TEST_F(IntervalPublicRecordingTest,

@@ -754,6 +754,37 @@ class PostgresTypeResolver {
     return NANOARROW_OK;
   }
 
+  // AWS JDBC Oid.java (773fa16) and Python oids.py (248ffd58) distinguish
+  // catalog GEOMETRY from result GEOMETRYHEX (3999). Resolve only output fields:
+  // never insert the alias into the catalog or use it for parameter/DDL types.
+  ArrowErrorCode FindOutput(uint32_t oid, PostgresType* type_out,
+                            ArrowError* error) const {
+    using Family = adbc::driver::pgwire::CatalogVendorFamily;
+    if (profile_.kind != adbc::driver::pgwire::BackendKind::kRedshift || oid != 3999) {
+      if (Find(oid, type_out, error) != NANOARROW_OK)
+        *type_out = PostgresType::Unnamed(oid);
+      return NANOARROW_OK;
+    }
+
+    const auto mapped = mapping_.find(oid);
+    if (mapped != mapping_.end() && mapped->second.vendor_family() != Family::kGeometry) {
+      ArrowErrorSet(error, "Conflicting Redshift GEOMETRY result identity");
+      return EINVAL;
+    }
+    const uint32_t catalog_oid = GetVendorOID(Family::kGeometry);
+    if (catalog_oid == 0) {
+      ArrowErrorSet(error, "Missing or ambiguous Redshift GEOMETRY catalog identity");
+      return EINVAL;
+    }
+
+    NANOARROW_RETURN_NOT_OK(Find(catalog_oid, type_out, error));
+    // Preserve the actual RowDescription identity, descriptor and family in the
+    // result copy. WithPgTypeInfo clears family, so restore this verified family.
+    *type_out = type_out->WithPgTypeInfo(oid, type_out->typname())
+                    .WithVendorFamily(Family::kGeometry);
+    return NANOARROW_OK;
+  }
+
   ArrowErrorCode FindArray(uint32_t child_oid, PostgresType* type_out,
                            ArrowError* error) const {
     auto array_oid_lookup = array_mapping_.find(child_oid);

@@ -704,8 +704,11 @@ or reprojection. The local read payload cap is1,048,447 bytes, not full native
 boundary proof. Generated writes cap raw bytes at500,000, pass owned raw EWKB as
 VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
 spatial binding stays unsupported. Installed POINT controls accepted raw binary
-VARBYTE and rejected ASCIIhex VARBYTE; corrected generated-ingest roundtrip and
-full native boundary qualification remain pending. Vendor payload EINVAL maps to
+VARBYTE and rejected ASCIIhex VARBYTE. Subsequent installed evidence preserved
+spatial bytes and witnesses but exposed a GEOMETRY result-identity metadata gap.
+Task010k resolves documented Redshift output3999 through unique catalog GEOMETRY,
+without changing parameter OIDs or treating opaque bytes as qualified EWKB.
+Fresh corrected acceptance and full native boundary qualification remain pending. Vendor payload EINVAL maps to
 INVALID_ARGUMENT at both bind paths; allocation/other failures remain INTERNAL.
 
 HLL uses `large_utf8`, `adbc.redshift.hllsketch` and exact

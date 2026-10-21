@@ -212,12 +212,8 @@ Status PqResultHelper::ResolveOutputTypes(
   for (int i = 0; i < num_fields; i++) {
     const Oid pg_oid = PQftype(result_.get(), i);
     PostgresType pg_type;
-    if (type_resolver.Find(pg_oid, &pg_type, &na_error) != NANOARROW_OK) {
-      // We couldn't look up the OID.
-      // TODO(apache/arrow-adbc#1243): issue a warning (maybe reloading the
-      // connection will load the OIDs if it was a newly created type)
-      pg_type = PostgresType::Unnamed(pg_oid);
-    }
+    if (type_resolver.FindOutput(pg_oid, &pg_type, &na_error) != NANOARROW_OK)
+      return Status(ADBC_STATUS_INVALID_DATA, na_error.message);
 
     pg_type = pg_type.WithFieldDescriptor(PQfmod(result_.get(), i),
                                           type_resolver.backend_profile(), temporal);

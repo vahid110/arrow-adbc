@@ -27,8 +27,10 @@ spatial EWKB read/generated-constructor write and HLL serialization text binds,
 generated ingest and all-HLL result projections. It is locally integrated after
 independent source review and rebuilt installed offline validation. Task010j
 corrects vendor payload status mapping and generated spatial writes to raw EWKB
-VARBYTE, following installed POINT constructor controls; corrected full installed
-roundtrips and broad native qualification remain pending. Mixed HLL projections,
+VARBYTE, following installed POINT constructor controls. Installed live evidence
+confirms spatial bytes and witnesses; Task010k corrects GEOMETRY result metadata
+using its documented Redshift output identity and unique catalog descriptor.
+Fresh corrected live acceptance and broad native qualification remain pending. Mixed HLL projections,
 direct spatial/SUPER binds and native SUPER read losslessness remain unsupported. Vendor REPLACE rejects before
 ownership/DDL; CREATE residue and APPEND ownership remain as documented. The
 existing VARBYTE binary codec is unchanged.

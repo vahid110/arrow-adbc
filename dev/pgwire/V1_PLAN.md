@@ -165,3 +165,9 @@ Task010j corrects generated spatial payloads to raw EWKB following installed
 POINT controls, and maps validated vendor payload errors to INVALID_ARGUMENT.
 Corrected full installed roundtrips remain pending; existing caps, null semantics,
 transaction ownership and unsupported routes stay unchanged.
+
+Task010k resolves Redshift's documented GEOMETRY output identity through its
+unique catalog descriptor, preserving raw output identity and typed EWKB
+validation. Catalog/parameter identities and PostgreSQL unknown types stay
+unchanged; conflicting/missing identities reject. Fresh corrected live proof
+remains required.

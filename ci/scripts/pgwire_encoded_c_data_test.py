@@ -120,6 +120,24 @@ class EncodedCDataTest(unittest.TestCase):
             self.assertEqual(restored.schema, batch.schema)
             self.assertEqual(restored.to_pylist(), batch.to_pylist())
 
+    def test_geometry_protocol_alias_survives_c_data_and_ipc(self):
+        # Fixture catalog72123 and result3999 exercise the actual shared output
+        # resolver, rather than constructing the output schema from input metadata.
+        for values in ([], [None], [POINT, None]):
+            code, batch = self.apply("GEOMETRY", values)
+            self.assertEqual(code, 0)
+            field = batch.schema.field(1)
+            self.assertEqual(field.type, pa.large_binary())
+            for key, value in encoded_field("GEOMETRY").metadata.items():
+                self.assertEqual(field.metadata[key], value)
+            self.assertEqual(batch.column(1).to_pylist(), values)
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, batch.schema) as writer:
+                writer.write_batch(batch)
+            restored = pa.ipc.open_stream(sink.getvalue()).read_next_batch()
+            self.assertEqual(restored.schema, batch.schema)
+            self.assertEqual(restored.column(1).to_pylist(), values)
+
     def test_large_spatial_raw_payload_and_null_keep_exact_c_data_bytes(self):
         for family in ("GEOMETRY", "GEOGRAPHY"):
             # Finite owned LINESTRING with an embedded SRID, larger than64KiB.

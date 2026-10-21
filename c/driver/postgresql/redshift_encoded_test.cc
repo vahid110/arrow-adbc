@@ -55,6 +55,94 @@ void EncodedField(ArrowSchema* out, RedshiftEncodedKind kind) {
       0);
   ASSERT_EQ(ArrowSchemaSetMetadata(out, reinterpret_cast<char*>(metadata->data)), 0);
 }
+TEST(RedshiftEncodedTest, GeometryProtocolAliasIsOutputOnlyAndBackendScoped) {
+  const auto redshift = adbc::driver::pgwire::BackendProfile::Redshift();
+  for (uint32_t catalog_oid : {3000U, 72113U, 3999U}) {
+    PostgresTypeResolver resolver(redshift);
+    ArrowError error{};
+    ASSERT_EQ(resolver.Insert({catalog_oid, "geometry", "fixture", 0, 0, 0}, &error), 0);
+    PqResultHelper result(nullptr, "");
+    auto* raw = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+    PGresAttDesc attr{};
+    attr.name = const_cast<char*>("any_alias");
+    attr.typid = 3999;
+    attr.format = 1;
+    attr.atttypmod = 1048447;
+    attr.tableid = 12345;
+    attr.columnid = 2;
+    PGresAttDesc attrs[] = {attr, attr};
+    attrs[1].name = const_cast<char*>("second_alias");
+    attrs[1].atttypmod = -1;
+    ASSERT_TRUE(PQsetResultAttrs(raw, 2, attrs));
+    result.SetResult(raw);
+    PostgresType output;
+    ASSERT_TRUE(result.ResolveOutputTypes(resolver, &output).ok());
+    ASSERT_EQ(output.n_children(), 2);
+    const auto& field = output.child(0);
+    EXPECT_EQ(field.oid(), 3999U);
+    EXPECT_EQ(field.type_modifier(), 1048447);
+    EXPECT_EQ(field.field_name(), "any_alias");
+    EXPECT_EQ(field.encoded_kind(), RedshiftEncodedKind::kGeometry);
+    EXPECT_EQ(output.child(1).oid(), 3999U);
+    EXPECT_EQ(output.child(1).type_modifier(), -1);
+    EXPECT_EQ(resolver.GetVendorOID(adbc::driver::pgwire::CatalogVendorFamily::kGeometry),
+              catalog_oid);
+    PostgresType catalog;
+    ASSERT_EQ(resolver.Find(catalog_oid, &catalog, &error), 0);
+    EXPECT_EQ(catalog.oid(), catalog_oid);
+    EXPECT_FALSE(catalog.type_modifier().has_value());
+    if (catalog_oid != 3999) EXPECT_NE(resolver.Find(3999, &catalog, &error), 0);
+    nanoarrow::UniqueSchema schema;
+    ArrowSchemaInit(schema.get());
+    ASSERT_EQ(output.SetSchema(schema.get(), "Redshift"), 0);
+    EXPECT_STREQ(schema->children[0]->format, "Z");
+    RedshiftEncodedSchema parsed;
+    ASSERT_EQ(RedshiftEncodedSchema::Parse(schema->children[0], true, &parsed, &error),
+              0);
+    EXPECT_EQ(parsed.kind, RedshiftEncodedKind::kGeometry);
+  }
+
+  PostgresTypeResolver postgres;
+  ArrowError error{};
+  ASSERT_EQ(postgres.Insert({3000, "geometry", "fixture", 0, 0, 0}, &error), 0);
+  PostgresType output;
+  ASSERT_EQ(postgres.FindOutput(3999, &output, &error), 0);
+  EXPECT_EQ(output.encoded_kind(), RedshiftEncodedKind::kNone);
+  EXPECT_EQ(output.typname(), "unnamed<oid:3999>");
+  PostgresTypeResolver redshift_resolver(redshift);
+  ASSERT_EQ(redshift_resolver.FindOutput(3998, &output, &error), 0);
+  EXPECT_EQ(output.typname(), "unnamed<oid:3998>");
+}
+TEST(RedshiftEncodedTest, GeometryOutputAliasFailuresPropagateThroughResultResolution) {
+  for (int fault = 0; fault < 5; ++fault) {
+    PostgresTypeResolver resolver(adbc::driver::pgwire::BackendProfile::Redshift());
+    ArrowError error{};
+    if (fault != 0)
+      ASSERT_EQ(resolver.Insert({3000, "geometry", "fixture", 0, 0, 0}, &error), 0);
+    if (fault == 1)
+      ASSERT_EQ(resolver.Insert({72113, "geometry", "fixture", 0, 0, 0}, &error), 0);
+    if (fault >= 2)
+      ASSERT_EQ(resolver.Insert({3999,
+                                 fault == 2   ? "other"
+                                 : fault == 3 ? "geography"
+                                              : "geometry",
+                                 "fixture", 0, 0, 0},
+                                &error),
+                0);
+    PqResultHelper result(nullptr, "");
+    auto* raw = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+    PGresAttDesc attr{};
+    attr.name = const_cast<char*>("geometry");  // A plausible name proves nothing.
+    attr.typid = 3999;
+    attr.format = 1;
+    ASSERT_TRUE(PQsetResultAttrs(raw, 1, &attr));
+    result.SetResult(raw);
+    PostgresType output;
+    const auto status = result.ResolveOutputTypes(resolver, &output);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.ToAdbc(nullptr), ADBC_STATUS_INVALID_DATA);
+  }
+}
 TEST(RedshiftEncodedTest, RetainedSpatialAndEveryTruncatedPrefix) {
   ArrowError error{};
   for (auto sample : kRetainedSpatial) {
