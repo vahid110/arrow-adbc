@@ -110,6 +110,8 @@ inline constexpr TypeReceiveAlias kRedshiftTypeReceiveAliases[] = {
     {"varbyte_recv", "bytearecv"},
 };
 
+enum class CatalogVendorFamily { kNone, kSuper, kHll, kGeometry, kGeography };
+
 struct BackendProfile {
   BackendKind kind;
   std::string_view name;
@@ -141,7 +143,15 @@ struct BackendProfile {
                                             std::optional<int32_t> raw) const {
     TypeModifierMetadata out;
     if (kind != BackendKind::kRedshift) return out;
-    if (typname == "int2") {
+    if (typname == "super") {
+      out.sql_type = "SUPER";
+    } else if (typname == "hllsketch") {
+      out.sql_type = "HLLSKETCH";
+    } else if (typname == "geometry") {
+      out.sql_type = "GEOMETRY";
+    } else if (typname == "geography") {
+      out.sql_type = "GEOGRAPHY";
+    } else if (typname == "int2") {
       out.sql_type = "SMALLINT";
     } else if (typname == "int4") {
       out.sql_type = "INTEGER";
@@ -197,6 +207,15 @@ struct BackendProfile {
     if (typname == "intervaly2m") return CatalogIntervalFamily::kYearMonth;
     if (typname == "intervald2s") return CatalogIntervalFamily::kDaySecond;
     return CatalogIntervalFamily::kNone;
+  }
+
+  constexpr CatalogVendorFamily VendorFamily(std::string_view name) const {
+    if (kind != BackendKind::kRedshift) return CatalogVendorFamily::kNone;
+    if (name == "super") return CatalogVendorFamily::kSuper;
+    if (name == "hllsketch") return CatalogVendorFamily::kHll;
+    if (name == "geometry") return CatalogVendorFamily::kGeometry;
+    if (name == "geography") return CatalogVendorFamily::kGeography;
+    return CatalogVendorFamily::kNone;
   }
 
   constexpr std::string_view CanonicalTypeReceive(std::string_view vendor_receive) const {

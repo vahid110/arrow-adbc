@@ -20,6 +20,7 @@
 #include <winsock2.h>
 #endif
 
+#include "redshift_vendor.h"
 #include "result_reader.h"
 
 #include <memory>
@@ -246,6 +247,13 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
       return prepare_status;
     }
 
+    if (type_resolver_->is_redshift()) {
+      UNWRAP_STATUS(helper_.DescribePrepared());
+      PostgresType described;
+      UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &described,
+                                               temporal_representation_));
+      UNWRAP_STATUS(CheckVendorReadBoundary(described));
+    }
     UNWRAP_STATUS(BindNextAndExecute(nullptr));
 
     // If there were no arrays in the bind stream, we still need a result
@@ -262,6 +270,14 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
       *rows_affected = -1;
     }
   } else {
+    if (type_resolver_->is_redshift()) {
+      UNWRAP_STATUS(helper_.Prepare());
+      UNWRAP_STATUS(helper_.DescribePrepared());
+      PostgresType described;
+      UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &described,
+                                               temporal_representation_));
+      UNWRAP_STATUS(CheckVendorReadBoundary(described));
+    }
     UNWRAP_STATUS(helper_.Execute());
     if (rows_affected != nullptr) {
       *rows_affected = helper_.AffectedRows();
@@ -276,6 +292,7 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   PostgresType output_type;
   UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type,
                                            temporal_representation_));
+  UNWRAP_STATUS(CheckVendorReadBoundary(output_type));
   ArrowSchemaInit(schema_.get());
   UNWRAP_ERRNO(Internal, output_type.SetSchema(schema_.get(), vendor_name_));
   // Preserve the non-COPY reader's existing unnamed root schema policy.

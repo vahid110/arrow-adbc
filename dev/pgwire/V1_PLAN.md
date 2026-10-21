@@ -148,3 +148,12 @@ replace ingest, remaining timezone bound-query cleanup edges (output-schema fail
 concurrent use), deterministic lost-reply injection. Each needs a concrete user
 need before it is scheduled. Type-specific large-value transport requirements
 identified by Task010 are release decisions, not a blanket type deferral.
+
+
+Task010i1 introduces an application-asserted SUPER JSON-subset input for generated
+ingest only, not a lossless native SUPER mapping. Raw SUPER reads/direct semantic
+vendor binds stay explicit unsupported routes; no arbitrary query is rewritten or
+retried. SUPER REPLACE rejects before DROP. Strict parser/context and target guards,
+public consumers, independent source review and actual installed native acceptance
+are required before reporting this slice verified. Spatial EWKB and HLL serialized
+support remain bounded successors under the all21 goal, not completed by rejection.

@@ -268,6 +268,7 @@ if(ADBC_BUILD_TESTS)
                 redshift_timetz_test.cc
                 redshift_bytes_test.cc
                 redshift_scalar_test.cc
+                redshift_super_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc

@@ -33,6 +33,7 @@
 #include "metadata.h"
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
+#include "redshift_super_test_fixture.h"
 #include "redshift_timetz_test_fixture.h"
 
 namespace {
@@ -48,6 +49,10 @@ struct Recording {
   std::vector<std::vector<RecordedParameter>> executions;
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
+  bool super_target = false;
+  std::string super_setting = "off";
+  int super_setting_shape = 0, super_reads = 0, super_drift_after_reads = 0;
+  std::string encoding = "UTF8";
   bool fail_rollback = false;
   bool timetz_target = false, mixed_target = false;
   std::optional<int32_t> timetz_raw = 3;
@@ -87,6 +92,20 @@ PGresult* TimetzResult(bool empty = false, ExecStatusType status = PGRES_TUPLES_
 PGresult* Query(const char* query) {
   std::string q(query);
   recording.queries.push_back(q);
+  if (q.starts_with("SHOW parse_super_null_on_error") ||
+      q.starts_with("SHOW json_parse_dedup_attributes") ||
+      q.starts_with("SHOW json_parse_truncate_strings")) {
+    ++recording.super_reads;
+    if (recording.super_setting_shape == 1) return Rows(1, {{nullptr}});
+    if (recording.super_setting_shape == 2) return Rows(1, {});
+    if (recording.super_setting_shape == 3) return Rows(2, {{"off", "off"}});
+    if (recording.super_setting_shape == 4)
+      return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
+    if (recording.super_drift_after_reads &&
+        recording.super_reads > recording.super_drift_after_reads)
+      return Rows(1, {{"on"}});
+    return Rows(1, {{recording.super_setting.c_str()}});
+  }
   if (q.starts_with("SELECT owned_timetz")) return TimetzResult(q.ends_with("empty"));
   if (q == "SELECT version();")
     return Rows(1, {{"Redshift 1.0.00000 unqualified recording fixture"}});
@@ -97,7 +116,9 @@ PGresult* Query(const char* query) {
                     {"67009", "int8", "int8recv", "0", "0"},
                     {"65113", "timetz", "timetz_recv", "0", "0"},
                     {"75001", "bpchar", "bpcharrecv", "0", "0"},
-                    {"75002", "text", "textrecv", "0", "0"}});
+                    {"75002", "text", "textrecv", "0", "0"},
+                    {"72111", "super", "fixture_only", "0", "0"},
+                    {"72112", "varbyte", "varbyte_recv", "0", "0"}});
   if (q == "SELECT CURRENT_SCHEMA()") return Rows(1, {{"public"}});
   if (q.find("SHOW enable_case_sensitive_identifier") != std::string::npos)
     return Rows(1, {{"on"}});
@@ -107,6 +128,7 @@ PGresult* Query(const char* query) {
   if (q.find("SELECT attr.attname, attr.atttypid") != std::string::npos ||
       q.find("SELECT attname, atttypid, atttypmod") != std::string::npos) {
     if (!recording.exists) return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
+    if (recording.super_target) return Rows(3, {{"amount", "72111", "-1"}});
     if (recording.timetz_target) {
       const auto raw =
           recording.timetz_raw ? std::to_string(*recording.timetz_raw) : std::string{};
@@ -172,7 +194,9 @@ extern "C" {
 PGconn* PQconnectdb(const char*) { return reinterpret_cast<PGconn*>(new int(1)); }
 ConnStatusType PQstatus(const PGconn*) { return CONNECTION_OK; }
 void PQfinish(PGconn* conn) { delete reinterpret_cast<int*>(conn); }
-const char* PQparameterStatus(const PGconn*, const char*) { return "UTF8"; }
+const char* PQparameterStatus(const PGconn*, const char*) {
+  return recording.encoding.c_str();
+}
 PGcancel* PQgetCancel(PGconn*) { return reinterpret_cast<PGcancel*>(new int(1)); }
 void PQfreeCancel(PGcancel* cancel) { delete reinterpret_cast<int*>(cancel); }
 PQnoticeProcessor PQsetNoticeProcessor(PGconn*, PQnoticeProcessor, void*) {
@@ -200,8 +224,10 @@ PGresult* PQexec(PGconn*, const char* query) { return Query(query); }
 PGresult* PQexecParams(PGconn*, const char* query, int n, const Oid* types,
                        const char* const* values, const int* lengths, const int* formats,
                        int) {
-  if (std::string_view(query).starts_with("INSERT "))
+  if (std::string_view(query).starts_with("INSERT ")) {
+    recording.queries.emplace_back(query);
     return Parameters(n, types, values, lengths, formats);
+  }
   return Query(query);
 }
 PGresult* PQprepare(PGconn*, const char*, const char* query, int n, const Oid* types) {
@@ -224,6 +250,15 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
 PGresult* PQdescribePrepared(PGconn*, const char*) {
+  if (recording.prepared_query == "SELECT owned_super") {
+    auto* result = Command();
+    PGresAttDesc attr{};
+    attr.name = const_cast<char*>("amount");
+    attr.typid = 72111;
+    attr.atttypmod = -1;
+    if (!PQsetResultAttrs(result, 1, &attr)) std::abort();
+    return result;
+  }
   return recording.prepared_query.starts_with("SELECT owned_timetz")
              ? TimetzResult(true, PGRES_COMMAND_OK)
              : Command();
@@ -990,6 +1025,207 @@ TEST_F(IntervalPublicRecordingTest, TimetzGetObjectsParserEmitsOnlyKnownPrecisio
                       : std::optional<int16_t>{static_cast<int16_t>(row == 2 ? 3 : 6)});
     EXPECT_FALSE(parsed.value().xdbc->xdbc_column_size);
   }
+}
+}  // namespace
+}  // namespace adbcpq
+
+namespace adbcpq {
+namespace {
+TEST_F(IntervalPublicRecordingTest,
+       SuperGeneratedIngestUsesConstructorDynamicVarbyteAndNullPointer) {
+  recording.super_target = true;
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+    ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(),
+                                  {std::nullopt, "null", R"({"x":1.20})"}),
+              0);
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                        "owned", &error),
+              ADBC_STATUS_OK);
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                        ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              ADBC_STATUS_OK);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                ADBC_STATUS_OK)
+          << Message();
+    } else {
+      ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                ADBC_STATUS_OK)
+          << Message();
+    }
+    recording.queries.clear();
+    recording.executions.clear();
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    ASSERT_EQ(recording.executions.size(), 1);
+    const auto& values = recording.executions[0];
+    ASSERT_EQ(values.size(), 3);
+    EXPECT_TRUE(values[0].null);
+    EXPECT_FALSE(values[1].null);
+    EXPECT_EQ(values[1].bytes, "null");
+    EXPECT_EQ(values[2].bytes, R"({"x":1.20})");
+    for (const auto& value : values) EXPECT_EQ(value.oid, 72112);
+    EXPECT_NE(std::find(recording.queries.begin(), recording.queries.end(),
+                        "INSERT INTO \"public\".\"owned\" (\"amount\") VALUES "
+                        "(JSON_PARSE($1)), (JSON_PARSE($2)), (JSON_PARSE($3))"),
+              recording.queries.end());
+  }
+}
+TEST_F(IntervalPublicRecordingTest,
+       SuperPreownershipAndPostBindModeMutationNeverDropOrExecute) {
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+    ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {std::nullopt}), 0);
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT $1::super", &error),
+              ADBC_STATUS_OK);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      EXPECT_NE(driver.StatementBindStream(&statement, input.get(), &error),
+                ADBC_STATUS_OK);
+      EXPECT_NE(input->release, nullptr);
+    } else {
+      EXPECT_NE(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                ADBC_STATUS_OK);
+      EXPECT_NE(array->release, nullptr);
+      EXPECT_NE(schema->release, nullptr);
+    }
+  }
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                      "owned", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_APPEND, &error),
+            ADBC_STATUS_OK);
+  nanoarrow::UniqueSchema schema;
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+  ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {"null"}), 0);
+  ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_REPLACE, &error),
+            ADBC_STATUS_OK);
+  recording.queries.clear();
+  EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_OK);
+  EXPECT_TRUE(recording.queries.empty());
+  EXPECT_TRUE(recording.exists);
+}
+TEST_F(IntervalPublicRecordingTest,
+       SuperContextTargetAndNativeReadBoundariesArePreEffect) {
+  recording.super_target = true;
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                      "owned", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_CREATE, &error),
+            ADBC_STATUS_OK);
+  for (auto setting : {"on", "true", "unknown", "off "}) {
+    recording.super_setting = setting;
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+    ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {}), 0);
+    ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+              ADBC_STATUS_OK);
+    recording.queries.clear();
+    EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_OK);
+    for (const auto& q : recording.queries)
+      EXPECT_FALSE(q.starts_with("CREATE ") || q.starts_with("DROP ") ||
+                   q.starts_with("INSERT "));
+  }
+  ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_super", &error),
+            ADBC_STATUS_OK);
+  recording.queries.clear();
+  nanoarrow::UniqueArrayStream out;
+  EXPECT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+            ADBC_STATUS_NOT_IMPLEMENTED)
+      << Message();
+  EXPECT_EQ(out->release, nullptr);
+  EXPECT_EQ(std::count(recording.queries.begin(), recording.queries.end(),
+                       "SELECT owned_super"),
+            1);  // prepare only
+}
+TEST_F(IntervalPublicRecordingTest, SuperContextShapesAndPerBatchDriftCannotDispatch) {
+  recording.super_target = true;
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                      "owned", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_APPEND, &error),
+            ADBC_STATUS_OK);
+  for (int shape = 1; shape <= 5; ++shape) {
+    recording.super_setting_shape = shape < 5 ? shape : 0;
+    recording.super_reads = 0;
+    recording.super_drift_after_reads = shape == 5 ? 3 : 0;
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+    ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {std::nullopt}), 0);
+    ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+              ADBC_STATUS_OK);
+    recording.executions.clear();
+    EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_OK);
+    EXPECT_TRUE(recording.executions.empty());
+    if (shape == 5) EXPECT_EQ(recording.super_reads, 4);
+  }
+}
+TEST_F(IntervalPublicRecordingTest, SuperExistingAndMissingCreateAppendAndWrongTarget) {
+  recording.super_target = true;
+  for (bool exists : {false, true}) {
+    recording.exists = exists;
+    recording.queries.clear();
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                        "owned", &error),
+              ADBC_STATUS_OK);
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                        ADBC_INGEST_OPTION_MODE_CREATE_APPEND, &error),
+              ADBC_STATUS_OK);
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+    ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {}), 0);
+    ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+              ADBC_STATUS_OK);
+    EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    const bool created =
+        std::any_of(recording.queries.begin(), recording.queries.end(),
+                    [](const std::string& q) { return q.starts_with("CREATE "); });
+    EXPECT_EQ(created, !exists);
+    if (created)
+      EXPECT_NE(std::find_if(recording.queries.begin(), recording.queries.end(),
+                             [](const std::string& q) {
+                               return q.find("amount\" SUPER") != std::string::npos;
+                             }),
+                recording.queries.end());
+  }
+  recording.super_target = false;
+  recording.executions.clear();
+  nanoarrow::UniqueSchema schema;
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+  ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {std::nullopt}), 0);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_APPEND, &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+            ADBC_STATUS_OK);
+  EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_OK);
+  EXPECT_TRUE(recording.executions.empty());
 }
 }  // namespace
 }  // namespace adbcpq

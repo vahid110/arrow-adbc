@@ -32,6 +32,7 @@
 #include "error.h"
 #include "postgres_type.h"
 #include "postgres_util.h"
+#include "redshift_vendor.h"
 #include "result_helper.h"
 
 namespace adbcpq {
@@ -40,16 +41,19 @@ namespace adbcpq {
 constexpr int kPgBinaryFormat = 1;
 
 // table and fields must be SQL identifiers escaped by CreateBulkTable().
-inline std::string BuildParameterizedInsertQuery(const std::string& table,
-                                                 const std::string& fields,
-                                                 size_t columns, size_t rows) {
+inline std::string BuildParameterizedInsertQuery(
+    const std::string& table, const std::string& fields, size_t columns, size_t rows,
+    const std::vector<bool>& json_parse = {}) {
   std::string query = "INSERT INTO " + table + " (" + fields + ") VALUES ";
   for (size_t row = 0; row < rows; row++) {
     if (row > 0) query += ", ";
     query += "(";
     for (size_t col = 0; col < columns; col++) {
       if (col > 0) query += ", ";
+      const bool super = col < json_parse.size() && json_parse[col];
+      if (super) query += "JSON_PARSE(";
       query += "$" + std::to_string(row * columns + col + 1);
+      if (super) query += ")";
     }
     query += ")";
   }
@@ -85,6 +89,9 @@ struct BindStream {
   PostgresType expected_param_types;
   std::vector<bool> timetz_fields;
   bool has_expected_types = false;
+  bool generated_super_ingest = false;
+  std::vector<bool> json_parse_fields;
+  bool has_super_fields = false;
 
   struct ArrowError na_error;
 
@@ -191,6 +198,8 @@ struct BindStream {
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
     bind_field_writers.resize(bind_schema->n_children);
     timetz_fields.resize(bind_schema->n_children, false);
+    json_parse_fields.assign(bind_schema->n_children, false);
+    has_super_fields = false;
     bool needs_utc_timezone = false;
 
     for (size_t i = 0; i < bind_field_writers.size(); i++) {
@@ -224,9 +233,21 @@ struct BindStream {
                                                   &type, &na_error));
       }
 
+      if (!generated_super_ingest &&
+          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone)
+        return Status::NotImplemented(
+            "[Redshift] Direct vendor parameter binding is unsupported");
       // Delay the session change until all parameter types and writers are valid.
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
+
+      RedshiftSuperSchema super;
+      UNWRAP_NANOARROW(
+          na_error, InvalidArgument,
+          RedshiftSuperSchema::Parse(bind_schema->children[i],
+                                     type_resolver.is_redshift(), &super, &na_error));
+      json_parse_fields[i] = super.enabled;
+      has_super_fields |= super.enabled;
 
       // Exact semantic writers select destination OID and wire layout together.
       // Other parameters retain their existing source-derived wire type.
@@ -259,7 +280,10 @@ struct BindStream {
       timetz_fields[i] = timetz.enabled;
       const PostgresType* writer_target = nullptr;
       if (ingest_targets &&
-          (((timetz.enabled || type_resolver.is_redshift()) &&
+          (super.enabled ||
+           ingest_targets->child(i).vendor_family() !=
+               adbc::driver::pgwire::CatalogVendorFamily::kNone ||
+           ((timetz.enabled || type_resolver.is_redshift()) &&
             (type.type_id() == PostgresTypeId::kTimetz ||
              ingest_targets->child(i).type_id() == PostgresTypeId::kTimetz)) ||
            ((interval.enabled() || type_resolver.is_redshift()) &&
@@ -284,7 +308,8 @@ struct BindStream {
           na_error, Internal,
           MakeCopyFieldWriter(bind_schema->children[i], array_view->children[i],
                               type_resolver, writer_target, &writer,
-                              /*disable_decimal_fast_path=*/false, &na_error));
+                              /*disable_decimal_fast_path=*/false, &na_error,
+                              generated_super_ingest));
 
       param_types[i] =
           writer_target &&
@@ -296,6 +321,11 @@ struct BindStream {
                    writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
               ? writer_target->oid()
               : type.oid();
+      if (super.enabled) {
+        param_types[i] = type_resolver.GetBytesOID(RedshiftBytesKind::kVarbyte);
+        if (!param_types[i])
+          return Status::InvalidState("[Redshift] VARBYTE OID unavailable");
+      }
       param_formats[i] = kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
     }
@@ -362,7 +392,12 @@ struct BindStream {
             na_error, InvalidArgument,
             RedshiftBytesSchema::Parse(bind_schema->children[i], validate_redshift_bytes,
                                        &bytes, &na_error));
-        if (bytes.enabled())
+        RedshiftSuperSchema super;
+        UNWRAP_NANOARROW(
+            na_error, InvalidArgument,
+            RedshiftSuperSchema::Parse(bind_schema->children[i], validate_redshift_bytes,
+                                       &super, &na_error));
+        if (bytes.enabled() || super.enabled)
           UNWRAP_NANOARROW(
               na_error, InvalidArgument,
               ArrowArrayViewValidate(array_view->children[i],
@@ -396,9 +431,12 @@ struct BindStream {
 
   Status ParameterRow(size_t column, int64_t row, int64_t* field_row) {
     *field_row = row;
-    if (timetz_fields[column]) {
+    if (has_super_fields && ArrowArrayViewIsNull(&array_view.value, row))
+      return Status::InvalidArgument(
+          "[Redshift] SUPER ingest requires nonnull relation rows");
+    if (timetz_fields[column] || has_super_fields) {
       // Struct child accessors add only their own offsets. Carry the containing
-      // relation offset once here, then the TIMETZ writer carries its offset.
+      // relation offset once here; field accessors carry their own offset.
       if (row < 0 || array_view->offset < 0 || array_view->offset > INT64_MAX - row)
         return Status::InvalidArgument("TIMETZ relation offset overflow");
       *field_row = array_view->offset + row;
@@ -459,6 +497,7 @@ struct BindStream {
     }
 
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecPrepared(pg_conn, /*stmtName=*/"",
                        /*nParams=*/bind_schema->n_children, param_values.data(),
@@ -663,8 +702,9 @@ struct BindStream {
     }
 
     const std::string query = BuildParameterizedInsertQuery(
-        table, fields, columns, static_cast<size_t>(*executed_rows));
+        table, fields, columns, static_cast<size_t>(*executed_rows), json_parse_fields);
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecParams(pg_conn, query.c_str(), static_cast<int>(batch_values.size()),
                      batch_types.data(), batch_values.data(), batch_lengths.data(),
@@ -692,8 +732,6 @@ struct BindStream {
       return Status::InvalidArgument("Invalid parameterized ingest dimensions");
     }
     max_batch_rows = (std::min)(max_batch_rows, kMaxParameters / columns);
-    const std::string one_row_query =
-        BuildParameterizedInsertQuery(table, fields, columns, 1);
 
     // Both the single-row prepared path and the multi-row parameterized path
     // must preserve statement-level atomicity across the whole Arrow stream.
@@ -716,7 +754,9 @@ struct BindStream {
     Status execution_status =
         SetParamTypes(pg_conn, type_resolver, /*autocommit=*/false, ingest_targets);
     if (execution_status.ok() && max_batch_rows == 1) {
-      execution_status = Prepare(pg_conn, one_row_query);
+      execution_status = Prepare(
+          pg_conn,
+          BuildParameterizedInsertQuery(table, fields, columns, 1, json_parse_fields));
     }
     while (true) {
       if (!execution_status.ok()) break;

@@ -665,3 +665,27 @@ must be reviewed before implementation; an unresolved representation blocks rele
   own-resource live window/teardown and final push/applicable green platform CI.
   No live run, AWS action, staged upload, publication or automatic retry is authorized
   by this document. Only then can Task009 release readiness be assessed.
+
+
+### Task010i1 bounded SUPER input
+
+The application may assert `adbc.redshift.super.json` on `large_utf8`, with exact
+extension metadata `{"version":1,"encoding":"utf8-json","scope":"json-subset-write"}`
+and `ADBC:redshift:sql_type=SUPER`. This opts into generated ingest only. It is not
+metadata that a native opaque result can acquire to become lossless JSON.
+Arrow validity supplies SQL NULL; nonnull `null` supplies a JSON null document.
+The driver preserves validated UTF8 document bytes and numeric tokens up to the
+local 1,000,000-byte/128-container-depth subset. Numeric storage interpretation is
+JSON_PARSE's server contract, not a host float conversion or full SUPER subtype,
+precision/scale or lexical roundtrip guarantee.
+
+Generated INSERT uses `JSON_PARSE($n)` with actual catalog VARBYTE OID/binary raw
+JSON bytes. Parse-null-on-error, attribute deduplication and string truncation must
+all be OFF, checked read-only before DDL and each actual batch; the driver never
+changes these settings. Semantic schemas/actual target identities are strict even
+for all-NULL/empty streams. Arbitrary SQL is not rewritten, and SUPER REPLACE is
+rejected before ownership/DROP. CREATE or missing CREATE_APPEND may leave a newly
+created empty table following a later payload failure. APPEND keeps the existing
+data transaction owner. Native read losslessness and installed qualification stay
+open. HLL's documented24,580-byte number is a raw sketch-object bound, not the
+serialized UTF8 budget (retained dense examples exceed it).

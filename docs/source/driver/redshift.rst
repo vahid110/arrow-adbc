@@ -282,3 +282,27 @@ OS/CPU combinations are not qualified.
 Current qualification blockers (including CI OIDC role assumption), deferred
 live checks and release status are tracked in
 `STATUS.md <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/STATUS.md>`__.
+
+
+SUPER JSON-subset ingest
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A field may explicitly request generated SUPER ingest using ``large_utf8`` storage,
+``ARROW:extension:name=adbc.redshift.super.json``, canonical
+``ADBC:redshift:sql_type=SUPER`` and exact extension metadata::
+
+   {"version":1,"encoding":"utf8-json","scope":"json-subset-write"}
+
+This write-only contract validates UTF-8 JSON without converting numeric tokens to
+host floats. Its local limits are 1,000,000 encoded bytes and 128 container levels.
+Arrow validity selects SQL NULL; a valid nonnull ``null`` document selects JSON null.
+The driver generates ``JSON_PARSE`` with a binary VARBYTE parameter and requires
+strict parse settings, checked without changing the session. It never rewrites
+arbitrary application SQL or represents native SUPER results as this input type.
+Full numeric subtype/precision and native read losslessness are not promised.
+
+SUPER REPLACE is rejected before DROP. CREATE and missing CREATE_APPEND may leave
+a new empty table after a subsequent payload failure; APPEND retains existing data
+transaction ownership. Raw native SUPER reads and direct semantic vendor binding
+remain unsupported. Spatial and HLL implementations and installed native
+qualification are separate unfinished work.

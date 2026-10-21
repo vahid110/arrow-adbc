@@ -1011,6 +1011,27 @@ class RedshiftTemporalFieldWriter : public PostgresCopyFieldWriter {
   std::optional<int32_t> target_precision_;
 };
 
+class RedshiftSuperFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit RedshiftSuperFieldWriter(
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    NANOARROW_RETURN_NOT_OK(RedshiftSuperSchema::Validate(bytes, error));
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, bytes.size_bytes + 4, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(bytes.size_bytes));
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
+    return NANOARROW_OK;
+  }
+
+ private:
+  ArrowBufferAllocator allocation_;
+};
+
 class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
  public:
   RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target)
@@ -1236,7 +1257,26 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     struct ArrowSchema* schema, struct ArrowArrayView* array_view,
     const PostgresTypeResolver& type_resolver, const PostgresType* target_type,
     std::unique_ptr<PostgresCopyFieldWriter>* out, bool disable_decimal_fast_path,
-    ArrowError* error) {
+    ArrowError* error, bool generated_super_ingest = false) {
+  NANOARROW_RETURN_NOT_OK(
+      PostgresType::ValidateVendorWriteSchema(type_resolver, schema, error));
+  RedshiftSuperSchema super;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftSuperSchema::Parse(schema, type_resolver.is_redshift(), &super, error));
+  const auto vendor_target = target_type
+                                 ? target_type->vendor_family()
+                                 : adbc::driver::pgwire::CatalogVendorFamily::kNone;
+  if (super.enabled ||
+      vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kNone) {
+    if (!generated_super_ingest || !super.enabled || !target_type ||
+        vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kSuper ||
+        !target_type->oid() ||
+        target_type->oid() != type_resolver.GetVendorOID(vendor_target))
+      return RedshiftSuperSchema::Invalid(
+          error, "requires generated SUPER ingest and exact target");
+    *out = PostgresCopyFieldWriter::Create<RedshiftSuperFieldWriter>(array_view);
+    return NANOARROW_OK;
+  }
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateDecimalWriteSchema(type_resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(

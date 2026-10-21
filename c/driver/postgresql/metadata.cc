@@ -117,7 +117,9 @@ adbc::driver::Result<adbc::driver::GetObjectsHelper::Column> ResolveColumnMetada
     auto& xdbc = *column.xdbc;
     xdbc.xdbc_type_name = std::string_view(row[3].data, row[3].len);
     const auto metadata = profile.DescribeTypeModifier(*xdbc.xdbc_type_name, raw);
-    if (metadata.sql_type == "TIMETZ" ||
+    if (profile.VendorFamily(*xdbc.xdbc_type_name) !=
+            adbc::driver::pgwire::CatalogVendorFamily::kNone ||
+        metadata.sql_type == "TIMETZ" ||
         RedshiftScalarSchema::Canonical(metadata.sql_type) != RedshiftScalarKind::kNone ||
         RedshiftBytesSchema::Canonical(metadata.sql_type) != RedshiftBytesKind::kNone ||
         RedshiftTemporalSchema::Canonical(metadata.sql_type) !=

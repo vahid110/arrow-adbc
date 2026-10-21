@@ -32,6 +32,7 @@
 #include "redshift_decimal.h"
 #include "redshift_interval.h"
 #include "redshift_scalar.h"
+#include "redshift_super.h"
 
 namespace adbcpq {
 
@@ -172,7 +173,17 @@ class PostgresType {
     PostgresType out(*this);
     out.oid_ = oid;
     out.typname_ = typname;
+    out.vendor_family_ = adbc::driver::pgwire::CatalogVendorFamily::kNone;
     return out;
+  }
+
+  PostgresType WithVendorFamily(adbc::driver::pgwire::CatalogVendorFamily family) const {
+    PostgresType out(*this);
+    out.vendor_family_ = family;
+    return out;
+  }
+  adbc::driver::pgwire::CatalogVendorFamily vendor_family() const {
+    return vendor_family_;
   }
 
   // Field descriptors are copies: the global OID cache never retains a result
@@ -267,6 +278,7 @@ class PostgresType {
     out.AppendChild("item", *this);
     out.oid_ = oid;
     out.typname_ = typname;
+    out.vendor_family_ = adbc::driver::pgwire::CatalogVendorFamily::kNone;
     return out;
   }
 
@@ -279,6 +291,7 @@ class PostgresType {
     out.AppendChild("item", *this);
     out.oid_ = oid;
     out.typname_ = typname;
+    out.vendor_family_ = adbc::driver::pgwire::CatalogVendorFamily::kNone;
     return out;
   }
 
@@ -503,6 +516,10 @@ class PostgresType {
   }
 
   // Validate decimal semantics before binding takes ownership or selects a writer.
+  static ArrowErrorCode ValidateVendorWriteSchema(const PostgresTypeResolver& resolver,
+                                                  const ArrowSchema* schema,
+                                                  ArrowError* error);
+
   static ArrowErrorCode ValidateDecimalWriteSchema(const PostgresTypeResolver& resolver,
                                                    const ArrowSchema* schema,
                                                    ArrowError* error);
@@ -536,6 +553,8 @@ class PostgresType {
   std::vector<PostgresType> children_;
   std::optional<int32_t> type_modifier_;
   bool redshift_descriptor_ = false;
+  adbc::driver::pgwire::CatalogVendorFamily vendor_family_ =
+      adbc::driver::pgwire::CatalogVendorFamily::kNone;
   RedshiftIntervalConstraint interval_constraint_;
   adbc::driver::pgwire::TypeModifierMetadata modifier_metadata_;
   adbc::driver::pgwire::TemporalRepresentation temporal_representation_ =
@@ -758,6 +777,17 @@ class PostgresTypeResolver {
     return 0;
   }
 
+  uint32_t GetVendorOID(adbc::driver::pgwire::CatalogVendorFamily family) const {
+    uint32_t oid = 0;
+    for (const auto& entry : mapping_) {
+      if (entry.second.vendor_family() == family) {
+        if (oid) return 0;  // Ambiguous catalog identities never select arbitrary OIDs.
+        oid = entry.first;
+      }
+    }
+    return oid;
+  }
+
   // Insert a type into this resolver. Returns NANOARROW_OK on success
   // or places a null-terminated error message into error otherwise. The order
   // of Inserts matters: Non-array types must be inserted before the corresponding
@@ -789,7 +819,12 @@ class PostgresTypeResolver {
         break;
     }
 
-    PostgresType type = base.WithPgTypeInfo(item.oid, item.typname);
+    if (profile_.VendorFamily(item.typname) !=
+        adbc::driver::pgwire::CatalogVendorFamily::kNone)
+      base = PostgresType(PostgresTypeId::kUserDefined);
+
+    PostgresType type = base.WithPgTypeInfo(item.oid, item.typname)
+                            .WithVendorFamily(profile_.VendorFamily(item.typname));
 
     switch (base.type_id()) {
       case PostgresTypeId::kArray: {
@@ -889,6 +924,18 @@ class PostgresTypeResolver {
     return out;
   }
 };
+
+inline ArrowErrorCode PostgresType::ValidateVendorWriteSchema(
+    const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
+  if (!schema) return NANOARROW_OK;
+  RedshiftSuperSchema super;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftSuperSchema::Parse(schema, resolver.is_redshift(), &super, error));
+  for (int64_t i = 0; i < schema->n_children; ++i)
+    NANOARROW_RETURN_NOT_OK(
+        ValidateVendorWriteSchema(resolver, schema->children[i], error));
+  return ValidateVendorWriteSchema(resolver, schema->dictionary, error);
+}
 
 inline ArrowErrorCode PostgresType::ValidateIntervalWriteSchema(
     const PostgresTypeResolver& resolver, const ArrowSchema* schema, ArrowError* error) {
@@ -1018,6 +1065,7 @@ inline ArrowErrorCode PostgresType::ValidateTemporalWriteSchema(
 inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resolver,
                                                ArrowSchema* schema, PostgresType* out,
                                                ArrowError* error) {
+  NANOARROW_RETURN_NOT_OK(ValidateVendorWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateTemporalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateIntervalWriteSchema(resolver, schema, error));
   NANOARROW_RETURN_NOT_OK(ValidateDecimalWriteSchema(resolver, schema, error));
@@ -1025,6 +1073,13 @@ inline ArrowErrorCode PostgresType::FromSchema(const PostgresTypeResolver& resol
   NANOARROW_RETURN_NOT_OK(ValidateBytesWriteSchema(resolver, schema, error));
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
+  RedshiftSuperSchema super;
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftSuperSchema::Parse(schema, resolver.is_redshift(), &super, error));
+  if (super.enabled)
+    return resolver.Find(
+        resolver.GetVendorOID(adbc::driver::pgwire::CatalogVendorFamily::kSuper), out,
+        error);
   RedshiftTimetzSchema timetz;
   NANOARROW_RETURN_NOT_OK(
       RedshiftTimetzSchema::Parse(schema, resolver.is_redshift(), &timetz, error));
