@@ -91,7 +91,9 @@ TEST(RedshiftEncodedTest, GeometryProtocolAliasIsOutputOnlyAndBackendScoped) {
     ASSERT_EQ(resolver.Find(catalog_oid, &catalog, &error), 0);
     EXPECT_EQ(catalog.oid(), catalog_oid);
     EXPECT_FALSE(catalog.type_modifier().has_value());
-    if (catalog_oid != 3999) EXPECT_NE(resolver.Find(3999, &catalog, &error), 0);
+    if (catalog_oid != 3999) {
+      EXPECT_NE(resolver.Find(3999, &catalog, &error), 0);
+    }
     nanoarrow::UniqueSchema schema;
     ArrowSchemaInit(schema.get());
     ASSERT_EQ(output.SetSchema(schema.get(), "Redshift"), 0);
@@ -117,11 +119,13 @@ TEST(RedshiftEncodedTest, GeometryOutputAliasFailuresPropagateThroughResultResol
   for (int fault = 0; fault < 5; ++fault) {
     PostgresTypeResolver resolver(adbc::driver::pgwire::BackendProfile::Redshift());
     ArrowError error{};
-    if (fault != 0)
+    if (fault != 0) {
       ASSERT_EQ(resolver.Insert({3000, "geometry", "fixture", 0, 0, 0}, &error), 0);
-    if (fault == 1)
+    }
+    if (fault == 1) {
       ASSERT_EQ(resolver.Insert({72113, "geometry", "fixture", 0, 0, 0}, &error), 0);
-    if (fault >= 2)
+    }
+    if (fault >= 2) {
       ASSERT_EQ(resolver.Insert({3999,
                                  fault == 2   ? "other"
                                  : fault == 3 ? "geography"
@@ -129,6 +133,7 @@ TEST(RedshiftEncodedTest, GeometryOutputAliasFailuresPropagateThroughResultResol
                                  "fixture", 0, 0, 0},
                                 &error),
                 0);
+    }
     PqResultHelper result(nullptr, "");
     auto* raw = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
     PGresAttDesc attr{};

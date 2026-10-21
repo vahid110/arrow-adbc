@@ -2146,9 +2146,9 @@ TEST_F(PostgresStatementTest, TemporalPublicBindArrayAndStreamKeepOidAndLiteralW
           const auto type =
               ArrowArrayViewGetStringUnsafe(output.array_view->children[0], i);
           EXPECT_EQ(std::string(type.data, type.size_bytes), names[col]);
-          if (row == 1)
+          if (row == 1) {
             EXPECT_TRUE(ArrowArrayViewIsNull(output.array_view->children[1], i));
-          else {
+          } else {
             const auto wire =
                 ArrowArrayViewGetStringUnsafe(output.array_view->children[1], i);
             EXPECT_EQ(std::string(wire.data, wire.size_bytes), hex[col]);
@@ -2413,7 +2413,9 @@ TEST_F(PostgresStatementTest,
     EXPECT_EQ(
         metadata.value().xdbc->xdbc_type_name,
         adbcpq::RedshiftTemporalSchema::SqlName(adbcpq::testing::kTemporalKinds[col]));
-    if (col) EXPECT_EQ(metadata.value().xdbc->xdbc_decimal_digits, col + 1);
+    if (col) {
+      EXPECT_EQ(metadata.value().xdbc->xdbc_decimal_digits, col + 1);
+    }
   }
 }
 
@@ -2456,9 +2458,9 @@ TEST_F(PostgresStatementTest, CharacterPublicBindArrayAndStreamSelectActualOffer
         ASSERT_LT(row, 3);
         auto kind = ArrowArrayViewGetStringUnsafe(result.array_view->children[0], i);
         EXPECT_EQ(std::string(kind.data, kind.size_bytes), "character");
-        if (!expected[row])
+        if (!expected[row]) {
           EXPECT_TRUE(ArrowArrayViewIsNull(result.array_view->children[1], i));
-        else {
+        } else {
           auto wire = ArrowArrayViewGetStringUnsafe(result.array_view->children[1], i);
           EXPECT_EQ(std::string(wire.data, wire.size_bytes), expected[row]);
         }
@@ -2514,9 +2516,9 @@ TEST_F(PostgresStatementTest, CharacterMetadataOnActualNormalBoundEmptyAndCatalo
         PostgresFieldMetadata(output.schema->children[2], "ADBC:redshift:byte_width"),
         "70000");
     ASSERT_NO_FATAL_FAILURE(output.Next());
-    if (mode == 2)
+    if (mode == 2) {
       EXPECT_FALSE(output.array->release);
-    else {
+    } else {
       const auto fixed = ArrowArrayViewGetStringUnsafe(output.array_view->children[0], 0);
       EXPECT_EQ(std::string(fixed.data, fixed.size_bytes), "a   ");
       const auto wide = ArrowArrayViewGetStringUnsafe(output.array_view->children[2], 0);
@@ -5304,9 +5306,9 @@ TEST_F(PostgresStatementTest,
     ASSERT_THAT(AdbcConnectionRelease(&detached.value, &error), IsOkStatus(&error));
     // Only owned schema/result bytes are accessed; no closed libpq handle is used.
     ASSERT_NO_FATAL_FAILURE(output.GetSchema());
-    if (mode == 1)
+    if (mode == 1) {
       EXPECT_EQ(output.MaybeNext(), EINVAL);
-    else {
+    } else {
       ASSERT_NO_FATAL_FAILURE(output.Next());
       if (!mode) {
         ASSERT_TRUE(output.array->release);

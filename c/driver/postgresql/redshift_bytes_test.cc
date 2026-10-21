@@ -61,7 +61,9 @@ class BytesWriteCase {
   ArrowErrorCode Write(int row = 0) {
     auto before = bytes->size_bytes;
     auto code = writer->Write(bytes.get(), row, &error);
-    if (code) EXPECT_EQ(before, bytes->size_bytes);
+    if (code) {
+      EXPECT_EQ(before, bytes->size_bytes);
+    }
     return code;
   }
   std::string Wire() {

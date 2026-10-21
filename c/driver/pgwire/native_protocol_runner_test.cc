@@ -401,7 +401,9 @@ TEST(NativeRunnerTest, Every715FaultUsesActualPrerequisiteAndStopFunctions) {
         EXPECT_EQ(states[i] == NativeRunState::kSkipped,
                   stop || descendants.count(i) != 0)
             << failed << ":" << i << ":" << definitive;
-        if (blocked) EXPECT_NE(states[*blocked], NativeRunState::kCaptured);
+        if (blocked) {
+          EXPECT_NE(states[*blocked], NativeRunState::kCaptured);
+        }
       }
       ++scenarios;
     }
@@ -532,15 +534,16 @@ TEST(NativeRunnerTest, DetectedEncodingLossInvalidatesOnlyCurrentAffectedSession
       if (p.connection != failed.connection && other.empty()) other = p.name;
     }
     ASSERT_FALSE(same.empty());
-    if (mode == 1)
+    if (mode == 1) {
       EXPECT_TRUE(other.empty());
-    else
+    } else
       ASSERT_FALSE(other.empty());
     EXPECT_NE(StepRecord(files, same).find("\"context_qualified\":false"),
               std::string::npos);
-    if (!other.empty())
+    if (!other.empty()) {
       EXPECT_NE(StepRecord(files, other).find("\"context_qualified\":true"),
                 std::string::npos);
+    }
     EXPECT_NE(
         StepRecord(files, "session.raw_utc.timezone").find("\"context_qualified\":true"),
         std::string::npos);
@@ -571,7 +574,9 @@ TEST(NativeRunnerTest,
   EXPECT_EQ(skipped, 100U);  // exact compiled descendants of this baseline.
   for (const auto& [id, kind] : fake.sent) {
     const auto p = *BuildNativeStep(static_cast<NativeStepId>(id), owned_schema);
-    if (p.parameter) EXPECT_NE(static_cast<size_t>(p.parameter->source), failed);
+    if (p.parameter) {
+      EXPECT_NE(static_cast<size_t>(p.parameter->source), failed);
+    }
   }
 }
 TEST(NativeRunnerTest,
@@ -669,7 +674,9 @@ TEST(NativeRunnerTest, PairHasOneDeadlineAndCountsOnlyActuallyAttemptedOperation
       if (id == target) ++calls;
     EXPECT_EQ(calls, mode == 3 ? 2U : 1U);
     EXPECT_NE(result.states[target], NativeRunState::kCaptured);
-    if (mode != 0) EXPECT_FALSE(result.discovery_finished);
+    if (mode != 0) {
+      EXPECT_FALSE(result.discovery_finished);
+    }
   }
 }
 TEST(NativeRunnerTest, InflightParameterOwnerSurvivesReturnUntilBorrowedSessionDiscard) {
@@ -844,8 +851,12 @@ TEST(NativeRunnerTest, WrongEncodingAndInvalidOwnershipOrDescriptorArePreSqlFail
       input.authenticated_cleanup_schema = "adbc_types_ffffffffffffffffffffffffffffffff";
     if (mode == 2) input.sessions[1] = input.sessions[0];
     if (mode == 3) input.outputs[1] = input.outputs[0];
-    if (mode == 4) ASSERT_EQ(::write(input.outputs[0], "x", 1), 1);
-    if (mode == 5) ASSERT_EQ(fcntl(input.outputs[0], F_SETFL, O_APPEND), 0);
+    if (mode == 4) {
+      ASSERT_EQ(::write(input.outputs[0], "x", 1), 1);
+    }
+    if (mode == 5) {
+      ASSERT_EQ(fcntl(input.outputs[0], F_SETFL, O_APPEND), 0);
+    }
     auto result = RunWith(input, Fake::Api());
     EXPECT_TRUE(result.first_failure);
     EXPECT_TRUE(fake.sent.empty());
@@ -954,8 +965,12 @@ TEST(NativeRunnerTest, RecordGroupAggregateCacheLimitsAndStaleOffsetsReject) {
       value.back() = '}';
     }
     if (mode == 1) value = "{\n}";
-    if (mode == 2) ASSERT_EQ(lseek(input.outputs[0], 1, SEEK_SET), 1);
-    if (mode == 3) ASSERT_EQ(fchmod(input.outputs[0], 0644), 0);
+    if (mode == 2) {
+      ASSERT_EQ(lseek(input.outputs[0], 1, SEEK_SET), 1);
+    }
+    if (mode == 3) {
+      ASSERT_EQ(fchmod(input.outputs[0], 0644), 0);
+    }
     EXPECT_FALSE(output.Record(0, value));
     EXPECT_FALSE(output.Complete());
   }

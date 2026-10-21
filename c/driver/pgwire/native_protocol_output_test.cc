@@ -151,7 +151,9 @@ TEST(LocalObservationOutput, WrongOrderDuplicateAndIncompleteNeverComplete) {
     File f;
     ObservationOutput out(f.fd);
     ASSERT_TRUE(out.Initialize());
-    if (duplicate) ASSERT_TRUE(out.Record(ObservationOutput::kOrder[0], "{}"));
+    if (duplicate) {
+      ASSERT_TRUE(out.Record(ObservationOutput::kOrder[0], "{}"));
+    }
     EXPECT_FALSE(out.Record(ObservationOutput::kOrder[duplicate ? 0 : 1], "{}"));
     EXPECT_FALSE(out.Complete(true, 1, 1));
     EXPECT_EQ(f.Size(), duplicate ? 3 : 0);
@@ -264,11 +266,19 @@ TEST(LocalObservationOutput, ObservedExternalSizeOffsetModeAndIdentityChangesFai
     File f;
     ObservationOutput out(f.fd);
     ASSERT_TRUE(out.Initialize());
-    if (change == 0) ASSERT_EQ(write(f.fd, "x", 1), 1);
-    if (change == 1) ASSERT_EQ(lseek(f.fd, 1, SEEK_SET), 1);
-    if (change == 2) ASSERT_EQ(fchmod(f.fd, 0644), 0);
+    if (change == 0) {
+      ASSERT_EQ(write(f.fd, "x", 1), 1);
+    }
+    if (change == 1) {
+      ASSERT_EQ(lseek(f.fd, 1, SEEK_SET), 1);
+    }
+    if (change == 2) {
+      ASSERT_EQ(fchmod(f.fd, 0644), 0);
+    }
     File replacement;
-    if (change == 3) ASSERT_EQ(dup2(replacement.fd, f.fd), f.fd);
+    if (change == 3) {
+      ASSERT_EQ(dup2(replacement.fd, f.fd), f.fd);
+    }
     EXPECT_FALSE(out.Record(ObservationOutput::kOrder[0], "{}"));
     EXPECT_FALSE(out.Complete(true, 1, 1));
   }

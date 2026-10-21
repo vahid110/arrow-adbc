@@ -231,7 +231,7 @@ class DecimalPublicPythonTest(unittest.TestCase):
         self.assertEqual(
             self.query(
                 "SELECT amount::text AS amount FROM adbc_c3_python_text "
-                "ORDER BY amount NULLS LAST"
+                "ORDER BY adbc_c3_python_text.amount NULLS LAST"
             ),
             [{"amount": "-2.50"}, {"amount": "1.25"}, {"amount": None}],
         )

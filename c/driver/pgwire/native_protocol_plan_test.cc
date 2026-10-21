@@ -90,7 +90,9 @@ Observation Baseline(std::string_view name) {
       value[7] = static_cast<char>(start + i);
     }
     Value(result.get(), i, 0, value);
-    if (super && start + i == 1) EXPECT_TRUE(PQsetvalue(result.get(), i, 1, nullptr, 0));
+    if (super && start + i == 1) {
+      EXPECT_TRUE(PQsetvalue(result.get(), i, 1, nullptr, 0));
+    }
   }
   Observation out;
   EXPECT_EQ(CaptureNativeResult(plan.id, result.get(), &out), CaptureStatus::kComplete);

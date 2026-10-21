@@ -520,7 +520,9 @@ TEST(NativeRawParameterTest, ObservedNullAndEmptyAndExplicitVariantsAreDistinct)
           EXPECT_EQ(view->value == nullptr, is_null);
           EXPECT_EQ(view->length,
                     origin == ParameterOrigin::kObserved && field == 0 ? 4 : 0);
-          if (!is_null) EXPECT_EQ(view->value[view->length], '\0');
+          if (!is_null) {
+            EXPECT_EQ(view->value[view->length], '\0');
+          }
         }
       }
     }

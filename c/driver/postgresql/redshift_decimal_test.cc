@@ -60,7 +60,9 @@ class DecimalWriteCase {
   ArrowErrorCode Write(int64_t row = 0) {
     const int64_t before = bytes->size_bytes;
     const auto result = writer->Write(bytes.get(), row, &error);
-    if (result) EXPECT_EQ(bytes->size_bytes, before);
+    if (result) {
+      EXPECT_EQ(bytes->size_bytes, before);
+    }
     return result;
   }
 

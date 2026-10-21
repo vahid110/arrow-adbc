@@ -71,7 +71,9 @@ class ScalarWriteCase {
   ArrowErrorCode Write(int64_t row = 0) {
     const auto before = bytes->size_bytes;
     const auto result = writer->Write(bytes.get(), row, &error);
-    if (result) EXPECT_EQ(bytes->size_bytes, before);
+    if (result) {
+      EXPECT_EQ(bytes->size_bytes, before);
+    }
     return result;
   }
   std::string Wire() const {
@@ -246,10 +248,10 @@ TEST(RedshiftScalarTest, CanonicalDescriptorIdentityLeavesUnknownQualifiersUnkno
       ASSERT_EQ(ArrowMetadataGetValue(schema->metadata,
                                       ArrowCharView("ADBC:redshift:sql_type"), &family),
                 0);
-      if (redshift)
+      if (redshift) {
         EXPECT_EQ(std::string_view(family.data, family.size_bytes),
                   testing::kScalarSqlNames[i]);
-      else
+      } else
         EXPECT_EQ(family.data, nullptr);
       for (const char* key :
            {"ADBC:redshift:precision", "ADBC:redshift:scale", "ADBC:redshift:byte_width",

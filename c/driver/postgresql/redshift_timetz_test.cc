@@ -148,33 +148,42 @@ TEST(RedshiftTimetzTest, ClosedSchemaAndReadUnknownPrecisionNeverBecomeWriteDefa
     nanoarrow::UniqueSchema schema;
     ASSERT_EQ(testing::TimetzWriteSchema(schema.get()), 0);
     auto* field = schema->children[0];
-    if (change == 0)
+    if (change == 0) {
       ASSERT_EQ(testing::IntervalSetMetadata(field, "ARROW:extension:name",
                                              "adbc.redshift.timetz_us_offset.v2"),
                 0);
-    if (change == 1)
+    }
+    if (change == 1) {
       ASSERT_EQ(testing::IntervalSetMetadata(field, "ARROW:extension:metadata", "{}"), 0);
-    if (change == 2)
+    }
+    if (change == 2) {
       ASSERT_EQ(testing::IntervalSetMetadata(field, "ADBC:redshift:sql_type", "TIME"), 0);
+    }
     if (change == 3) field->children[0]->flags |= ARROW_FLAG_NULLABLE;
-    if (change == 4)
+    if (change == 4) {
       ASSERT_EQ(ArrowSchemaSetName(field->children[0], "offset_seconds"), 0);
-    if (change == 5)
+    }
+    if (change == 5) {
       ASSERT_EQ(ArrowSchemaSetType(field->children[1], NANOARROW_TYPE_INT64), 0);
-    if (change == 6)
+    }
+    if (change == 6) {
       ASSERT_EQ(testing::IntervalSetMetadata(field->children[1], "ADBC:redshift:sql_type",
                                              "INTEGER"),
                 0);
-    if (change == 7)
+    }
+    if (change == 7) {
       ASSERT_EQ(testing::IntervalSetMetadata(field->children[1],
                                              "ARROW:extension:metadata", "{}"),
                 0);
-    if (change == 8)
+    }
+    if (change == 8) {
       ASSERT_EQ(
           testing::DecimalMetadata(field, "ADBC:redshift:fractional_precision", "6"), 0);
-    if (change == 9)
+    }
+    if (change == 9) {
       ASSERT_EQ(testing::IntervalSetMetadata(field, "ADBC:redshift:type_modifier", "999"),
                 0);
+    }
     if (change == 10) {
       ASSERT_EQ(ArrowSchemaAllocateDictionary(field), 0);
       ArrowSchemaInitFromType(field->dictionary, NANOARROW_TYPE_INT32);

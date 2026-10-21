@@ -373,13 +373,18 @@ class IntervalPublicRecordingTest : public ::testing::Test {
     recording.queries.clear();
   }
   void TearDown() override {
-    if (statement.private_data)
+    if (statement.private_data) {
       EXPECT_EQ(driver.StatementRelease(&statement, &error), ADBC_STATUS_OK);
-    if (connection.private_data)
+    }
+    if (connection.private_data) {
       EXPECT_EQ(driver.ConnectionRelease(&connection, &error), ADBC_STATUS_OK);
-    if (database.private_data)
+    }
+    if (database.private_data) {
       EXPECT_EQ(driver.DatabaseRelease(&database, &error), ADBC_STATUS_OK);
-    if (driver.release) EXPECT_EQ(driver.release(&driver, &error), ADBC_STATUS_OK);
+    }
+    if (driver.release) {
+      EXPECT_EQ(driver.release(&driver, &error), ADBC_STATUS_OK);
+    }
     if (error.release) error.release(&error);
   }
   const char* Message() { return error.message ? error.message : ""; }
@@ -430,9 +435,10 @@ TEST_F(IntervalPublicRecordingTest, PublicArrayAndStreamUseExactSourceOidAndWire
     const auto& parameter = recording.executions[i][0];
     EXPECT_EQ(parameter.oid, 65017U);
     EXPECT_EQ(parameter.null, i % 3 == 1);
-    if (i % 3 != 1)
+    if (i % 3 != 1) {
       EXPECT_EQ(parameter.bytes, testing::NumericHex(i % 3 == 0 ? "00000000000003e8"
                                                                 : "fffffffffffff830"));
+    }
   }
 }
 TEST_F(IntervalPublicRecordingTest,
@@ -527,9 +533,10 @@ TEST_F(IntervalPublicRecordingTest,
                       exists));
       EXPECT_EQ(drop, std::string_view(mode) == ADBC_INGEST_OPTION_MODE_REPLACE);
       EXPECT_TRUE(recording.executions.empty());
-      if (exists || std::string_view(mode) != ADBC_INGEST_OPTION_MODE_APPEND)
+      if (exists || std::string_view(mode) != ADBC_INGEST_OPTION_MODE_APPEND) {
         EXPECT_NE(std::string_view(Message()).find("unknown"), std::string::npos)
             << Message();
+      }
     }
   }
 }
@@ -692,31 +699,38 @@ TEST_F(IntervalPublicRecordingTest,
           testing::TimetzWriteBatch(schema.get(), array.get(), {std::nullopt}, nullptr),
           0);
       auto* field = schema->children[0];
-      if (mutation == 1)
+      if (mutation == 1) {
         ASSERT_EQ(testing::IntervalSetMetadata(field, "ARROW:extension:name",
                                                "adbc.redshift.timetz_us_offset.v2"),
                   0);
-      if (mutation == 2)
+      }
+      if (mutation == 2) {
         ASSERT_EQ(testing::IntervalSetMetadata(field, "ARROW:extension:metadata", "{}"),
                   0);
-      if (mutation == 3)
+      }
+      if (mutation == 3) {
         ASSERT_EQ(
             testing::IntervalSetMetadata(field, "ADBC:redshift:sql_type", "HLLSKETCH"),
             0);
+      }
       if (mutation == 4) field->children[0]->flags |= ARROW_FLAG_NULLABLE;
-      if (mutation == 5)
+      if (mutation == 5) {
         ASSERT_EQ(ArrowSchemaSetName(field->children[0], "offset_seconds"), 0);
-      if (mutation == 6)
+      }
+      if (mutation == 6) {
         ASSERT_EQ(testing::IntervalSetMetadata(field->children[0],
                                                "ARROW:extension:metadata", "{}"),
                   0);
-      if (mutation == 7)
+      }
+      if (mutation == 7) {
         ASSERT_EQ(
             testing::DecimalMetadata(field, "ADBC:redshift:fractional_precision", "6"),
             0);
-      if (mutation == 8)
+      }
+      if (mutation == 8) {
         ASSERT_EQ(
             testing::IntervalSetMetadata(field, "ADBC:redshift:type_modifier", "999"), 0);
+      }
       if (mutation == 9) {
         ASSERT_EQ(ArrowSchemaAllocateDictionary(field), 0);
         ArrowSchemaInitFromType(field->dictionary, NANOARROW_TYPE_INT32);
@@ -820,7 +834,9 @@ TEST_F(IntervalPublicRecordingTest, TimetzKnownTargetNullEmptyAndUnknownPrecisio
               driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error);
           EXPECT_EQ(status == ADBC_STATUS_OK, raw == std::optional<int32_t>{3})
               << Message();
-          if (!raw || *raw != 3) EXPECT_TRUE(recording.executions.empty());
+          if (!raw || *raw != 3) {
+            EXPECT_TRUE(recording.executions.empty());
+          }
           for (const auto& execution : recording.executions)
             for (const auto& parameter : execution) {
               EXPECT_EQ(parameter.oid, testing::kTimetzOid);
@@ -934,11 +950,12 @@ TEST_F(IntervalPublicRecordingTest, TimetzLateRuntimeErrorUsesExistingWholeStrea
       recording.pending = owned ? 0 : 2;
       recording.transaction = owned ? PQTRANS_IDLE : PQTRANS_INTRANS;
       recording.fail_rollback = fail_rollback;
-      if (!owned)
+      if (!owned) {
         ASSERT_EQ(
             driver.ConnectionSetOption(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
                                        ADBC_OPTION_VALUE_DISABLED, &error),
             ADBC_STATUS_OK);
+      }
       ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
                                           "owned", &error),
                 ADBC_STATUS_OK);
@@ -1264,7 +1281,9 @@ TEST_F(IntervalPublicRecordingTest, SuperContextShapesAndPerBatchDriftCannotDisp
     EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
               ADBC_STATUS_OK);
     EXPECT_TRUE(recording.executions.empty());
-    if (shape == 5) EXPECT_EQ(recording.super_reads, 4);
+    if (shape == 5) {
+      EXPECT_EQ(recording.super_reads, 4);
+    }
   }
 }
 TEST_F(IntervalPublicRecordingTest, SuperExistingAndMissingCreateAppendAndWrongTarget) {
@@ -1291,12 +1310,13 @@ TEST_F(IntervalPublicRecordingTest, SuperExistingAndMissingCreateAppendAndWrongT
         std::any_of(recording.queries.begin(), recording.queries.end(),
                     [](const std::string& q) { return q.starts_with("CREATE "); });
     EXPECT_EQ(created, !exists);
-    if (created)
+    if (created) {
       EXPECT_NE(std::find_if(recording.queries.begin(), recording.queries.end(),
                              [](const std::string& q) {
                                return q.find("amount\" SUPER") != std::string::npos;
                              }),
                 recording.queries.end());
+    }
   }
   recording.super_target = false;
   recording.executions.clear();
@@ -1448,11 +1468,11 @@ TEST_F(IntervalPublicRecordingTest,
       ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
       ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
       for (int i = 0; i < 3; ++i) {
-        if (i == null_at)
+        if (i == null_at) {
           ASSERT_EQ(ArrowArrayAppendNull(array->children[i], 1), 0);
-        else if (i == 2)
+        } else if (i == 2) {
           ASSERT_EQ(ArrowArrayAppendInt(array->children[i], 42), 0);
-        else
+        } else
           ASSERT_EQ(ArrowArrayAppendString(array->children[i], ArrowCharView(kSparseHll)),
                     0);
       }
@@ -1485,9 +1505,12 @@ TEST_F(IntervalPublicRecordingTest,
           EXPECT_EQ(params[i].format, 0);
           EXPECT_EQ(params[i].physical_length,
                     i == null_at ? 0 : std::strlen(kSparseHll) + 1);
-          if (i != null_at) EXPECT_EQ(params[i].bytes, kSparseHll);
-        } else if (i != null_at)
+          if (i != null_at) {
+            EXPECT_EQ(params[i].bytes, kSparseHll);
+          }
+        } else if (i != null_at) {
           EXPECT_EQ(params[i].bytes, testing::NumericHex("000000000000002a"));
+        }
       }
       nanoarrow::UniqueSchema actual;
       ASSERT_EQ(output->get_schema(output.get(), actual.get()), 0);
@@ -1624,9 +1647,9 @@ TEST_F(IntervalPublicRecordingTest,
       const auto& p = recording.executions[0][0];
       EXPECT_EQ(p.oid, kind == RedshiftEncodedKind::kHll ? 72115 : 72112);
       EXPECT_EQ(p.format, kind == RedshiftEncodedKind::kHll ? 0 : 1);
-      if (kind == RedshiftEncodedKind::kHll)
+      if (kind == RedshiftEncodedKind::kHll) {
         EXPECT_EQ(p.bytes, value);
-      else {
+      } else {
         EXPECT_EQ(p.bytes, value);
         EXPECT_EQ(p.physical_length, value.size());
         EXPECT_NE(p.bytes.size(), value.size() * 2);
@@ -1693,8 +1716,9 @@ TEST_F(IntervalPublicRecordingTest, HllVarbyteBothOrdersGrowthAndNullPositions) 
           EXPECT_EQ(params[col].null, col == null_at);
           EXPECT_EQ(params[col].oid, col == binary ? 72112 : 72115);
           EXPECT_EQ(params[col].format, col == binary ? 1 : 0);
-          if (col != null_at)
+          if (col != null_at) {
             EXPECT_EQ(params[col].bytes, col == binary ? literal : large);
+          }
         }
     }
 }

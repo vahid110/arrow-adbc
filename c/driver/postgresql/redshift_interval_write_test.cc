@@ -66,7 +66,9 @@ class IntervalWriteCase {
   ArrowErrorCode Write(int64_t row = 0) {
     const auto before = bytes->size_bytes;
     auto result = writer->Write(bytes.get(), row, &error);
-    if (result) EXPECT_EQ(before, bytes->size_bytes);
+    if (result) {
+      EXPECT_EQ(before, bytes->size_bytes);
+    }
     return result;
   }
   std::string Wire() {
@@ -453,7 +455,9 @@ TEST(RedshiftIntervalWriteTest,
         ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
         auto result = bind.SetParamTypes(nullptr, *resolver, true, &fields);
         EXPECT_EQ(result.ok(), known);
-        if (known) EXPECT_EQ(bind.param_types[0], type.oid());
+        if (known) {
+          EXPECT_EQ(bind.param_types[0], type.oid());
+        }
       }
 }
 }  // namespace
