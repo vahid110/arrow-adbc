@@ -33,6 +33,7 @@
 #include "metadata.h"
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
+#include "redshift_super_allocation_test.h"
 #include "redshift_super_test_fixture.h"
 #include "redshift_timetz_test_fixture.h"
 
@@ -1072,9 +1073,10 @@ TEST_F(IntervalPublicRecordingTest,
     EXPECT_EQ(values[2].bytes, R"({"x":1.20})");
     for (const auto& value : values) EXPECT_EQ(value.oid, 72112);
     EXPECT_NE(std::find(recording.queries.begin(), recording.queries.end(),
-                        "INSERT INTO \"public\".\"owned\" (\"amount\") VALUES "
+                        "INSERT INTO \"public\" . \"owned\" (\"amount\") VALUES "
                         "(JSON_PARSE($1)), (JSON_PARSE($2)), (JSON_PARSE($3))"),
-              recording.queries.end());
+              recording.queries.end())
+        << ::testing::PrintToString(recording.queries);
   }
 }
 TEST_F(IntervalPublicRecordingTest,
@@ -1226,6 +1228,109 @@ TEST_F(IntervalPublicRecordingTest, SuperExistingAndMissingCreateAppendAndWrongT
   EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
             ADBC_STATUS_OK);
   EXPECT_TRUE(recording.executions.empty());
+}
+// Fault only the production scanner, after source-view/setup allocations. This
+// wrapper is test-only; ExecutePreparedRows retains the real transaction owner.
+class SuperScannerFaultWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit SuperScannerFaultWriter(std::unique_ptr<PostgresCopyFieldWriter> actual)
+      : actual_(std::move(actual)) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t row, ArrowError* error) override {
+    testing::super_allocation_fail_after = 0;
+    struct Reset {
+      ~Reset() { testing::super_allocation_fail_after = -1; }
+    } reset;
+    return actual_->Write(buffer, row, error);
+  }
+
+ private:
+  std::unique_ptr<PostgresCopyFieldWriter> actual_;
+};
+struct SuperFaultSource {
+  ArrowArrayStream input{};
+  BindStream* bind;
+  bool armed = false;
+};
+void SuperFaultStream(ArrowArrayStream* input, BindStream* bind, ArrowArrayStream* out) {
+  auto* state = new SuperFaultSource{};
+  state->bind = bind;
+  ArrowArrayStreamMove(input, &state->input);
+  out->private_data = state;
+  out->get_schema = [](ArrowArrayStream* stream, ArrowSchema* schema) {
+    auto* state = static_cast<SuperFaultSource*>(stream->private_data);
+    return state->input.get_schema(&state->input, schema);
+  };
+  out->get_next = [](ArrowArrayStream* stream, ArrowArray* array) {
+    auto* state = static_cast<SuperFaultSource*>(stream->private_data);
+    const int result = state->input.get_next(&state->input, array);
+    if (!result && array->release && !state->armed) {
+      state->bind->bind_field_writers[0] = std::make_unique<SuperScannerFaultWriter>(
+          std::move(state->bind->bind_field_writers[0]));
+      state->armed = true;
+    }
+    return result;
+  };
+  out->get_last_error = [](ArrowArrayStream*) -> const char* { return nullptr; };
+  out->release = [](ArrowArrayStream* stream) {
+    auto* state = static_cast<SuperFaultSource*>(stream->private_data);
+    state->input.release(&state->input);
+    delete state;
+    stream->release = nullptr;
+  };
+}
+TEST_F(IntervalPublicRecordingTest,
+       SuperScannerAllocationFailureKeepsOwnerAndPrimaryError) {
+  for (bool owned : {false, true}) {
+    for (bool fail_rollback : {false, true}) {
+      recording.transaction = owned ? PQTRANS_IDLE : PQTRANS_INTRANS;
+      recording.committed = 7;
+      recording.pending = 0;
+      recording.fail_rollback = fail_rollback;
+      recording.executions.clear();
+      recording.queries.clear();
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+      ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(),
+                                    {R"({"long_key_requiring_heap_allocation":1})"}),
+                0);
+      nanoarrow::UniqueArrayStream input, fault;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      BindStream bind;
+      bind.generated_super_ingest = true;
+      SuperFaultStream(input.get(), &bind, fault.get());
+      bind.SetBind(fault.get());
+      ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+      auto* impl =
+          static_cast<std::shared_ptr<PostgresConnection>*>(connection.private_data);
+      PostgresType target, targets(PostgresTypeId::kRecord);
+      ASSERT_EQ((*impl)->type_resolver()->Find(72111, &target, nullptr), 0);
+      targets.AppendChild("amount", target);
+      int64_t rows = -1;
+      Status status;
+      EXPECT_NO_THROW(status = bind.ExecutePreparedRows(
+                          (*impl)->conn(), "owned", "amount", *(*impl)->type_resolver(),
+                          owned, 16, &rows, &targets));
+      EXPECT_FALSE(status.ok());
+      AdbcError failure = ADBC_ERROR_INIT;
+      status.ToAdbc(&failure);
+      ASSERT_NE(failure.message, nullptr);
+      EXPECT_NE(std::string_view(failure.message).find("allocation failed"),
+                std::string_view::npos);
+      if (failure.release) failure.release(&failure);
+      EXPECT_TRUE(recording.executions.empty());
+      EXPECT_EQ(recording.committed, 7);
+      EXPECT_EQ(bind.cleanup_failed, owned && fail_rollback);
+      if (!owned) {
+        EXPECT_EQ(recording.transaction, PQTRANS_INTRANS);
+        EXPECT_EQ(
+            std::count(recording.queries.begin(), recording.queries.end(), "ROLLBACK"),
+            0);
+      } else if (!fail_rollback) {
+        EXPECT_EQ(recording.transaction, PQTRANS_IDLE);
+      }
+    }
+  }
 }
 }  // namespace
 }  // namespace adbcpq

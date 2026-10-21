@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "bind_stream.h"
+#include "redshift_super_allocation_test.h"
 
 namespace adbcpq {
 namespace {
@@ -269,6 +270,30 @@ TEST(RedshiftSuperTest, FreshReserveFailurePreservesExistingWirePrefixAndAllocat
   EXPECT_EQ(bytes->data, old);
   EXPECT_EQ(bytes->size_bytes, 3);
   EXPECT_EQ(std::string(reinterpret_cast<char*>(bytes->data), 3), "old");
+}
+TEST(RedshiftSuperTest, ScannerKeyNodeAndBucketFailuresReturnEnomem) {
+  const std::string json = R"({"long_object_key_requiring_a_heap_buffer":1})";
+  ArrowBufferView bytes{};
+  bytes.data.as_char = json.data();
+  bytes.size_bytes = json.size();
+  int failed = 0;
+  bool succeeded = false;
+  for (int fail = 0; fail < 16; ++fail) {
+    ArrowError error{};
+    testing::super_allocation_fail_after = fail;
+    const int result = RedshiftSuperSchema::Validate(bytes, &error);
+    testing::super_allocation_fail_after = -1;
+    if (result == NANOARROW_OK) {
+      succeeded = true;
+      break;
+    }
+    EXPECT_EQ(result, ENOMEM);
+    EXPECT_NE(std::string_view(error.message).find("allocation failed"),
+              std::string_view::npos);
+    ++failed;
+  }
+  EXPECT_TRUE(succeeded);
+  EXPECT_GE(failed, 3);  // Decoded key storage, node and bucket allocations.
 }
 }  // namespace
 }  // namespace adbcpq

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -260,8 +261,13 @@ struct RedshiftSuperSchema {
       return Invalid(error, "document byte limit");
     NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
         bytes, RedshiftBytesKind::kVarchar, std::nullopt, false, error));
-    if (!Scanner(std::string_view(bytes.data.as_char, bytes.size_bytes)).Run())
-      return Invalid(error, "JSON grammar, duplicate key or depth");
+    try {
+      if (!Scanner(std::string_view(bytes.data.as_char, bytes.size_bytes)).Run())
+        return Invalid(error, "JSON grammar, duplicate key or depth");
+    } catch (const std::bad_alloc&) {
+      ArrowErrorSet(error, "[Redshift] SUPER JSON validation allocation failed");
+      return ENOMEM;
+    }
     return NANOARROW_OK;
   }
 };
