@@ -508,6 +508,19 @@ struct BindStream {
     return Status::Ok();
   }
 
+  Status WriteParameter(size_t column, int64_t field_row) {
+    const int code =
+        bind_field_writers[column]->Write(&param_buffer.value, field_row, &na_error);
+    // These schema-selected writers validate application payloads before writing.
+    // Keep allocator/other failures and ordinary writers on the Internal path.
+    if (code == EINVAL && (json_parse_fields[column] ||
+                           encoded_fields[column] != RedshiftEncodedKind::kNone)) {
+      return Status::InvalidArgument(na_error.message);
+    }
+    UNWRAP_NANOARROW(na_error, Internal, code);
+    return Status::Ok();
+  }
+
   Status BindAndExecuteCurrentRow(PGconn* pg_conn,
                                   adbc::driver::pgwire::UniqueResult* result_out,
                                   int result_format) {
@@ -531,9 +544,7 @@ struct BindStream {
       if (!is_null_param[col]) {
         // Note that this Write() call currently writes the (int32_t) byte size of the
         // field in addition to the serialized value.
-        UNWRAP_NANOARROW(
-            na_error, Internal,
-            bind_field_writers[col]->Write(&param_buffer.value, field_row, &na_error));
+        UNWRAP_STATUS(WriteParameter(col, field_row));
       } else {
         UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
       }
@@ -736,9 +747,7 @@ struct BindStream {
         if (is_null) {
           UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
         } else {
-          UNWRAP_NANOARROW(
-              na_error, Internal,
-              bind_field_writers[col]->Write(&param_buffer.value, field_row, &na_error));
+          UNWRAP_STATUS(WriteParameter(col, field_row));
         }
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {

@@ -153,9 +153,15 @@ identified by Task010 are release decisions, not a blanket type deferral.
 Task010i1's bounded SUPER JSON-subset generated-ingest slice is locally integrated
 and independently reviewed with rebuilt/installed offline gates. Native acceptance
 and lossless SUPER reads remain open. Task010i2 adds useful bounded EWKB spatial
-read/generated hex-VARBYTE constructor writes and HLL serialization text writes
+read/generated raw-EWKB VARBYTE constructor writes and HLL serialization text writes
 plus all-HLL projection reads. Mixed HLL results and direct spatial/SUPER binds
 remain unsupported; no arbitrary SQL rewrite or binary fallback is selected.
 Vendor REPLACE still rejects before DROP, with existing CREATE residue/APPEND
-ownership boundaries. Exact source review, full rebuild and installed native
-acceptance remain required; none of these subsets implies all21 qualification.
+ownership boundaries. Source review and rebuilt installed offline gates passed;
+corrected native acceptance remains required. These subsets do not imply all21
+qualification.
+
+Task010j corrects generated spatial payloads to raw EWKB following installed
+POINT controls, and maps validated vendor payload errors to INVALID_ARGUMENT.
+Corrected full installed roundtrips remain pending; existing caps, null semantics,
+transaction ownership and unsupported routes stay unchanged.

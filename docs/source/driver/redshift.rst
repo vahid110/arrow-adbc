@@ -321,9 +321,12 @@ The bounded structural reader preserves bytes, Z/M axes and per-value SRID in
 both endian orders. Missing top-level GEOMETRY SRID means0; GEOGRAPHY requires
 an embedded SRID. It does not reproject, validate topology or infer a column CRS.
 The selected read payload cap is1,048,447 bytes. Generated writes accept at most
-500,000 EWKB bytes, passing owned ASCIIhex VARBYTE to ``ST_GeomFromEWKB`` and an
+500,000 EWKB bytes, passing owned raw EWKB VARBYTE to ``ST_GeomFromEWKB`` and an
 explicit ``::GEOGRAPHY`` cast where selected. Direct spatial parameter SQL is
-unsupported. Constructor/native boundary qualification remains pending.
+unsupported. Installed point controls accepted raw binary VARBYTE and rejected
+ASCIIhex VARBYTE; corrected generated-ingest roundtrip and full native boundary
+qualification remain pending. Invalid vendor payloads report INVALID_ARGUMENT;
+allocation and other internal failures retain INTERNAL status.
 
 HLLSKETCH uses ``large_utf8``, extension ``adbc.redshift.hllsketch``, matching SQL
 family and exact metadata::

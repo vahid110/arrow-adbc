@@ -1107,6 +1107,7 @@ TEST_F(IntervalPublicRecordingTest, TimetzGetObjectsParserEmitsOnlyKnownPrecisio
     EXPECT_FALSE(parsed.value().xdbc->xdbc_column_size);
   }
 }
+
 }  // namespace
 }  // namespace adbcpq
 
@@ -1393,7 +1394,7 @@ TEST_F(IntervalPublicRecordingTest,
                           owned, 16, &rows, &targets));
       EXPECT_FALSE(status.ok());
       AdbcError failure = ADBC_ERROR_INIT;
-      status.ToAdbc(&failure);
+      EXPECT_EQ(status.ToAdbc(&failure), ADBC_STATUS_INTERNAL);
       ASSERT_NE(failure.message, nullptr);
       EXPECT_NE(std::string_view(failure.message).find("allocation failed"),
                 std::string_view::npos);
@@ -1583,7 +1584,9 @@ TEST_F(IntervalPublicRecordingTest,
       if (kind == RedshiftEncodedKind::kHll)
         EXPECT_EQ(p.bytes, value);
       else {
-        EXPECT_EQ(testing::NumericHex(p.bytes.c_str()), value);
+        EXPECT_EQ(p.bytes, value);
+        EXPECT_EQ(p.physical_length, value.size());
+        EXPECT_NE(p.bytes.size(), value.size() * 2);
         const auto it =
             std::find_if(recording.queries.begin(), recording.queries.end(),
                          [](const auto& q) { return q.starts_with("INSERT "); });
@@ -1701,5 +1704,263 @@ TEST_F(IntervalPublicRecordingTest,
             ADBC_STATUS_OK);
   EXPECT_TRUE(recording.queries.empty());
 }
+
+TEST_F(IntervalPublicRecordingTest,
+       VendorMalformedValuesHavePublicInvalidArgumentAndPreserveOwner) {
+  for (int family = 0; family < 4; ++family)
+    for (bool stream : {false, true})
+      for (bool owned : {false, true}) {
+        recording.super_target = family == 0;
+        recording.encoded_target = family == 1 ? 72113 : family == 2 ? 72114 : 72115;
+        recording.transaction = owned ? PQTRANS_IDLE : PQTRANS_INTRANS;
+        recording.committed = 7;
+        recording.pending = owned ? 0 : 2;
+        recording.executions.clear();
+        recording.queries.clear();
+        ASSERT_EQ(
+            driver.ConnectionSetOption(
+                &connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                owned ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED, &error),
+            ADBC_STATUS_OK);
+        nanoarrow::UniqueSchema schema;
+        nanoarrow::UniqueArray array;
+        if (family == 0) {
+          ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+          ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(),
+                                        {"null", R"({"a":1,"a":2})"}),
+                    0);
+        } else {
+          const auto kind = family == 1   ? RedshiftEncodedKind::kGeometry
+                            : family == 2 ? RedshiftEncodedKind::kGeography
+                                          : RedshiftEncodedKind::kHll;
+          EncodedSchema(schema.get(), {kind});
+          ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+          ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+          ArrowBufferView malformed{};
+          malformed.data.as_char = "bad";
+          malformed.size_bytes = 3;
+          ASSERT_EQ(ArrowArrayAppendBytes(array->children[0], malformed), 0);
+          ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+          ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+        }
+        ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                            "owned", &error),
+                  ADBC_STATUS_OK);
+        ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                            ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                  ADBC_STATUS_OK);
+        if (stream) {
+          nanoarrow::UniqueArrayStream input;
+          adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+          ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                    ADBC_STATUS_OK);
+          EXPECT_FALSE(input->release);
+        } else {
+          ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                    ADBC_STATUS_OK);
+          EXPECT_FALSE(array->release);
+          EXPECT_FALSE(schema->release);
+        }
+        EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                  ADBC_STATUS_INVALID_ARGUMENT)
+            << family << ": " << Message();
+        EXPECT_EQ(std::string(error.sqlstate, sizeof(error.sqlstate)), std::string(5, 0));
+        EXPECT_TRUE(recording.executions.empty());
+        EXPECT_EQ(recording.committed, 7);
+        EXPECT_EQ(recording.pending, owned ? 0 : 2);
+        EXPECT_EQ(recording.transaction, owned ? PQTRANS_IDLE : PQTRANS_INTRANS);
+        EXPECT_EQ(
+            std::count(recording.queries.begin(), recording.queries.end(), "ROLLBACK"),
+            owned ? 1 : 0);
+        EXPECT_EQ(
+            std::count(recording.queries.begin(), recording.queries.end(), "COMMIT"), 0);
+        recording.transaction = PQTRANS_IDLE;
+        recording.pending = 0;
+      }
+}
+TEST_F(IntervalPublicRecordingTest,
+       HllMalformedDirectArrayAndStreamUseCurrentRowInvalidArgument) {
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll});
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    ASSERT_EQ(ArrowArrayAppendString(array->children[0], ArrowCharView("bad")), 0);
+    ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_param", &error),
+              ADBC_STATUS_OK);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+      ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                ADBC_STATUS_OK);
+    } else {
+      ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                ADBC_STATUS_OK);
+    }
+    recording.executions.clear();
+    nanoarrow::UniqueArrayStream output;
+    EXPECT_EQ(driver.StatementExecuteQuery(&statement, output.get(), nullptr, &error),
+              ADBC_STATUS_INVALID_ARGUMENT)
+        << Message();
+    EXPECT_TRUE(recording.executions.empty());
+    EXPECT_FALSE(output->release);
+  }
+}
+
+TEST_F(IntervalPublicRecordingTest,
+       SuperDuplicateLateErrorRetainsPrimaryAndOwnedRollbackForBothBatchPaths) {
+  for (size_t max_rows : {1, 16})
+    for (bool owned : {false, true})
+      for (bool fail_rollback : {false, true}) {
+        recording.transaction = owned ? PQTRANS_IDLE : PQTRANS_INTRANS;
+        recording.committed = 7;
+        recording.pending = owned ? 0 : 2;
+        recording.fail_rollback = fail_rollback;
+        recording.executions.clear();
+        recording.queries.clear();
+        nanoarrow::UniqueSchema schema;
+        ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
+        nanoarrow::UniqueArray first, late;
+        ASSERT_EQ(
+            testing::SuperBatch(schema.get(), first.get(),
+                                std::vector<std::optional<std::string>>(16, "null")),
+            0);
+        ASSERT_EQ(testing::SuperBatch(schema.get(), late.get(), {R"({"a":1,"a":2})"}), 0);
+        nanoarrow::UniqueArrayStream input;
+        ASSERT_EQ(ArrowBasicArrayStreamInit(input.get(), schema.get(), 2), 0);
+        ArrowBasicArrayStreamSetArray(input.get(), 0, first.get());
+        ArrowBasicArrayStreamSetArray(input.get(), 1, late.get());
+        BindStream bind;
+        bind.generated_super_ingest = true;
+        bind.SetBind(input.get());
+        ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+        auto* impl =
+            static_cast<std::shared_ptr<PostgresConnection>*>(connection.private_data);
+        PostgresType target, targets(PostgresTypeId::kRecord);
+        ASSERT_EQ((*impl)->type_resolver()->Find(72111, &target, nullptr), 0);
+        targets.AppendChild("amount", target);
+        int64_t rows = -1;
+        auto status = bind.ExecutePreparedRows((*impl)->conn(), "owned", "amount",
+                                               *(*impl)->type_resolver(), owned, max_rows,
+                                               &rows, &targets);
+        AdbcError failure = ADBC_ERROR_INIT;
+        EXPECT_EQ(status.ToAdbc(&failure), ADBC_STATUS_INVALID_ARGUMENT);
+        ASSERT_NE(failure.message, nullptr);
+        EXPECT_NE(std::string_view(failure.message).find("duplicate key"),
+                  std::string_view::npos);
+        if (failure.release) failure.release(&failure);
+        EXPECT_EQ(recording.executions.size(), max_rows == 1 ? 16 : 1);
+        EXPECT_EQ(recording.committed, 7);
+        EXPECT_EQ(rows, owned ? 0 : 16);
+        EXPECT_EQ(bind.cleanup_failed, owned && fail_rollback);
+        EXPECT_EQ(recording.pending,
+                  owned ? (fail_rollback ? recording.executions.size() : 0)
+                        : 2 + recording.executions.size());
+        EXPECT_EQ(
+            std::count(recording.queries.begin(), recording.queries.end(), "ROLLBACK"),
+            owned ? 1 : 0);
+      }
+}
+
+TEST_F(IntervalPublicRecordingTest,
+       SpatialLargeRawArrayAndStreamKeepNullPointersAndVarbyteIdentity) {
+  for (auto kind : {RedshiftEncodedKind::kGeometry, RedshiftEncodedKind::kGeography})
+    for (bool stream : {false, true}) {
+      recording.encoded_target = kind == RedshiftEncodedKind::kGeometry ? 72113 : 72114;
+      nanoarrow::UniqueSchema schema;
+      EncodedSchema(schema.get(), {kind});
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+      ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+      std::string value = testing::NumericHex("0102000020e610000088130000");
+      const auto zero = testing::NumericHex("00000000000000000000000000000000");
+      const auto one = testing::NumericHex("000000000000f03f000000000000f03f");
+      for (int i = 0; i < 5000; ++i) value += i % 2 ? one : zero;
+      ASSERT_GT(value.size(), 65536);
+      ASSERT_LT(value.size(), 500000);
+      for (int row = 0; row < 3; ++row) {
+        if (row != 1) {
+          ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
+        } else {
+          ArrowBufferView bytes{};
+          bytes.data.as_char = value.data();
+          bytes.size_bytes = value.size();
+          ASSERT_EQ(ArrowArrayAppendBytes(array->children[0], bytes), 0);
+        }
+        ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+      }
+      ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                          "owned", &error),
+                ADBC_STATUS_OK);
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                          ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                ADBC_STATUS_OK);
+      if (stream) {
+        nanoarrow::UniqueArrayStream input;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+        ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                  ADBC_STATUS_OK);
+        EXPECT_FALSE(input->release);
+      } else {
+        ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                  ADBC_STATUS_OK);
+        EXPECT_FALSE(array->release);
+        EXPECT_FALSE(schema->release);
+      }
+      recording.executions.clear();
+      ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                ADBC_STATUS_OK)
+          << Message();
+      ASSERT_EQ(recording.executions.size(), 1);
+      const auto& params = recording.executions[0];
+      ASSERT_EQ(params.size(), 3);
+      for (size_t row = 0; row < 3; ++row) {
+        EXPECT_EQ(params[row].oid, 72112);
+        EXPECT_EQ(params[row].format, 1);
+        EXPECT_EQ(params[row].null, row != 1);
+        EXPECT_EQ(params[row].physical_length, row == 1 ? value.size() : 0);
+        EXPECT_EQ(params[row].bytes, row == 1 ? value : std::string{});
+      }
+    }
+}
+
+class ErrnoFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit ErrnoFieldWriter(int code) : code_(code) {}
+  ArrowErrorCode Write(ArrowBuffer*, int64_t, ArrowError* error) override {
+    ArrowErrorSet(error, "fixed writer failure");
+    return code_;
+  }
+
+ private:
+  int code_;
+};
+TEST(IntervalParameterStatusTest,
+     VendorInvalidArgumentDoesNotRemapOtherFailuresOrFields) {
+  for (int code : {0, EINVAL, ENOMEM, EIO, EOVERFLOW})
+    for (int family = 0; family < 5; ++family) {
+      BindStream bind;
+      ArrowBufferInit(&bind.param_buffer.value);
+      bind.json_parse_fields = {family == 1, true};
+      bind.encoded_fields = {family == 2   ? RedshiftEncodedKind::kGeometry
+                             : family == 3 ? RedshiftEncodedKind::kGeography
+                             : family == 4 ? RedshiftEncodedKind::kHll
+                                           : RedshiftEncodedKind::kNone,
+                             RedshiftEncodedKind::kHll};
+      bind.bind_field_writers.push_back(std::make_unique<ErrnoFieldWriter>(code));
+      const auto status = bind.WriteParameter(0, 0);
+      AdbcError failure = ADBC_ERROR_INIT;
+      EXPECT_EQ(status.ToAdbc(&failure), code == 0 ? ADBC_STATUS_OK
+                                         : code == EINVAL && family != 0
+                                             ? ADBC_STATUS_INVALID_ARGUMENT
+                                             : ADBC_STATUS_INTERNAL);
+      if (failure.release) failure.release(&failure);
+    }
+}
+
 }  // namespace
 }  // namespace adbcpq

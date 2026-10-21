@@ -332,11 +332,15 @@ class VendorPublicTest(unittest.TestCase):
         with self.assertRaises(adm.Error):
             self.query(f'SELECT amount FROM "{self.table}"')
         before = self.query(f'SELECT count(*) AS n FROM "{self.table}"')
-        with self.assertRaises(adm.Error):
-            self.ingest("append", ['{"a":1,"\\u0061":2}'], True)
-        self.assertEqual(
-            self.query(f'SELECT count(*) AS n FROM "{self.table}"'), before
-        )
+        for stream in (False, True):
+            with self.assertRaises(adm.Error) as failure:
+                self.ingest("append", ['{"a":1,"\\u0061":2}'], stream)
+            self.assertEqual(
+                failure.exception.status_code, adm.AdbcStatusCode.INVALID_ARGUMENT
+            )
+            self.assertEqual(
+                self.query(f'SELECT count(*) AS n FROM "{self.table}"'), before
+            )
 
 
 if __name__ == "__main__":

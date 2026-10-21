@@ -66,7 +66,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | HLLSKETCH | C-serialization all-HLL only,NQ | C-text subset,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_utf8 serialized sketch |
 | SUPER | C-opaque,NQ; serialized VARCHAR test only | N | N / N | C-name only | JSON extension only after losslessness proof |
 | VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,NQ | C-raw/provisional size cap,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
-| GEOMETRY | C-bounded EWKB,NQ | C-generated hex constructor,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, per-value SRID |
+| GEOMETRY | C-bounded EWKB,NQ | C-generated raw constructor,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, per-value SRID |
 | GEOGRAPHY | C-bounded EWKB,NQ | C-generated constructor/cast,NQ | C-DDL / exact target,NQ | C-family/extension,NQ | large_binary EWKB, explicit per-value SRID |
 
 L covers installed C archive and Linux x86-64 wheel, temporary IAM/verify-full TLS,
@@ -701,9 +701,12 @@ ISO offset variants and conflicting nested SRIDs reject. A missing top-level
 GEOMETRY SRID means0; GEOGRAPHY requires an embedded SRID. Empty POINT requires
 all ordinates NaN, other coordinates finite. Structure validation is not topology
 or reprojection. The local read payload cap is1,048,447 bytes, not full native
-boundary proof. Generated writes cap raw bytes at500,000, emit owned ASCIIhex as
+boundary proof. Generated writes cap raw bytes at500,000, pass owned raw EWKB as
 VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
-spatial binding stays unsupported; live constructor semantics remain unqualified.
+spatial binding stays unsupported. Installed POINT controls accepted raw binary
+VARBYTE and rejected ASCIIhex VARBYTE; corrected generated-ingest roundtrip and
+full native boundary qualification remain pending. Vendor payload EINVAL maps to
+INVALID_ARGUMENT at both bind paths; allocation/other failures remain INTERNAL.
 
 HLL uses `large_utf8`, `adbc.redshift.hllsketch` and exact
 `{"version":1,"encoding":"redshift-serialized","logm":15}` plus HLLSKETCH identity.

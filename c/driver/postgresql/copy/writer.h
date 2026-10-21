@@ -1029,21 +1029,15 @@ class RedshiftEncodedFieldWriter : public PostgresCopyFieldWriter {
     else
       NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(
           bytes, kind_ == RedshiftEncodedKind::kGeography, true, error));
-    const int64_t physical = hll ? bytes.size_bytes + 1 : bytes.size_bytes * 2;
+    const int64_t physical = hll ? bytes.size_bytes + 1 : bytes.size_bytes;
     NANOARROW_RETURN_NOT_OK(
         RedshiftTimetzSchema::Reserve(buffer, physical + 4, error, allocation_));
     WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(physical));
+    // Binary VARBYTE constructor parameters contain raw EWKB, not display hex.
+    ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
     if (hll) {
-      ArrowBufferAppendUnsafe(buffer, bytes.data.data, bytes.size_bytes);
       const char zero = 0;
       ArrowBufferAppendUnsafe(buffer, &zero, 1);
-    } else {
-      static constexpr char hex[] = "0123456789abcdef";
-      for (int64_t i = 0; i < bytes.size_bytes; ++i) {
-        const uint8_t b = bytes.data.as_uint8[i];
-        const char pair[2] = {hex[b >> 4], hex[b & 15]};
-        ArrowBufferAppendUnsafe(buffer, pair, 2);
-      }
     }
     return NANOARROW_OK;
   }

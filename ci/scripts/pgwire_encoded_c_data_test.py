@@ -104,13 +104,11 @@ class EncodedCDataTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(batch.column(1).to_pylist(), [value, None])
             wire = batch.column(0)[0].as_py()
-            payload = (
-                value.encode() + b"\0"
-                if family == "HLLSKETCH"
-                else value.hex().encode()
-            )
+            payload = value.encode() + b"\0" if family == "HLLSKETCH" else value
             self.assertEqual(struct.unpack("!i", wire[:4])[0], len(payload))
             self.assertEqual(wire[4:], payload)
+            if family != "HLLSKETCH":
+                self.assertNotEqual(wire[4:], value.hex().encode())
             self.assertEqual(
                 batch.schema.field(1).metadata[b"ARROW:extension:name"],
                 encoded_field(family).metadata[b"ARROW:extension:name"],
@@ -121,6 +119,25 @@ class EncodedCDataTest(unittest.TestCase):
             restored = pa.ipc.open_stream(sink.getvalue()).read_next_batch()
             self.assertEqual(restored.schema, batch.schema)
             self.assertEqual(restored.to_pylist(), batch.to_pylist())
+
+    def test_large_spatial_raw_payload_and_null_keep_exact_c_data_bytes(self):
+        for family in ("GEOMETRY", "GEOGRAPHY"):
+            # Finite owned LINESTRING with an embedded SRID, larger than64KiB.
+            value = struct.pack("<BIII", 1, 0x20000002, 4326, 5000) + b"".join(
+                struct.pack("<dd", float(i % 2), float(i % 2)) for i in range(5000)
+            )
+            code, batch = self.apply(family, [None, value, None])
+            self.assertEqual(code, 0)
+            self.assertEqual(batch.column(1).to_pylist(), [None, value, None])
+            self.assertEqual(batch.column(0).null_count, 2)
+            wire = batch.column(0)[1].as_py()
+            self.assertGreater(len(value), 65536)
+            self.assertLess(len(value), 500000)
+            self.assertEqual(struct.unpack("!i", wire[:4])[0], len(value))
+            self.assertEqual(wire[4:], value)
+            self.assertNotEqual(wire[4:], value.hex().encode())
+            # ASCIIhex is not an EWKB application input either.
+            self.assertNotEqual(self.apply(family, [value.hex().encode()])[0], 0)
 
     def test_spatial_srid_nan_endian_and_structural_rejections(self):
         empty = bytes.fromhex("0101000000000000000000f87f000000000000f87f")

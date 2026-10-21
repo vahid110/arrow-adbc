@@ -24,9 +24,12 @@ Task010i1 SUPER JSON-subset generated ingest is locally integrated after indepen
 source approval and full rebuilt/installed offline validation. Native acceptance
 is still pending; it is not lossless native SUPER reading. Task010i2 adds bounded
 spatial EWKB read/generated-constructor write and HLL serialization text binds,
-generated ingest and all-HLL result projections. Its source/full installed/native
-validation is pending. Mixed HLL projections, direct spatial/SUPER binds and
-native SUPER read losslessness remain unsupported. Vendor REPLACE rejects before
+generated ingest and all-HLL result projections. It is locally integrated after
+independent source review and rebuilt installed offline validation. Task010j
+corrects vendor payload status mapping and generated spatial writes to raw EWKB
+VARBYTE, following installed POINT constructor controls; corrected full installed
+roundtrips and broad native qualification remain pending. Mixed HLL projections,
+direct spatial/SUPER binds and native SUPER read losslessness remain unsupported. Vendor REPLACE rejects before
 ownership/DDL; CREATE residue and APPEND ownership remain as documented. The
 existing VARBYTE binary codec is unchanged.
 

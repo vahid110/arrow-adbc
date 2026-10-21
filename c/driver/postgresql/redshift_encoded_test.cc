@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 #include "bind_stream.h"
 #include "copy/reader.h"
@@ -151,17 +152,18 @@ TEST(RedshiftEncodedTest, StorageRoutesBackendAndDynamicIdentity) {
     EXPECT_NE(RedshiftEncodedSchema::Parse(schema.get(), true, &parsed, &error), 0);
   }
 }
-TEST(RedshiftEncodedTest, ActualOwnedWriterPhysicalNulAndSpatialHex) {
+TEST(RedshiftEncodedTest, ActualOwnedWriterPhysicalNulAndSpatialRawBytes) {
   ArrowError error{};
-  for (auto kind : {RedshiftEncodedKind::kGeometry, RedshiftEncodedKind::kGeography,
-                    RedshiftEncodedKind::kHll}) {
+  std::vector<std::pair<RedshiftEncodedKind, std::string>> samples;
+  for (auto sample : kRetainedSpatial)
+    samples.emplace_back(sample.geography ? RedshiftEncodedKind::kGeography
+                                          : RedshiftEncodedKind::kGeometry,
+                         Unhex(sample.hex));
+  for (auto sample : kRetainedHll)
+    samples.emplace_back(RedshiftEncodedKind::kHll, sample);
+  for (const auto& [kind, value] : samples) {
     nanoarrow::UniqueSchema schema;
     EncodedField(schema.get(), kind);
-    const std::string value =
-        kind == RedshiftEncodedKind::kHll
-            ? std::string(kRetainedHll[0])
-            : Unhex(kind == RedshiftEncodedKind::kGeometry ? kRetainedSpatial[0].hex
-                                                           : kRetainedSpatial[36].hex);
     nanoarrow::UniqueArray array;
     ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
     ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
@@ -176,7 +178,7 @@ TEST(RedshiftEncodedTest, ActualOwnedWriterPhysicalNulAndSpatialHex) {
     nanoarrow::UniqueBuffer wire;
     ASSERT_EQ(writer->Write(wire.get(), 0, &error), 0);
     const int64_t size =
-        kind == RedshiftEncodedKind::kHll ? value.size() + 1 : value.size() * 2;
+        kind == RedshiftEncodedKind::kHll ? value.size() + 1 : value.size();
     EXPECT_EQ(wire->size_bytes, 4 + size);
     auto bytes =
         Bytes(std::string_view(reinterpret_cast<char*>(wire->data), wire->size_bytes));
@@ -185,7 +187,7 @@ TEST(RedshiftEncodedTest, ActualOwnedWriterPhysicalNulAndSpatialHex) {
       EXPECT_EQ(std::string_view(bytes.data.as_char, value.size()), value);
       EXPECT_EQ(bytes.data.as_char[value.size()], 0);
     } else
-      EXPECT_EQ(Unhex(std::string_view(bytes.data.as_char, size)), value);
+      EXPECT_EQ(std::string_view(bytes.data.as_char, size), value);
   }
 }
 TEST(RedshiftEncodedTest, TypedReaderPreservesBytesAndValidPrefixAcrossNulls) {
