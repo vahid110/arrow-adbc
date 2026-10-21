@@ -145,9 +145,10 @@ PGresult* VendorResult(std::string_view query, int format,
                       value ? static_cast<int>(std::strlen(value)) : -1))
         std::abort();
       if (columns == 2) {
-        char id[4]{};
-        id[3] = static_cast<char>(row + 1);
-        if (!PQsetvalue(out, row, 1, id, 4)) std::abort();
+        // OID67009 in the recording catalog is int8, not int4.
+        char id[8]{};
+        id[7] = static_cast<char>(row + 1);
+        if (!PQsetvalue(out, row, 1, id, 8)) std::abort();
       }
     }
     return out;
@@ -2135,7 +2136,7 @@ TEST_F(IntervalPublicRecordingTest,
       nanoarrow::UniqueSchema source;
       ArrowSchemaInit(source.get());
       ASSERT_EQ(ArrowSchemaSetTypeStruct(source.get(), 1), 0);
-      ASSERT_EQ(ArrowSchemaSetType(source->children[0], NANOARROW_TYPE_INT32), 0);
+      ASSERT_EQ(ArrowSchemaSetType(source->children[0], NANOARROW_TYPE_INT64), 0);
       ASSERT_EQ(ArrowSchemaSetName(source->children[0], "id"), 0);
       nanoarrow::UniqueArray input;
       ASSERT_EQ(ArrowArrayInitFromSchema(input.get(), source.get(), nullptr), 0);
@@ -2183,11 +2184,15 @@ TEST_F(IntervalPublicRecordingTest,
       EXPECT_EQ(end->release, nullptr);
       EXPECT_EQ(recording.vendor_result_calls, invalid ? 1 : 2);
       ASSERT_EQ(recording.executions.size(), invalid ? 1 : 2);
+      int row = 0;
       for (const auto& parameters : recording.executions) {
         ASSERT_EQ(parameters.size(), 1);
         EXPECT_EQ(parameters[0].oid, 67009U);
         EXPECT_EQ(parameters[0].format, 1);
-        EXPECT_EQ(parameters[0].bytes.size(), 4);
+        EXPECT_EQ(parameters[0].bytes.size(), 8);
+        std::string expected(8, '\0');
+        expected[7] = static_cast<char>(7 + row++);
+        EXPECT_EQ(parameters[0].bytes, expected);
       }
     }
 }
