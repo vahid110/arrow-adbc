@@ -752,4 +752,7 @@ same wire NULL, so the driver cannot reconstruct their original distinction.
 Received nonnull JSON `null` remains nonnull. Original input spelling, native
 numeric subtype/precision and lossless SUPER roundtrip are not promised. The
 native output marker cannot silently become the separate JSON-subset write input.
-Corrected installed live verification is pending.
+Bounded installed macOS arm64 live qualification verified native SUPER through
+Python in Arrow temporal mode and standalone C in lossless temporal mode. The
+original C Arrow-mode fixture failure remains recorded; its corrected case was
+not rerun. See [current qualification results](STATUS.md) for scope and limits.

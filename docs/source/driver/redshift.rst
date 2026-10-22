@@ -332,7 +332,12 @@ Numeric spellings reflect server output, not pre-ingestion tokens or native
 numeric subtype/precision. This is an observable-wire contract, not a lossless
 SUPER object codec. The output marker is rejected as write input; applications
 must explicitly construct the separately validated JSON-subset input contract.
-Corrected installed live verification remains pending.
+Bounded installed macOS arm64 live qualification verified native SUPER through
+Python in Arrow temporal mode and standalone C in lossless temporal mode. The
+original C Arrow-mode fixture failure remains recorded; its corrected case was
+not rerun. See the
+`current qualification results <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/STATUS.md>`__
+for scope and limits.
 
 
 Spatial EWKB and HLL serialization subsets
