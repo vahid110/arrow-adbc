@@ -20,25 +20,37 @@
 # Status
 
 
-Task010i1/i2/j/k are locally integrated at `a239f66cc`, after independent exact
-source approval and rebuilt/installed 35-stage offline validation. On 2026-10-21,
-operation `726f4b3594e048e29f4571b2770549c3` passed all 18 fixed installed-driver
-cases on macOS arm64: 15 positive cases and three expected rejection boundaries,
-102 public API calls, no early stop. That batch tested `a239f66cc`; it does not verify Task010q. The cases cover
-SUPER JSON-subset generated CREATE/APPEND, spatial CREATE/readback with EWKB,
-metadata and native witnesses, HLL CREATE/readback and typed text parameters,
-and VARBYTE binary CREATE/readback. Spatial/HLL APPEND was not exercised.
-The child was reaped and its fixture and handles cleaned up. A separate admin
-observer and the root's owned-resource checks verified all seven owned resource
-classes absent. Actual billing is not reconciled.
+Task010q/q1 implements native SUPER observable JSON-wire reads at
+`26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
+and rebuilt installed-artifact validation. Isolated live qualification on macOS
+arm64 completed on 2026-10-22 against that source:
 
-This bounded installed subset does not close all 21 types, full domains/size
-boundaries, every metadata API or portable-platform qualification. Task010q adds native SUPER observable JSON-wire reads, preserving received numeric
-spellings and wire NULLs with a separate output-only schema. Corrected installed
-live verification is pending. The retained protocol collapses SQL NULL and parsed
-JSON null; native subtype/input-lexeme losslessness is not claimed. Direct
-SUPER/spatial binds and mixed HLL output remain explicitly unsupported. Vendor REPLACE rejects before ownership/DDL; CREATE residue and
-APPEND ownership remain as documented. The VARBYTE binary codec is unchanged.
+| Installed artifact route | Result | Scope |
+|---|---|---|
+| Python, Arrow temporal mode | 76/76 passed | Native SUPER, decimal precision, temporal/TIMETZ, interval qualifiers, large values and mixed results |
+| Python, lossless temporal mode | 11/11 passed | Exact native temporal counts, TIMETZ and wide timestamp reads |
+| Python writes | 60/60 passed | 48 positive decimal/temporal/TIMETZ create/stream/append cases; 12 unsupported interval-target rejection and retention cases |
+| Standalone C, Arrow temporal mode | 22/23 passed | Original `super.native` fixture length mismatch retained; remaining cases passed |
+| Standalone C, interval reads | 37/37 passed | Fixed qualifier/precision columns and exact Arrow schemas/buffers |
+| Standalone C, lossless temporal mode | 24/24 passed | Corrected SUPER fixture, decimal/temporal/TIMETZ, large and mixed reads |
+
+The C SUPER fixture now constructs JSON backslashes explicitly with `CHR(92)`;
+its unchanged expected bytes passed through the same native SUPER decoder in the
+lossless C leg. The corrected Arrow-mode C case was **not rerun**: its original
+failure is not relabeled as a pass. The earlier Python lossless attempt stopped
+before native cases at the strict installed-wheel cleanliness gate; the clean
+successor passed all 11 cases. Every isolated attempt completed verified full
+teardown, including all seven owned resource classes and independent database
+cleanup checks. Actual billing is not reconciled.
+
+Native SUPER preserves received numeric spellings and wire NULLs in a separate
+output-only schema. The retained protocol collapses SQL NULL and parsed JSON
+null; input-lexeme/native-subtype losslessness is not claimed. These results do
+not claim positive interval ingestion, complete domains, every metadata API or
+cross-platform live qualification. Direct SUPER/spatial binds and mixed HLL
+output remain unsupported. Vendor REPLACE and actual interval-target writes
+retain their fail-closed boundaries. Final exact-head review, push and applicable
+green CI remain before integration; no release-ready claim is made.
 
 Current state only; history is in git and PR descriptions.
 
@@ -111,8 +123,9 @@ Current state only; history is in git and PR descriptions.
   retain protocol observations and failures separately from installed-driver
   acceptance. Synthetic/local PostgreSQL evidence does not qualify Redshift;
   platform CI follows the local-first workflow. Full temporal/domain/precision,
-  character/binary size, interval qualifier and lossless native SUPER qualification
-  remain open before Task009. No paid operation is performed or authorized here.
+  character/binary size and interval constraint-producer qualification remain
+  open before Task009. The bounded native SUPER and interval read results above
+  do not imply input-subtype losslessness or supported interval ingestion. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
