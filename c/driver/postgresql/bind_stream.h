@@ -97,6 +97,7 @@ struct BindStream {
   bool has_expected_types = false;
   bool generated_super_ingest = false;
   std::vector<bool> json_parse_fields;
+  std::vector<bool> bytes_fields;
   bool has_super_fields = false;
   bool has_encoded_fields = false;
   std::vector<RedshiftEncodedKind> encoded_fields;
@@ -207,6 +208,7 @@ struct BindStream {
     bind_field_writers.resize(bind_schema->n_children);
     timetz_fields.resize(bind_schema->n_children, false);
     json_parse_fields.assign(bind_schema->n_children, false);
+    bytes_fields.assign(bind_schema->n_children, false);
     has_super_fields = false;
     has_encoded_fields = false;
     encoded_fields.assign(bind_schema->n_children, RedshiftEncodedKind::kNone);
@@ -336,6 +338,9 @@ struct BindStream {
                               /*disable_decimal_fast_path=*/false, &na_error,
                               generated_super_ingest));
 
+      bytes_fields[i] =
+          bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
+                              writer_target->bytes_kind() != RedshiftBytesKind::kNone);
       param_types[i] =
           writer_target &&
                   (writer_target->type_id() == PostgresTypeId::kTimetz ||
@@ -512,8 +517,8 @@ struct BindStream {
     const int code =
         bind_field_writers[column]->Write(&param_buffer.value, field_row, &na_error);
     // These schema-selected writers validate application payloads before writing.
-    // Keep allocator/other failures and ordinary writers on the Internal path.
-    if (code == EINVAL && (json_parse_fields[column] ||
+    // Keep allocator/other failures and non-validating writers on the Internal path.
+    if (code == EINVAL && (bytes_fields[column] || json_parse_fields[column] ||
                            encoded_fields[column] != RedshiftEncodedKind::kNone)) {
       return Status::InvalidArgument(na_error.message);
     }

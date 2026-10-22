@@ -27,6 +27,7 @@
 #include "bind_stream.h"
 #include "copy/reader.h"
 #include "copy/writer.h"
+#include "driver/framework/utility.h"
 #include "redshift_bytes_test_fixture.h"
 
 namespace adbcpq {
@@ -76,6 +77,63 @@ class BytesWriteCase {
   std::unique_ptr<PostgresCopyFieldWriter> writer;
   ArrowError error{};
 };
+class FixedFailureWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit FixedFailureWriter(int code) : code_(code) {}
+  ArrowErrorCode Write(ArrowBuffer*, int64_t, ArrowError* error) override {
+    ArrowErrorSet(error, "fixed writer failure");
+    return code_;
+  }
+
+ private:
+  int code_;
+};
+
+TEST(RedshiftBytesTest, ParameterValidationErrorsAreInvalidArguments) {
+  struct Case {
+    ArrowType storage;
+    const char* family;
+    const char* width;
+    std::string value;
+  };
+  for (const auto& item :
+       {Case{NANOARROW_TYPE_STRING, "CHAR", "4", testing::NumericHex("c2a0")},
+        Case{NANOARROW_TYPE_STRING, "VARCHAR", "4", "abcde"},
+        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "4", "abcde"},
+        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", std::string(1000001, 'x')},
+        Case{NANOARROW_TYPE_STRING, nullptr, nullptr, std::string("a\0b", 3)}}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ArrowError error{};
+    ASSERT_EQ(testing::BytesSchema(schema.get(), item.storage, item.family, item.width),
+              0);
+    ASSERT_EQ(testing::BytesBatch(schema.get(), array.get(), {item.value}, &error), 0);
+    nanoarrow::UniqueArrayStream stream;
+    adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+    BindStream bind;
+    bind.SetBind(stream.get());
+    ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+    std::shared_ptr<PostgresTypeResolver> resolver;
+    ASSERT_EQ(testing::BytesResolver(BackendProfile::Redshift(), &resolver), 0);
+    ASSERT_TRUE(bind.SetParamTypes(nullptr, *resolver, true).ok());
+    ASSERT_TRUE(bind.PullNextArray().ok());
+    EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INVALID_ARGUMENT);
+    EXPECT_EQ(bind.param_buffer->size_bytes, 0);
+    bind.bind_field_writers[0] = std::make_unique<FixedFailureWriter>(ENOMEM);
+    EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+  }
+}
+
+TEST(RedshiftBytesTest, OrdinaryPostgresWriterErrorsRemainInternal) {
+  BindStream bind;
+  ArrowBufferInit(&bind.param_buffer.value);
+  bind.bytes_fields = {false};
+  bind.json_parse_fields = {false};
+  bind.encoded_fields = {RedshiftEncodedKind::kNone};
+  bind.bind_field_writers.push_back(std::make_unique<FixedFailureWriter>(EINVAL));
+  EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+}
+
 TEST(RedshiftBytesTest, LiteralWirePreservesUtf8SpacesQuotesBackslashesAndRawBinary) {
   BytesWriteCase text;
   ASSERT_EQ(text.Init(NANOARROW_TYPE_STRING, "VARCHAR", "20",

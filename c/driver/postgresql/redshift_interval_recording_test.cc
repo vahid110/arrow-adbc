@@ -2025,6 +2025,7 @@ TEST(IntervalParameterStatusTest,
       BindStream bind;
       ArrowBufferInit(&bind.param_buffer.value);
       bind.json_parse_fields = {family == 1, true};
+      bind.bytes_fields = {false, false};
       bind.encoded_fields = {family == 2   ? RedshiftEncodedKind::kGeometry
                              : family == 3 ? RedshiftEncodedKind::kGeography
                              : family == 4 ? RedshiftEncodedKind::kHll
