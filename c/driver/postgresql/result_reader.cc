@@ -215,7 +215,8 @@ Status PqResultArrayReader::SelectDescribedResult() {
   UNWRAP_STATUS(SelectVendorResultFormat(output, &result_format_));
   bool encoded = false;
   for (int i = 0; i < output.n_children(); ++i)
-    encoded |= output.child(i).encoded_kind() != RedshiftEncodedKind::kNone;
+    encoded |= output.child(i).encoded_kind() != RedshiftEncodedKind::kNone ||
+               output.child(i).is_redshift_super();
   if (encoded) {
     described_.reset(helper_.CopyDescriptor());
     if (!described_)

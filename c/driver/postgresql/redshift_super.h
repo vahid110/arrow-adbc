@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <new>
 #include <string>
@@ -130,6 +131,86 @@ struct RedshiftSuperSchema {
    public:
     explicit Scanner(std::string_view text) : text_(text) {}
     bool Run() { return Value(0) && (Space(), pos_ == text_.size()); }
+
+    // Native output keeps lexical bytes and allows duplicate keys. Unlike the
+    // stricter input scanner it needs no key allocations or recursive descent.
+    bool RunNative() {
+      enum State : uint8_t {
+        kRoot,
+        kDone,
+        kArrayFirst,
+        kArrayValue,
+        kArrayAfter,
+        kObjectFirst,
+        kObjectKey,
+        kObjectColon,
+        kObjectValue,
+        kObjectAfter
+      };
+      std::array<State, 1001> states{};
+      size_t depth = 0;
+      states[0] = kRoot;
+      while (true) {
+        Space();
+        switch (states[depth]) {
+          case kDone:
+            return depth == 0 && pos_ == text_.size();
+          case kRoot:
+          case kArrayValue:
+          case kObjectValue: {
+            const auto parent = states[depth];
+            states[depth] = parent == kRoot         ? kDone
+                            : parent == kArrayValue ? kArrayAfter
+                                                    : kObjectAfter;
+            if (pos_ == text_.size()) return false;
+            if (text_[pos_] == '[' || text_[pos_] == '{') {
+              if (depth == states.size() - 1) return false;
+              const bool object = text_[pos_++] == '{';
+              states[++depth] = object ? kObjectFirst : kArrayFirst;
+            } else if (!Scalar()) {
+              return false;
+            }
+            break;
+          }
+          case kArrayFirst:
+            if (Take(']'))
+              --depth;
+            else
+              states[depth] = kArrayValue;
+            break;
+          case kArrayAfter:
+            if (Take(']'))
+              --depth;
+            else if (Take(','))
+              states[depth] = kArrayValue;
+            else
+              return false;
+            break;
+          case kObjectFirst:
+            if (Take('}'))
+              --depth;
+            else
+              states[depth] = kObjectKey;
+            break;
+          case kObjectKey:
+            if (!String()) return false;
+            states[depth] = kObjectColon;
+            break;
+          case kObjectColon:
+            if (!Take(':')) return false;
+            states[depth] = kObjectValue;
+            break;
+          case kObjectAfter:
+            if (Take('}'))
+              --depth;
+            else if (Take(','))
+              states[depth] = kObjectKey;
+            else
+              return false;
+            break;
+        }
+      }
+    }
 
    private:
     std::string_view text_;
@@ -259,6 +340,10 @@ struct RedshiftSuperSchema {
         } while (Take(','));
         return false;
       }
+      return Scalar();
+    }
+    bool Scalar() {
+      if (pos_ == text_.size()) return false;
       if (text_[pos_] == '"') return String();
       if (text_[pos_] == 't') return Literal("true");
       if (text_[pos_] == 'f') return Literal("false");
@@ -279,6 +364,87 @@ struct RedshiftSuperSchema {
       ArrowErrorSet(error, "[Redshift] SUPER JSON validation allocation failed");
       return ENOMEM;
     }
+    return NANOARROW_OK;
+  }
+};
+
+// Observable native output only. Wire NULL cannot recover a distinction the
+// server did not transmit; numeric subtype and input lexemes are not inferred.
+struct RedshiftSuperResultSchema {
+  static constexpr std::string_view kExtension = "adbc.redshift.super.native_json";
+  static constexpr std::string_view kMetadata =
+      R"({"version":1,"encoding":"redshift-json-wire","scope":"native-result","numbers":"lexemes","nulls":"wire-null"})";
+  static constexpr int64_t kMaxBytes = 16777216;
+
+  static ArrowErrorCode Invalid(ArrowError* error, const char* reason) {
+    ArrowErrorSet(error, "[Redshift] Invalid native SUPER result: %s", reason);
+    return EINVAL;
+  }
+  static ArrowErrorCode SetSchema(ArrowSchema* schema) {
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaSetType(schema, NANOARROW_TYPE_LARGE_STRING));
+    nanoarrow::UniqueBuffer metadata;
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
+    for (const auto& item : {std::pair<std::string_view, std::string_view>{
+                                 "ARROW:extension:name", kExtension},
+                             {"ARROW:extension:metadata", kMetadata},
+                             {"ADBC:redshift:sql_type", "SUPER"}})
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataBuilderAppend(
+          metadata.get(),
+          ArrowStringView{item.first.data(), static_cast<int64_t>(item.first.size())},
+          ArrowStringView{item.second.data(), static_cast<int64_t>(item.second.size())}));
+    return ArrowSchemaSetMetadata(schema, reinterpret_cast<char*>(metadata->data));
+  }
+  static ArrowErrorCode Parse(const ArrowSchema* schema, ArrowError* error) {
+    ArrowSchemaView view{};
+    NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&view, schema, error));
+    if (view.type != NANOARROW_TYPE_LARGE_STRING || schema->dictionary ||
+        schema->n_children ||
+        (schema->flags & ~static_cast<int64_t>(ARROW_FLAG_NULLABLE)))
+      return Invalid(error, "requires plain large_utf8");
+    for (const auto& item : {std::pair<std::string_view, std::string_view>{
+                                 "ARROW:extension:name", kExtension},
+                             {"ARROW:extension:metadata", kMetadata},
+                             {"ADBC:redshift:sql_type", "SUPER"}}) {
+      std::optional<std::string_view> value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, item.first.data(), &value, error));
+      if (!value || *value != item.second)
+        return Invalid(error, "missing/contradictory metadata");
+    }
+    for (const char* key : {"POSTGRESQL:type", "ADBC:postgresql:typname"}) {
+      std::optional<std::string_view> value;
+      NANOARROW_RETURN_NOT_OK(
+          RedshiftDecimalSchema::Metadata(schema, key, &value, error));
+      if (value && *value != "super")
+        return Invalid(error, "contradictory type identity");
+    }
+    std::optional<std::string_view> raw;
+    NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
+        schema, "ADBC:redshift:type_modifier", &raw, error));
+    if (raw) {
+      int32_t value;
+      NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Integer(*raw, &value, error));
+    }
+    ArrowMetadataReader reader;
+    NANOARROW_RETURN_NOT_OK(ArrowMetadataReaderInit(&reader, schema->metadata));
+    while (reader.remaining_keys) {
+      ArrowStringView key{}, value{};
+      NANOARROW_RETURN_NOT_OK(ArrowMetadataReaderRead(&reader, &key, &value));
+      const std::string_view name(key.data, key.size_bytes);
+      if (name.starts_with("ADBC:redshift:") && name != "ADBC:redshift:sql_type" &&
+          name != "ADBC:redshift:type_modifier")
+        return Invalid(error, "conflicting metadata");
+    }
+    return NANOARROW_OK;
+  }
+  static ArrowErrorCode Validate(ArrowBufferView bytes, ArrowError* error) {
+    if (bytes.size_bytes <= 0 || bytes.size_bytes > kMaxBytes || !bytes.data.data)
+      return Invalid(error, "received byte limit");
+    NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::ValidateUtf8(bytes, false, error));
+    if (!RedshiftSuperSchema::Scanner(
+             std::string_view(bytes.data.as_char, bytes.size_bytes))
+             .RunNative())
+      return Invalid(error, "JSON grammar or nesting depth");
     return NANOARROW_OK;
   }
 };

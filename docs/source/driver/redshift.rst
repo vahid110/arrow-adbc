@@ -221,8 +221,8 @@ Type mapping (query results)
      - ``date32``, ``time64[us]``, ``timestamp[us]``, ``timestamp[us, UTC]``
 
 Timestamps outside Arrow's signed 64-bit microsecond range return an error.
-``SUPER`` has no lossless native read mapping. Spatial EWKB and HLL serialization
-subsets are described below. Explicit
+``SUPER`` native results use a bounded JSON wire representation described below.
+Spatial EWKB and HLL serialization subsets are also described below. Explicit
 ``JSON_SERIALIZE(super_column)`` can return text for values that fit Redshift's
 ``VARCHAR`` limit; it is not a lossless strategy for arbitrary ``SUPER`` values.
 
@@ -307,9 +307,37 @@ Full numeric subtype/precision and native read losslessness are not promised.
 
 SUPER REPLACE is rejected before DROP. CREATE and missing CREATE_APPEND may leave
 a new empty table after a subsequent payload failure; APPEND retains existing data
-transaction ownership. Raw native SUPER reads and direct SUPER/spatial binding remain unsupported.
-The fixed installed JSON-subset cases passed; native SUPER read losslessness
-and broader qualification remain open.
+transaction ownership. Direct SUPER/spatial binding remains unsupported.
+The fixed installed JSON-subset writes passed; broader qualification remains open.
+
+Native SUPER reads
+~~~~~~~~~~~~~~~~~~
+
+Native SELECT results use ``large_utf8`` with output-only extension
+``adbc.redshift.super.native_json``, SQL family ``SUPER`` and exact metadata::
+
+   {"version":1,"encoding":"redshift-json-wire","scope":"native-result","numbers":"lexemes","nulls":"wire-null"}
+
+The driver preserves received UTF-8 JSON bytes, including numeric spellings,
+without host floating conversion, SQL casts, query rewriting or reexecution.
+Ordinary mixed projections retain binary decoding. Local result limits are
+16,777,216 serialized bytes and 1,000 container levels. The byte limit does not
+qualify every stored 16 MB object: serialization can expand the representation.
+Malformed or oversized output returns an error, without truncation or substitution.
+
+Wire NULL maps to Arrow NULL; a nonnull received JSON ``null`` token stays a
+nonnull string. The retained native protocol returned identical wire NULLs for
+SQL NULL and parsed JSON null, so their original distinction is unavailable.
+Numeric spellings reflect server output, not pre-ingestion tokens or native
+numeric subtype/precision. This is an observable-wire contract, not a lossless
+SUPER object codec. The output marker is rejected as write input; applications
+must explicitly construct the separately validated JSON-subset input contract.
+Bounded installed macOS arm64 live qualification verified native SUPER through
+Python in Arrow temporal mode and standalone C in lossless temporal mode. The
+original C Arrow-mode fixture failure remains recorded; its corrected case was
+not rerun. See the
+`current qualification results <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/STATUS.md>`__
+for scope and limits.
 
 
 Spatial EWKB and HLL serialization subsets

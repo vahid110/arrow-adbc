@@ -92,8 +92,9 @@ observations separately from installed-driver acceptance; see
 [the local evidence boundary](local-qualification-evidence.md). These components
 grant no live authority. Native interval constraint
 producers remain unqualified, blocking actual
-target writes even for NULL/empty input. Native temporal endpoints,
-sentinels and precision syntax remain qualification gates. Platform CI follows the local-first workflow.
+target writes even for NULL/empty input. The fixed temporal endpoints and precision cases listed in [STATUS](STATUS.md)
+have installed live evidence; exhaustive domains and sentinels remain qualification
+gates. Platform CI follows the local-first workflow.
 Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
 native character/binary boundaries, TIMETZ layout/domain/offset/precision, SUPER, HLL and spatial
 full-envelope qualification remain open; the bounded installed vendor subset
@@ -155,9 +156,23 @@ Task010i1/i2/j/k are locally integrated at `a239f66cc` with independent source
 approval and rebuilt/installed offline validation. Operation `726f4b3594e048e29f4571b2770549c3` on 2026-10-21
 passed the fixed 18-case macOS arm64 installed-driver subset: SUPER JSON-subset
 CREATE/APPEND, spatial CREATE/readback, HLL CREATE/readback/text parameters,
-VARBYTE binary readback and three explicit rejection boundaries. The actual
-binary source remains `a239f66cc`, not this later docs-only checkpoint.
+VARBYTE binary readback and three explicit rejection boundaries. That batch tested `a239f66cc`; it does not verify Task010q.
 All seven owned resource classes were verified absent after child reap.
-Full 21-type/domain/boundary/platform acceptance remains open. Mixed HLL output, direct SUPER/spatial binds and lossless
-native SUPER reads stay unsupported; no arbitrary SQL rewrite or fallback is
-selected. Existing size caps, NULL semantics and transaction ownership remain.
+Task010q/q1 at `26fb72348a6dee794d86d47b70d66d487f9894a0` adds native SUPER
+observable JSON-wire reads with exact received lexemes, an output-only schema
+and explicit wire-NULL/subtype limits. The 2026-10-22 installed macOS arm64
+qualification passed Python Arrow-mode 76/76, Python lossless 11/11, C interval
+reads 37/37 and C lossless 24/24. Python writes passed 48 positive
+create/stream/append cases plus 12 unsupported interval-target rejection/retention
+cases; positive interval ingestion is not claimed. All isolated attempts received
+verified full teardown.
+
+The original C Arrow-mode leg remains 22/23: its SUPER fixture failure is retained.
+The corrected fixture passed with unchanged expected bytes through the same C
+SUPER decoder in lossless mode; a corrected Arrow-mode rerun is not claimed.
+See [STATUS](STATUS.md) for the bounded acceptance results and remaining limits.
+Full 21-type/domain/boundary/platform acceptance remains open. Next, complete
+final exact-head review and applicable green remote CI, then resolve the remaining
+release gates before Task009 publication. Mixed HLL output and direct
+SUPER/spatial binds remain unsupported.
+No arbitrary SQL rewrite or fallback is selected. Existing size caps, NULL semantics and transaction ownership remain.

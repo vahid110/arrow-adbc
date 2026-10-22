@@ -487,3 +487,51 @@ extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftEncodedFixture(
   ArrowSchemaMove(output_schema.get(), schema);
   return NANOARROW_OK;
 }
+
+namespace {
+#include "redshift_super_native_corpus_test.inc"
+}
+
+// Constructed PGresult using retained synthetic-fixture cells, not a live call.
+// Exercises mixed binary BIGINT/SUPER through resolver, schema and field readers.
+extern "C" INTERVAL_FIXTURE_EXPORT int AdbcRedshiftSuperReadFixture(int mode,
+                                                                    ArrowArray* array,
+                                                                    ArrowSchema* schema) {
+  if (mode < 0 || mode > 3 || !array || !schema) return EINVAL;
+  auto resolver = std::make_shared<adbcpq::PostgresTypeResolver>(
+      adbc::driver::pgwire::BackendProfile::Redshift());
+  ArrowError error{};
+  NANOARROW_RETURN_NOT_OK(resolver->Insert({20, "int8", "int8recv", 0, 0, 0}, &error));
+  NANOARROW_RETURN_NOT_OK(
+      resolver->Insert({72131, "super", "constructed_fixture", 0, 0, 0}, &error));
+  adbcpq::PqResultHelper result(nullptr, "");
+  auto* raw = PQmakeEmptyPGresult(nullptr, PGRES_TUPLES_OK);
+  if (!raw) return ENOMEM;
+  result.SetResult(raw);
+  PGresAttDesc attrs[2]{};
+  for (int col = 0; col < 2; ++col) {
+    attrs[col].name = const_cast<char*>(col ? "native_value" : "case_id");
+    attrs[col].typid = col ? 72131 : 20;
+    attrs[col].format = 1;
+    attrs[col].atttypmod = col ? 16384000 : -1;
+    attrs[col].tableid = 91;
+    attrs[col].columnid = col + 1;
+  }
+  if (!PQsetResultAttrs(raw, 2, attrs)) return ENOMEM;
+  const int count = mode == 1 ? 0 : mode == 0 ? 19 : 1;
+  for (int row = 0; row < count; ++row) {
+    char id[8]{};
+    id[7] = static_cast<char>(row + 1);
+    const char* value = mode == 2   ? nullptr
+                        : mode == 3 ? "{"
+                        : row < 16  ? kNativeSuperCells[row]
+                        : row == 16 ? "null"
+                        : row == 17 ? "\"null\""
+                                    : "\"\"";
+    if (!PQsetvalue(raw, row, 0, id, 8) ||
+        !PQsetvalue(raw, row, 1, const_cast<char*>(value),
+                    value ? static_cast<int>(std::strlen(value)) : -1))
+      return ENOMEM;
+  }
+  return adbcpq::testing::FixtureFromQuery(result, resolver, array, schema, &error);
+}

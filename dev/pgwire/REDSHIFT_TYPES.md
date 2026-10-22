@@ -71,7 +71,7 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-DDL / target producer N | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
 | HLLSKETCH | C-serialization all-HLL only,M,NQ | C-text subset,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_utf8 serialized sketch |
-| SUPER | N-native (explicit rejection),M | N-direct; C-generated JSON subset,M | C-JSON subset,M / C-target-checked,M | C-name/input contract; native read unsupported | large_utf8 JSON-subset input; no lossless native read |
+| SUPER | C-observable JSON wire,NQ | N-direct; C-generated JSON subset,M | C-JSON subset,M / C-target-checked,M | C-output/input contracts,NQ | large_utf8 native wire JSON; separate JSON-subset input |
 | VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,M,NQ | C-raw/provisional size cap,NQ | C-explicit width,M / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
 | GEOMETRY | C-bounded EWKB,M,NQ | C-generated raw constructor,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, per-value SRID |
 | GEOGRAPHY | C-bounded EWKB,M,NQ | C-generated constructor/cast,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, explicit per-value SRID |
@@ -738,3 +738,21 @@ Mixed HLL/non-HLL projections reject before execution; normal scalar expressions
 remain normal scalars. No SQL rewrite, retry or unrelated text fallback occurs.
 The fixed installed subsets passed on the selected macOS arm64 artifacts; this
 does not close full native boundaries, lossless SUPER reads or all 21 acceptance.
+
+### Native SUPER observable output (Task010q)
+
+Scalar SUPER results use output-only `adbc.redshift.super.native_json` large_utf8
+with version1 metadata `encoding=redshift-json-wire`, `scope=native-result`,
+`numbers=lexemes`, `nulls=wire-null`. Received bytes and numeric spellings are
+unchanged; ordinary mixed fields keep binary codecs. No casts, rewrites or
+reexecution are added. Local serialized output bounds are16,777,216 bytes and1000
+container levels; this is not full stored16MB object qualification. SQL wire NULL
+maps to Arrow NULL; retained SQL NULL and parsed JSON null inputs produced the
+same wire NULL, so the driver cannot reconstruct their original distinction.
+Received nonnull JSON `null` remains nonnull. Original input spelling, native
+numeric subtype/precision and lossless SUPER roundtrip are not promised. The
+native output marker cannot silently become the separate JSON-subset write input.
+Bounded installed macOS arm64 live qualification verified native SUPER through
+Python in Arrow temporal mode and standalone C in lossless temporal mode. The
+original C Arrow-mode fixture failure remains recorded; its corrected case was
+not rerun. See [current qualification results](STATUS.md) for scope and limits.

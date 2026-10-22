@@ -46,6 +46,19 @@ def super_field(name="amount"):
 
 
 class SuperCDataTest(unittest.TestCase):
+    def test_native_result_marker_never_becomes_write_input_even_null(self):
+        metadata = {
+            b"ARROW:extension:name": b"adbc.redshift.super.native_json",
+            b"ARROW:extension:metadata": (
+                b'{"version":1,"encoding":"redshift-json-wire",'
+                b'"scope":"native-result","numbers":"lexemes",'
+                b'"nulls":"wire-null"}'
+            ),
+            b"ADBC:redshift:sql_type": b"SUPER",
+        }
+        field = pa.field("amount", pa.large_string(), metadata=metadata)
+        self.assertNotEqual(self.encode([None], field=field)[0], 0)
+
     def encode(self, values, field=None, sliced=False):
         field = field or super_field()
         batch = pa.RecordBatch.from_arrays(
@@ -145,6 +158,78 @@ class SuperCDataTest(unittest.TestCase):
         self.assertEqual(restored.to_pylist(), batch.to_pylist())
 
 
+class SuperNativeCDataTest(unittest.TestCase):
+    def decode(self, mode):
+        array, schema = ArrowArray(), ArrowSchema()
+        code = self.read(mode, ctypes.byref(array), ctypes.byref(schema))
+        if code:
+            self.assertFalse(array.release)
+            self.assertFalse(schema.release)
+            return code, None
+        return code, pa.RecordBatch._import_from_c(
+            ctypes.addressof(array), ctypes.addressof(schema)
+        )
+
+    def test_mixed_native_lexemes_wire_nulls_and_ipc(self):
+        code, batch = self.decode(0)
+        self.assertEqual(code, 0)
+        self.assertEqual(batch.column(0).to_pylist(), list(range(1, 20)))
+        expected = [
+            None,
+            None,
+            "true",
+            '""',
+            '"é🙂\\u0001"',
+            "[]",
+            "{}",
+            "9007199254740993",
+            "1.2200",
+            "1.22",
+            '{"n":1.2200}',
+            '{"n":1.22}',
+            '{"other":1}',
+            '"null"',
+            "1",
+            '[{"n":1.2200},{"n":1.22}]',
+            "null",
+            '"null"',
+            '""',
+        ]
+        self.assertEqual(batch.column(1).to_pylist(), expected)
+        field = batch.schema.field(1)
+        self.assertEqual(field.type, pa.large_string())
+        self.assertEqual(
+            field.metadata[b"ARROW:extension:name"], b"adbc.redshift.super.native_json"
+        )
+        self.assertEqual(
+            field.metadata[b"ARROW:extension:metadata"],
+            b'{"version":1,"encoding":"redshift-json-wire",'
+            b'"scope":"native-result","numbers":"lexemes",'
+            b'"nulls":"wire-null"}',
+        )
+        self.assertEqual(field.metadata[b"ADBC:redshift:sql_type"], b"SUPER")
+        self.assertEqual(field.metadata[b"ADBC:redshift:type_modifier"], b"16384000")
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        restored = pa.ipc.open_stream(sink.getvalue()).read_next_batch()
+        self.assertEqual(restored.schema, batch.schema)
+        self.assertEqual(restored.to_pylist(), batch.to_pylist())
+
+    def test_empty_and_all_null_schema_stable(self):
+        _, batch = self.decode(0)
+        for mode in (1, 2):
+            code, other = self.decode(mode)
+            self.assertEqual(code, 0)
+            self.assertEqual(other.schema, batch.schema)
+            self.assertEqual(other.column(1).to_pylist(), [] if mode == 1 else [None])
+
+    def test_malformed_native_output_has_no_partial_export(self):
+        code, batch = self.decode(3)
+        self.assertNotEqual(code, 0)
+        self.assertIsNone(batch)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--fixture", required=True, type=pathlib.Path)
@@ -158,4 +243,11 @@ if __name__ == "__main__":
         ctypes.POINTER(ArrowSchema),
     ]
     SuperCDataTest.write.restype = ctypes.c_int
+    SuperNativeCDataTest.read = staticmethod(library.AdbcRedshiftSuperReadFixture)
+    SuperNativeCDataTest.read.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ArrowArray),
+        ctypes.POINTER(ArrowSchema),
+    ]
+    SuperNativeCDataTest.read.restype = ctypes.c_int
     unittest.main(argv=[__file__], verbosity=2)

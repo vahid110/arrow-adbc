@@ -687,6 +687,60 @@ class PostgresCopyBinaryFieldReader : public PostgresCopyFieldReader {
 
 // Closed standard PostgreSQL reference fields. These checks do not certify a
 // Redshift SQL finite/sentinel domain; native qualification remains separate.
+// Append only after family validation. Reserve every buffer before publishing a
+// value, so failures retain the previous prefix, validity and input cursor.
+static inline ArrowErrorCode AppendRedshiftLargeBytes(ArrowBufferView* input,
+                                                      int32_t size, ArrowArray* array,
+                                                      ArrowError* error,
+                                                      ArrowBufferAllocator allocation) {
+  const bool null = size == -1;
+  if (array->offset || array->length < 0 || array->length > INT64_MAX / 8 - 2 ||
+      array->null_count < 0 || array->null_count > array->length)
+    return EINVAL;
+  auto* offsets = ArrowArrayBuffer(array, 1);
+  auto* values = ArrowArrayBuffer(array, 2);
+  auto* bitmap = ArrowArrayValidityBitmap(array);
+  if (offsets->size_bytes != (array->length + 1) * 8 || !offsets->data ||
+      values->size_bytes < 0 || values->size_bytes > INT64_MAX - (null ? 0 : size))
+    return EINVAL;
+  int64_t last;
+  std::memcpy(&last, offsets->data + array->length * 8, 8);
+  if (bitmap->buffer.capacity_bytes < bitmap->buffer.size_bytes ||
+      (bitmap->buffer.capacity_bytes > 0 && !bitmap->buffer.data) ||
+      last != values->size_bytes || bitmap->size_bits < 0 ||
+      (bitmap->size_bits && bitmap->size_bits != array->length) ||
+      bitmap->buffer.size_bytes != bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||
+      (!bitmap->buffer.data && (bitmap->size_bits || bitmap->buffer.size_bytes)) ||
+      (!bitmap->size_bits && array->null_count))
+    return EINVAL;
+  const int64_t old_bytes = bitmap->buffer.size_bytes;
+  const int64_t needed = (array->length + 1) / 8 + ((array->length + 1) % 8 != 0);
+  nanoarrow::UniqueBitmap detached;
+  auto* reservation = bitmap->buffer.data ? bitmap : detached.get();
+  NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(
+      &reservation->buffer, needed - reservation->buffer.size_bytes, error, allocation));
+  NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(offsets, 8, error, allocation));
+  NANOARROW_RETURN_NOT_OK(
+      RedshiftTimetzSchema::Reserve(values, null ? 0 : size, error, allocation));
+  if (!bitmap->buffer.data) ArrowBitmapMove(detached.get(), bitmap);
+  if (needed > old_bytes)
+    std::memset(bitmap->buffer.data + old_bytes, 0, needed - old_bytes);
+  if (!bitmap->size_bits && array->length)
+    ArrowBitmapAppendUnsafe(bitmap, 1, array->length);
+  const int64_t next = last + (null ? 0 : size);
+  if (!null) ArrowBufferAppendUnsafe(values, input->data.data, size);
+  ArrowBufferAppendUnsafe(offsets, &next, 8);
+  ArrowBitmapAppendUnsafe(bitmap, !null, 1);
+  ++array->length;
+  if (null)
+    ++array->null_count;
+  else {
+    input->data.as_uint8 += size;
+    input->size_bytes -= size;
+  }
+  return NANOARROW_OK;
+}
+
 class RedshiftEncodedFieldReader : public PostgresCopyFieldReader {
  public:
   explicit RedshiftEncodedFieldReader(
@@ -707,58 +761,32 @@ class RedshiftEncodedFieldReader : public PostgresCopyFieldReader {
         NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(
             bytes, kind_ == RedshiftEncodedKind::kGeography, false, error));
     }
-    if (array->offset || array->length < 0 || array->length > INT64_MAX / 8 - 2 ||
-        array->null_count < 0 || array->null_count > array->length)
-      return EINVAL;
-    auto* offsets = ArrowArrayBuffer(array, 1);
-    auto* values = ArrowArrayBuffer(array, 2);
-    auto* bitmap = ArrowArrayValidityBitmap(array);
-    if (offsets->size_bytes != (array->length + 1) * 8 || !offsets->data ||
-        values->size_bytes < 0 || values->size_bytes > INT64_MAX - (null ? 0 : size))
-      return EINVAL;
-    int64_t last;
-    std::memcpy(&last, offsets->data + array->length * 8, 8);
-    if (bitmap->buffer.capacity_bytes < bitmap->buffer.size_bytes ||
-        (bitmap->buffer.capacity_bytes > 0 && !bitmap->buffer.data) ||
-        last != values->size_bytes || bitmap->size_bits < 0 ||
-        (bitmap->size_bits && bitmap->size_bits != array->length) ||
-        bitmap->buffer.size_bytes !=
-            bitmap->size_bits / 8 + (bitmap->size_bits % 8 != 0) ||
-        (!bitmap->buffer.data && (bitmap->size_bits || bitmap->buffer.size_bytes)) ||
-        (!bitmap->size_bits && array->null_count))
-      return EINVAL;
-    const int64_t old_bytes = bitmap->buffer.size_bytes;
-    const int64_t needed = (array->length + 1) / 8 + ((array->length + 1) % 8 != 0);
-    nanoarrow::UniqueBitmap detached;
-    auto* reservation = bitmap->buffer.data ? bitmap : detached.get();
-    NANOARROW_RETURN_NOT_OK(RedshiftTimetzSchema::Reserve(
-        &reservation->buffer, needed - reservation->buffer.size_bytes, error,
-        allocation_));
-    NANOARROW_RETURN_NOT_OK(
-        RedshiftTimetzSchema::Reserve(offsets, 8, error, allocation_));
-    NANOARROW_RETURN_NOT_OK(
-        RedshiftTimetzSchema::Reserve(values, null ? 0 : size, error, allocation_));
-    if (!bitmap->buffer.data) ArrowBitmapMove(detached.get(), bitmap);
-    if (needed > old_bytes)
-      std::memset(bitmap->buffer.data + old_bytes, 0, needed - old_bytes);
-    if (!bitmap->size_bits && array->length)
-      ArrowBitmapAppendUnsafe(bitmap, 1, array->length);
-    const int64_t next = last + (null ? 0 : size);
-    if (!null) ArrowBufferAppendUnsafe(values, input->data.data, size);
-    ArrowBufferAppendUnsafe(offsets, &next, 8);
-    ArrowBitmapAppendUnsafe(bitmap, !null, 1);
-    ++array->length;
-    if (null)
-      ++array->null_count;
-    else {
-      input->data.as_uint8 += size;
-      input->size_bytes -= size;
-    }
-    return NANOARROW_OK;
+    return AppendRedshiftLargeBytes(input, size, array, error, allocation_);
   }
 
  private:
   RedshiftEncodedKind kind_;
+  ArrowBufferAllocator allocation_;
+};
+
+class RedshiftSuperFieldReader : public PostgresCopyFieldReader {
+ public:
+  explicit RedshiftSuperFieldReader(
+      ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : allocation_(allocation) {}
+  ArrowErrorCode Read(ArrowBufferView* input, int32_t size, ArrowArray* array,
+                      ArrowError* error) override {
+    if (size < -1 || (size != -1 && (size > input->size_bytes || !input->data.data)))
+      return EINVAL;
+    if (size != -1) {
+      auto bytes = *input;
+      bytes.size_bytes = size;
+      NANOARROW_RETURN_NOT_OK(RedshiftSuperResultSchema::Validate(bytes, error));
+    }
+    return AppendRedshiftLargeBytes(input, size, array, error, allocation_);
+  }
+
+ private:
   ArrowBufferAllocator allocation_;
 };
 
@@ -1314,6 +1342,19 @@ static inline ArrowErrorCode MakeCopyFieldReader(
   ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, nullptr));
 
+  if (pg_type.is_redshift_super()) {
+    NANOARROW_RETURN_NOT_OK(RedshiftSuperResultSchema::Parse(schema, error));
+    std::optional<std::string_view> raw;
+    NANOARROW_RETURN_NOT_OK(RedshiftDecimalSchema::Metadata(
+        schema, "ADBC:redshift:type_modifier", &raw, error));
+    if (raw.has_value() != pg_type.type_modifier().has_value() ||
+        (raw && *raw != std::to_string(*pg_type.type_modifier())))
+      return RedshiftSuperResultSchema::Invalid(error, "result modifier mismatch");
+    if (result_format != 1)
+      return RedshiftSuperResultSchema::Invalid(error, "requires binary result format");
+    *out = std::make_unique<RedshiftSuperFieldReader>();
+    return NANOARROW_OK;
+  }
   if (pg_type.encoded_kind() != RedshiftEncodedKind::kNone) {
     RedshiftEncodedSchema encoded;
     NANOARROW_RETURN_NOT_OK(RedshiftEncodedSchema::Parse(schema, true, &encoded, error));
