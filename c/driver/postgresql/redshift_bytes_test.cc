@@ -119,8 +119,40 @@ TEST(RedshiftBytesTest, ParameterValidationErrorsAreInvalidArguments) {
     ASSERT_TRUE(bind.PullNextArray().ok());
     EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INVALID_ARGUMENT);
     EXPECT_EQ(bind.param_buffer->size_bytes, 0);
-    bind.bind_field_writers[0] = std::make_unique<FixedFailureWriter>(ENOMEM);
-    EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+    for (int code : {ENOMEM, EIO}) {
+      bind.bind_field_writers[0] = std::make_unique<FixedFailureWriter>(code);
+      EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+    }
+  }
+}
+
+TEST(RedshiftBytesTest, ParameterFamilyMismatchIsInvalidArgumentBeforeSql) {
+  for (bool binary_source : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(
+        testing::BytesSchema(
+            schema.get(), binary_source ? NANOARROW_TYPE_BINARY : NANOARROW_TYPE_STRING,
+            binary_source ? "VARBYTE" : "VARCHAR", "8"),
+        0);
+    nanoarrow::UniqueArrayStream stream;
+    nanoarrow::EmptyArrayStream(schema.get()).ToArrayStream(stream.get());
+    BindStream bind;
+    bind.SetBind(stream.get());
+    ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+    std::shared_ptr<PostgresTypeResolver> resolver;
+    ASSERT_EQ(testing::BytesResolver(BackendProfile::Redshift(), &resolver), 0);
+    PostgresType destination;
+    ASSERT_EQ(resolver->Find(testing::kBytesOids[binary_source ? 1 : 2], &destination,
+                             &bind.na_error),
+              0);
+    destination = destination.WithFieldDescriptor(12, BackendProfile::Redshift());
+    PostgresType targets(PostgresTypeId::kRecord);
+    targets.AppendChild("value", destination);
+    EXPECT_EQ(bind.SetParamTypes(nullptr, *resolver, true, &targets).ToAdbc(nullptr),
+              ADBC_STATUS_INVALID_ARGUMENT);
+    ASSERT_EQ(bind.bind_field_writers.size(), 1U);
+    EXPECT_EQ(bind.bind_field_writers[0], nullptr);
+    EXPECT_EQ(bind.param_buffer->size_bytes, 0);
   }
 }
 
