@@ -1070,16 +1070,17 @@ class RedshiftSuperFieldWriter : public PostgresCopyFieldWriter {
 
 class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
  public:
-  RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target)
-      : source_(source), target_(target) {}
+  RedshiftBytesFieldWriter(RedshiftBytesSchema source, RedshiftBytesSchema target,
+                           bool redshift_parameters)
+      : source_(source), target_(target), redshift_parameters_(redshift_parameters) {}
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
     ArrowBufferView bytes{};
     NANOARROW_RETURN_NOT_OK(
         RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
-    NANOARROW_RETURN_NOT_OK(
-        RedshiftBytesSchema::Validate(bytes, source_.kind, source_.width, true, error));
-    NANOARROW_RETURN_NOT_OK(
-        RedshiftBytesSchema::Validate(bytes, target_.kind, target_.width, true, error));
+    NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
+        bytes, source_.kind, source_.width, true, error, redshift_parameters_));
+    NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
+        bytes, target_.kind, target_.width, true, error, redshift_parameters_));
     // All validation precedes buffer mutation; never trim overflow blanks.
     NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buffer, bytes.size_bytes + 4));
     WriteUnsafe<int32_t>(buffer, static_cast<int32_t>(bytes.size_bytes));
@@ -1089,6 +1090,7 @@ class RedshiftBytesFieldWriter : public PostgresCopyFieldWriter {
 
  private:
   RedshiftBytesSchema source_, target_;
+  bool redshift_parameters_;
 };
 
 class PostgresCopyBinaryFieldWriter : public PostgresCopyFieldWriter {
@@ -1293,7 +1295,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     struct ArrowSchema* schema, struct ArrowArrayView* array_view,
     const PostgresTypeResolver& type_resolver, const PostgresType* target_type,
     std::unique_ptr<PostgresCopyFieldWriter>* out, bool disable_decimal_fast_path,
-    ArrowError* error, bool generated_super_ingest = false) {
+    ArrowError* error, bool generated_super_ingest = false,
+    bool redshift_parameters = false) {
   NANOARROW_RETURN_NOT_OK(
       PostgresType::ValidateVendorWriteSchema(type_resolver, schema, error));
   RedshiftSuperSchema super;
@@ -1520,7 +1523,8 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
                                     (destination.kind == RedshiftBytesKind::kVarbyte)))
       return RedshiftBytesSchema::Invalid(error, "unsupported text/binary coercion");
     *out = PostgresCopyFieldWriter::Create<RedshiftBytesFieldWriter>(
-        array_view, source_bytes, destination);
+        array_view, source_bytes, destination,
+        redshift_parameters && type_resolver.is_redshift());
     return NANOARROW_OK;
   }
 

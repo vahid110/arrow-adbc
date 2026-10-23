@@ -186,3 +186,10 @@ remain. Actual compute costs await reconciliation; no further attempt is authori
 | 2026-10-16 | [38920727258](https://github.com/vahid110/arrow-adbc/actions/runs/38920727258) | `36b786d1c569c0f0c727c70dcc06995d0b31a173` | created dedicated resources; post-usage gate failed with original response status unrecorded; cleanup SQL FAILED on STV access and cancellation masked error; independent physical teardown later verified, no admission/claim/client batch | pending |
 | 2026-10-16 | [38933278088](https://github.com/vahid110/arrow-adbc/actions/runs/38933278088) | `44bc188350125045e42a8b65e1fc1dc7820e3683` | installed preflight/OIDC/bootstrap/SYS proof passed; exact claim PutParameter denied before driver payload; claim absent, supported post-failure observer zero; independent full physical/secret/IAM teardown verified, original namespace uncertainty retained | pending |
 | 2026-10-18 | [39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470) | `3460c541914560a91872e4417c4c3b4ccbb81df0` | installed C/Linux-wheel temporary-IAM query/params/int64 metadata/create+append passed; independent full physical/secret/IAM teardown verified separately from original helper namespace uncertainty; all-types qualification remains pending | not reconciled |
+
+Task010r conditional candidate scopes the 16 MiB VARBYTE domain to Redshift
+parameter writes (prepared Bind/BindStream and generated ingestion). Marked
+PostgreSQL COPY keeps its prior 1,000,000-byte guard. Native domain evidence,
+independent review and rebuilt installed qualification remain prerequisites;
+this candidate does not claim a qualified limit or destination-width discovery
+for arbitrary prepared SQL.

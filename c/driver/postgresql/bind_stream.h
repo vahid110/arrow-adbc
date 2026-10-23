@@ -334,10 +334,12 @@ struct BindStream {
           bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
                               writer_target->bytes_kind() != RedshiftBytesKind::kNone);
       std::unique_ptr<PostgresCopyFieldWriter> writer;
+      // This writer feeds parameters (prepared statements and generated ingestion),
+      // never COPY. COPY callers keep their conservative default route policy.
       const int writer_code = MakeCopyFieldWriter(
           bind_schema->children[i], array_view->children[i], type_resolver, writer_target,
-          &writer, /*disable_decimal_fast_path=*/false, &na_error,
-          generated_super_ingest);
+          &writer, /*disable_decimal_fast_path=*/false, &na_error, generated_super_ingest,
+          /*redshift_parameters=*/type_resolver.is_redshift());
       // Byte-family compatibility is checked before a writer can be constructed.
       if (writer_code == EINVAL && bytes_fields[i])
         return Status::InvalidArgument(na_error.message);

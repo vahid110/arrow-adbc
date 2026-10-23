@@ -176,3 +176,10 @@ final exact-head review and applicable green remote CI, then resolve the remaini
 release gates before Task009 publication. Mixed HLL output and direct
 SUPER/spatial binds remain unsupported.
 No arbitrary SQL rewrite or fallback is selected. Existing size caps, NULL semantics and transaction ownership remain.
+
+Task010r conditional candidate scopes the 16 MiB VARBYTE domain to Redshift
+parameter writes (prepared Bind/BindStream and generated ingestion). Marked
+PostgreSQL COPY keeps its prior 1,000,000-byte guard. Native domain evidence,
+independent review and rebuilt installed qualification remain prerequisites;
+this candidate does not claim a qualified limit or destination-width discovery
+for arbitrary prepared SQL.

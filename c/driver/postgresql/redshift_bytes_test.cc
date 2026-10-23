@@ -37,8 +37,16 @@ class BytesWriteCase {
  public:
   ArrowErrorCode Init(ArrowType storage, const char* family, const char* width,
                       const std::vector<std::optional<std::string>>& values,
-                      int target = -1, int32_t target_width = -1, bool redshift = true) {
-    NANOARROW_RETURN_NOT_OK(testing::BytesSchema(schema.get(), storage, family, width));
+                      int target = -1, int32_t target_width = -1, bool redshift = true,
+                      bool parameter_ingest = false) {
+    NANOARROW_RETURN_NOT_OK(testing::BytesSchema(
+        schema.get(),
+        storage == NANOARROW_TYPE_FIXED_SIZE_BINARY ? NANOARROW_TYPE_BINARY : storage,
+        family, width));
+    if (storage == NANOARROW_TYPE_FIXED_SIZE_BINARY) {
+      NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeFixedSize(
+          schema->children[0], storage, static_cast<int32_t>(values.at(0)->size())));
+    }
     NANOARROW_RETURN_NOT_OK(
         testing::BytesBatch(schema.get(), array.get(), values, &error));
     NANOARROW_RETURN_NOT_OK(
@@ -57,7 +65,7 @@ class BytesWriteCase {
     }
     return MakeCopyFieldWriter(schema->children[0], view->children[0], *resolver,
                                target < 0 ? nullptr : &destination, &writer, false,
-                               &error);
+                               &error, false, parameter_ingest);
   }
   ArrowErrorCode Write(int row = 0) {
     auto before = bytes->size_bytes;
@@ -100,7 +108,7 @@ TEST(RedshiftBytesTest, ParameterValidationErrorsAreInvalidArguments) {
        {Case{NANOARROW_TYPE_STRING, "CHAR", "4", testing::NumericHex("c2a0")},
         Case{NANOARROW_TYPE_STRING, "VARCHAR", "4", "abcde"},
         Case{NANOARROW_TYPE_BINARY, "VARBYTE", "4", "abcde"},
-        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", std::string(1000001, 'x')},
+        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", std::string(16777217, 'x')},
         Case{NANOARROW_TYPE_STRING, nullptr, nullptr, std::string("a\0b", 3)}}) {
     nanoarrow::UniqueSchema schema;
     nanoarrow::UniqueArray array;
@@ -124,6 +132,51 @@ TEST(RedshiftBytesTest, ParameterValidationErrorsAreInvalidArguments) {
       EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
     }
   }
+}
+
+TEST(RedshiftBytesTest, BinaryDomainExpansionRequiresRedshiftParameterRoute) {
+  for (auto storage : {NANOARROW_TYPE_BINARY, NANOARROW_TYPE_LARGE_BINARY,
+                       NANOARROW_TYPE_BINARY_VIEW, NANOARROW_TYPE_FIXED_SIZE_BINARY}) {
+    for (int n : {1000000, 1000001, 1048575, 1048576, 1048577, 16777216, 16777217}) {
+      std::string value(n, '\0');
+      for (int i = 0; i < n; ++i) value[i] = static_cast<char>(i);
+      BytesWriteCase qualified;
+      ASSERT_EQ(qualified.Init(storage, "VARBYTE", "16777216", {value}, 2, 16777216, true,
+                               true),
+                0);
+      const auto code = qualified.Write();
+      EXPECT_EQ(code == 0, n <= 16777216);
+      if (!code) {
+        const auto wire = qualified.Wire();
+        ASSERT_EQ(wire.size(), value.size() + 4);
+        EXPECT_EQ(wire.substr(4), value);
+      }
+      for (bool redshift : {false, true}) {
+        BytesWriteCase unqualified;
+        ASSERT_EQ(unqualified.Init(storage, "VARBYTE", "16777216", {value},
+                                   redshift ? 2 : -1, 16777216, redshift, !redshift),
+                  0);
+        EXPECT_EQ(unqualified.Write() == 0, n <= 1000000);
+      }
+    }
+  }
+  BytesWriteCase postgres;
+  const std::string unmarked(1000001, 'x');
+  ASSERT_EQ(postgres.Init(NANOARROW_TYPE_BINARY, nullptr, nullptr, {unmarked}, -1, -1,
+                          false, true),
+            0);
+  ASSERT_EQ(postgres.Write(), 0);
+  EXPECT_EQ(postgres.Wire().substr(4), unmarked);
+  BytesWriteCase target;
+  ASSERT_EQ(target.Init(NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", {"123456789"}, 2, 8,
+                        true, true),
+            0);
+  EXPECT_EQ(target.Write(), EINVAL);
+  BytesWriteCase source;
+  ASSERT_EQ(source.Init(NANOARROW_TYPE_BINARY, "VARBYTE", "8", {"123456789"}, 2, 16777216,
+                        true, true),
+            0);
+  EXPECT_EQ(source.Write(), EINVAL);
 }
 
 TEST(RedshiftBytesTest, ParameterFamilyMismatchIsInvalidArgumentBeforeSql) {
