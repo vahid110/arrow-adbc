@@ -356,6 +356,74 @@ TEST(RedshiftBytesTest, RawCharPaddingEmptyNullAndStrictReadBoundsPreserveBytes)
   EXPECT_EQ(ArrowArrayViewGetStringUnsafe(view.get(), 1).size_bytes, 0);
   EXPECT_TRUE(ArrowArrayViewIsNull(view.get(), 2));
 }
+TEST(RedshiftBytesTest, ReaderMaximumAndAdjacentOversizePreservePrefixAndCursor) {
+  struct Case {
+    RedshiftBytesKind kind;
+    ArrowType storage;
+    int32_t maximum;
+  };
+  // Literal protocol boundaries are independent of ReadLimit(): changing the
+  // production predicate must not silently change the expected test boundary.
+  for (const auto test :
+       {Case{RedshiftBytesKind::kVarchar, NANOARROW_TYPE_STRING, 16000000},
+        Case{RedshiftBytesKind::kVarbyte, NANOARROW_TYPE_BINARY, 16777216}}) {
+    SCOPED_TRACE(test.maximum);
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), test.storage), 0);
+    nanoarrow::UniqueArray array;
+    ArrowError error{};
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    // Unknown descriptor width isolates the family-wide read limit: a narrow
+    // descriptor or the write guard must not be the reason for rejection.
+    PostgresCopyBinaryFieldReader reader({test.kind, std::nullopt});
+    ASSERT_EQ(reader.InitSchema(schema.get()), 0);
+    ASSERT_EQ(reader.InitArray(array.get()), 0);
+    const std::string prefix = "KEEP";
+    ArrowBufferView data{};
+    data.data.data = prefix.data();
+    data.size_bytes = prefix.size();
+    ASSERT_EQ(reader.Read(&data, 4, array.get(), &error), 0);
+
+    std::string payload(test.maximum + 1, 'x');
+    if (test.kind == RedshiftBytesKind::kVarbyte) {
+      payload[0] = 0;
+      payload[test.maximum - 1] = static_cast<char>(0xff);
+    }
+    data.data.data = payload.data();
+    data.size_bytes = payload.size();
+    const auto* cursor = data.data.data;
+    const auto offsets_size = ArrowArrayBuffer(array.get(), 1)->size_bytes;
+    const auto values_size = ArrowArrayBuffer(array.get(), 2)->size_bytes;
+    ASSERT_EQ(reader.Read(&data, test.maximum + 1, array.get(), &error), EINVAL);
+    EXPECT_NE(std::strstr(error.message, "byte length exceeds descriptor/format"),
+              nullptr);
+    EXPECT_EQ(data.data.data, cursor);
+    EXPECT_EQ(data.size_bytes, test.maximum + 1);
+    EXPECT_EQ(array->length, 1);
+    EXPECT_EQ(array->null_count, 0);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 1)->size_bytes, offsets_size);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 2)->size_bytes, values_size);
+
+    // The neighboring valid value must still decode after the failed field,
+    // consuming exactly its own bytes and retaining the untouched suffix.
+    ASSERT_EQ(reader.Read(&data, test.maximum, array.get(), &error), 0);
+    EXPECT_EQ(data.size_bytes, 1);
+    EXPECT_EQ(data.data.as_char, payload.data() + test.maximum);
+    ASSERT_EQ(reader.FinishArray(array.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), &error), 0);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), &error), 0);
+    ASSERT_EQ(array->length, 2);
+    const auto first = ArrowArrayViewGetBytesUnsafe(view.get(), 0);
+    EXPECT_EQ(first.size_bytes, 4);
+    EXPECT_EQ(std::memcmp(first.data.data, prefix.data(), 4), 0);
+    const auto actual = ArrowArrayViewGetBytesUnsafe(view.get(), 1);
+    ASSERT_EQ(actual.size_bytes, test.maximum);
+    EXPECT_EQ(std::memcmp(actual.data.data, payload.data(), test.maximum), 0);
+  }
+}
 TEST(RedshiftBytesTest, DynamicVarbyteOidCannotFallBackToByteaAndMarkersAreValidated) {
   std::shared_ptr<PostgresTypeResolver> resolver;
   ASSERT_EQ(testing::BytesResolver(BackendProfile::Redshift(), &resolver), 0);
