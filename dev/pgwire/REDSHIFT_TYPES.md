@@ -45,9 +45,12 @@ Redshift traffic or a live libpq qualification.
 (15 positive and three expected-boundary cases). This is separate from historical Linux `L`; full-envelope `NQ` remains.
 Spatial/HLL CREATE and query schemas were exercised, not APPEND or every metadata
 API. All seven owned resource classes were verified absent after child reap.
+`I`: Task010s bounded installed Python/C Bind and BindStream CREATE/APPEND
+and target rejection evidence on macOS arm64, with verified full teardown. See
+[STATUS](STATUS.md#task010s-interval-ingestion-qualification).
 `NQ`: full Redshift envelope not qualified; `N`: no semantic implementation.
 `opaque` means unsupported external bytes, **not full type support**.
-C/O-PG/T alone supplies no native proof; L/M have only their stated scope. No row
+C/O-PG/T alone supplies no native proof; L/M/I have only their stated scope. No row
 is a claim of full-range support.
 Create and append are separate in the fourth column. Metadata is current schema/
 canonical name evidence, not proof of precision, scale, length or qualifier.
@@ -67,8 +70,8 @@ canonical name evidence, not proof of precision, scale, length or qualifier.
 | TIMETZ / TIME WITH TIME ZONE | C-reference,F,NQ | C-exact reference,NQ | C-bare DDL / C-known target,NQ | C-family/known precision,F,NQ | fixed-offset struct extension, below |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us) civil or closed native-count extension |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C-checked,F,NQ; O-PG | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us, UTC) or closed native-count extension |
-| INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-DDL / target producer N | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
-| INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-DDL / target producer N | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
+| INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-exact DDL / C-target checked,I,NQ | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
+| INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-exact DDL / C-target checked,I,NQ | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
 | BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
 | HLLSKETCH | C-serialization all-HLL only,M,NQ | C-text subset,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_utf8 serialized sketch |
 | SUPER | C-observable JSON wire,NQ | N-direct; C-generated JSON subset,M | C-JSON subset,M / C-target-checked,M | C-output/input contracts,NQ | large_utf8 native wire JSON; separate JSON-subset input |
@@ -191,13 +194,22 @@ observations. Relation OID, schema/table, name, ordinal, type OID and raw modifi
 are checked around bound exact SVV_COLUMNS reads. Missing/duplicate/inconsistent
 observations and SQL errors fail; raw `interval_type`, `interval_precision` and
 `datetime_precision` remain `interval_raw_type`, `interval_raw_precision` and
-`interval_raw_datetime_precision` diagnostics. **No native producer mapping is
-qualified yet:** neither plausible SVV text, a PostgreSQL mask/default, nor DDL
-issued by this driver becomes a known native target. Actual interval ingest thus
-fails closed after resolution, including newly created targets. This unfinished
-native prerequisite must be closed for first-release append support; rejection
-alone does not complete the all-type goal. Read observations detect observed
-changes, not every concurrent external DDL race or a later typmod change.
+`interval_raw_datetime_precision` diagnostics. Task010s promotes only 37 observed exact
+family/raw-modifier/`format_type` tuples, with all three SVV fields NULL, to known
+constraints inside actual ingestion-target resolution. This covers the 13
+qualifiers and precision 0..6 on SECOND-ending forms. Other tuples, conflicting
+facts and unsupported targets remain unknown and fail closed; plausible SVV text,
+a PostgreSQL mask/default or driver-issued DDL alone is not sufficient proof.
+
+Exact source and target quanta are checked independently during CREATE/APPEND.
+Installed Python/C Bind and BindStream evidence covers these declarations and
+retained rows after first-invalid target rejection.
+Ordinary query and GetTableSchema metadata still report unknown constraints and
+raw diagnostics: internal target decoding does not authorize rebinding readback
+as a known source. Explicit source metadata remains an application assertion.
+Omitted SQL defaults and native extrema are not established by these cases.
+Read observations detect observed changes, not every concurrent external DDL
+race or a later typmod change.
 
 Test-only public C libpq recording exercises real ownership, source wire/OID,
 DDL and unknown-target rejection without a server or identity change. Internal
@@ -627,9 +639,9 @@ must be reviewed before implementation; an unresolved representation blocks rele
   Redshift also rejects interval/duration storage with stripped metadata. Unknown
   family-marker values reject. Unmarked PostgreSQL interval behavior is preserved.
   Task010e2 adds the bounded semantic write contract above. The test-only C Data producer is excluded
-  from driver artifacts and normal installs. Native libpq-path qualification is
-  still pending a separately admitted installed-artifact batch, with its own finite
-  authority; this slice does not complete Task010.
+  from driver artifacts and normal installs. Later bounded installed read and
+  Task010s write results are recorded in [STATUS](STATUS.md); full native-domain
+  coverage remains open and this slice does not complete Task010.
 - **010c1 merged (PR23), offline CI passed:** per-field descriptor plumbing and
   bounded Redshift schema/GetObjects metadata, including normal/bound/empty query
   readers and OID-only parameter identity. Synthetic descriptor/C Data and local
@@ -654,7 +666,8 @@ must be reviewed before implementation; an unresolved representation blocks rele
   and precision DDL gates remain open.
 - **010e2 locally integrated 35584f5, independent FULL approval and 24 validation steps passed:** both interval families,
   all 13 qualifier identities and precision 0..6, exact reference writes/DDL and
-  raw diagnostic catalog observation. Native target producer mapping remains open.
+  raw diagnostic catalog observation. Task010s adds the bounded internal target
+  producer and bounded four-leg installed write qualification described above.
 - **010e3 locally integrated e2df066, independent FULL approval and 25 validation steps passed:** explicit TIMETZ fixed-offset
   struct, checked reference codecs, source/actual-target precision and bare DDL.
   Native layout/domain/offset/precision qualification remains open.

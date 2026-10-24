@@ -90,12 +90,14 @@ files are locally integrated at `3c956e3` after exact independent approval and a
 serial validation stages. Later private admitted runs retain raw native protocol
 observations separately from installed-driver acceptance; see
 [the local evidence boundary](local-qualification-evidence.md). These components
-grant no live authority. Native interval constraint
-producers remain unqualified, blocking actual
-target writes even for NULL/empty input. The fixed temporal endpoints and precision cases listed in [STATUS](STATUS.md)
+grant no live authority. Task010s completed bounded interval target qualification
+through four installed Python/C Bind/BindStream legs and independent teardown
+audits. Final review and applicable green CI remain gates; see
+[STATUS](STATUS.md#task010s-interval-ingestion-qualification).
+The fixed temporal endpoints and precision cases listed in [STATUS](STATUS.md)
 have installed live evidence; exhaustive domains and sentinels remain qualification
 gates. Platform CI follows the local-first workflow.
-Actual libpq-path/boundary qualification, interval native catalog/domain/qualifier proof and remaining
+Remaining libpq-path/boundary qualification, full interval-domain proof and
 native character/binary boundaries, TIMETZ layout/domain/offset/precision, SUPER, HLL and spatial
 full-envelope qualification remain open; the bounded installed vendor subset
 below does not close the full 21-type milestone.
