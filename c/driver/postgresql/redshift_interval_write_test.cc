@@ -480,6 +480,148 @@ void SetObservation(PqResultHelper* out,
                 1);
     }
 }
+TEST(RedshiftIntervalCatalogTest, ExactNativeProducerMatrixAndForeignFacts) {
+  // Native operation cd9f2ad028224383be5e7fb164691305 observations 104/708.
+  struct Captured {
+    const char* raw;
+    const char* formatted;
+    const char* qualifier;
+    int precision;
+    bool months;
+  };
+  const Captured captured[] = {
+      {"327683", "interval year", "YEAR", -1, true},
+      {"196611", "interval month", "MONTH", -1, true},
+      {"458755", "interval year to month", "YEAR TO MONTH", -1, true},
+      {"589827", "interval day", "DAY", -1, false},
+      {"67174403", "interval hour", "HOUR", -1, false},
+      {"134283267", "interval minute", "MINUTE", -1, false},
+      {"268435460", "interval second (0)", "SECOND", 0, false},
+      {"268435461", "interval second (1)", "SECOND", 1, false},
+      {"268435462", "interval second (2)", "SECOND", 2, false},
+      {"268435463", "interval second (3)", "SECOND", 3, false},
+      {"268435464", "interval second (4)", "SECOND", 4, false},
+      {"268435465", "interval second (5)", "SECOND", 5, false},
+      {"268435466", "interval second (6)", "SECOND", 6, false},
+      {"67698691", "interval day to hour", "DAY TO HOUR", -1, false},
+      {"201916419", "interval day to minute", "DAY TO MINUTE", -1, false},
+      {"470286340", "interval day to second (0)", "DAY TO SECOND", 0, false},
+      {"470286341", "interval day to second (1)", "DAY TO SECOND", 1, false},
+      {"470286342", "interval day to second (2)", "DAY TO SECOND", 2, false},
+      {"470286343", "interval day to second (3)", "DAY TO SECOND", 3, false},
+      {"470286344", "interval day to second (4)", "DAY TO SECOND", 4, false},
+      {"470286345", "interval day to second (5)", "DAY TO SECOND", 5, false},
+      {"470286346", "interval day to second (6)", "DAY TO SECOND", 6, false},
+      {"201392131", "interval hour to minute", "HOUR TO MINUTE", -1, false},
+      {"469762052", "interval hour to second (0)", "HOUR TO SECOND", 0, false},
+      {"469762053", "interval hour to second (1)", "HOUR TO SECOND", 1, false},
+      {"469762054", "interval hour to second (2)", "HOUR TO SECOND", 2, false},
+      {"469762055", "interval hour to second (3)", "HOUR TO SECOND", 3, false},
+      {"469762056", "interval hour to second (4)", "HOUR TO SECOND", 4, false},
+      {"469762057", "interval hour to second (5)", "HOUR TO SECOND", 5, false},
+      {"469762058", "interval hour to second (6)", "HOUR TO SECOND", 6, false},
+      {"402653188", "interval minute to second (0)", "MINUTE TO SECOND", 0, false},
+      {"402653189", "interval minute to second (1)", "MINUTE TO SECOND", 1, false},
+      {"402653190", "interval minute to second (2)", "MINUTE TO SECOND", 2, false},
+      {"402653191", "interval minute to second (3)", "MINUTE TO SECOND", 3, false},
+      {"402653192", "interval minute to second (4)", "MINUTE TO SECOND", 4, false},
+      {"402653193", "interval minute to second (5)", "MINUTE TO SECOND", 5, false},
+      {"402653194", "interval minute to second (6)", "MINUTE TO SECOND", 6, false},
+  };
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
+  for (const auto& item : captured) {
+    SCOPED_TRACE(item.formatted);
+    for (int variant = 0; variant < 10; ++variant) {
+      // Matched, family mismatch, absent/-1/foreign raw, NULL/text drift,
+      // and each previously unqualified non-NULL SVV diagnostic.
+      const bool months = item.months != (variant == 1);
+      const char* oid = months ? "64001" : "65017";
+      const char* raw = variant == 2   ? nullptr
+                        : variant == 3 ? "-1"
+                        : variant == 4 ? "12345"
+                                       : item.raw;
+      const char* formatted = variant == 5   ? nullptr
+                              : variant == 6 ? "interval"
+                                             : item.formatted;
+      PostgresType type;
+      ASSERT_EQ(resolver->Find(months ? testing::kYearMonthOid : testing::kDaySecondOid,
+                               &type, nullptr),
+                0);
+      type = type.WithFieldDescriptor(
+          raw ? std::optional<int32_t>{std::stoi(raw)} : std::nullopt,
+          BackendProfile::Redshift());
+      PostgresType table(PostgresTypeId::kRecord);
+      table.AppendChild("amount", type);
+      PqResultHelper identity(nullptr, "");
+      SetObservation(
+          &identity,
+          {{"db", "pg_temp_17", "owned", "12345", "3", "amount", oid, raw, formatted}},
+          9);
+      std::vector<RedshiftIntervalCatalogColumn> columns;
+      ASSERT_TRUE(ParseIntervalCatalogIdentity(identity, table, &columns).ok());
+      PqResultHelper detail(nullptr, "");
+      SetObservation(&detail,
+                     {{"3", "amount", variant == 7 ? "SECOND" : nullptr,
+                       variant == 8 ? "6" : nullptr, variant == 9 ? "3" : nullptr}},
+                     5);
+      auto selected = table;
+      ASSERT_TRUE(ApplyIntervalCatalogObservation(detail, columns, &selected).ok());
+      const auto c = selected.child(0).interval_constraint();
+      if (variant == 0) {
+        EXPECT_EQ(c.state, State::kKnown);
+        EXPECT_EQ(c.qualifier, RedshiftIntervalConstraint::Qualifier(item.qualifier));
+        EXPECT_EQ(c.precision, item.precision < 0
+                                   ? std::nullopt
+                                   : std::optional<int32_t>{item.precision});
+        EXPECT_EQ(c.RequireKnown(nullptr), 0);
+      } else {
+        EXPECT_EQ(c.state, State::kUnknown);
+        EXPECT_NE(c.RequireKnown(nullptr), 0);
+      }
+      // Target qualification is local to this observation, never cached in OIDs.
+      PostgresType cached;
+      ASSERT_EQ(resolver->Find(type.oid(), &cached, nullptr), 0);
+      EXPECT_EQ(cached.interval_constraint().state, State::kUnknown);
+    }
+  }
+}
+
+TEST(RedshiftIntervalCatalogTest, TargetMismatchAndMalformedIdentityDoNotPublish) {
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
+  PostgresType type;
+  ASSERT_EQ(resolver->Find(testing::kDaySecondOid, &type, nullptr), 0);
+  PostgresType table(PostgresTypeId::kRecord);
+  table.AppendChild("amount",
+                    type.WithFieldDescriptor(268435463, BackendProfile::Redshift()));
+  const std::vector<std::vector<const char*>> row = {{"db", "public", "owned", "12345",
+                                                      "1", "amount", "65017", "268435463",
+                                                      "interval second (3)"}};
+  for (int column : {3, 4, 6, 7}) {
+    for (const char* malformed : {"", "1garbage", "9223372036854775808"}) {
+      auto changed = row;
+      changed[0][column] = malformed;
+      PqResultHelper identity(nullptr, "");
+      SetObservation(&identity, changed, 9);
+      std::vector<RedshiftIntervalCatalogColumn> columns;
+      EXPECT_FALSE(ParseIntervalCatalogIdentity(identity, table, &columns).ok());
+      EXPECT_TRUE(columns.empty());
+    }
+  }
+  PqResultHelper identity(nullptr, "");
+  SetObservation(&identity, row, 9);
+  std::vector<RedshiftIntervalCatalogColumn> columns;
+  ASSERT_TRUE(ParseIntervalCatalogIdentity(identity, table, &columns).ok());
+  PqResultHelper detail(nullptr, "");
+  SetObservation(&detail, {{"1", "amount", nullptr, nullptr, nullptr}}, 5);
+  PostgresType selected(PostgresTypeId::kRecord);
+  selected.AppendChild("amount",
+                       type.WithFieldDescriptor(268435464, BackendProfile::Redshift()));
+  EXPECT_FALSE(ApplyIntervalCatalogObservation(detail, columns, &selected).ok());
+  EXPECT_EQ(selected.child(0).interval_constraint().state, State::kUnknown);
+}
+
 TEST(RedshiftIntervalCatalogTest, ObservationNeverPromotesPlausibleCatalogToKnown) {
   std::shared_ptr<PostgresTypeResolver> resolver;
   ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
@@ -490,8 +632,9 @@ TEST(RedshiftIntervalCatalogTest, ObservationNeverPromotesPlausibleCatalogToKnow
   table.AppendChild("amount", target);
   PqResultHelper before(nullptr, "");
   const std::vector<std::vector<const char*>> identity = {
-      {"fixturedb", "pg_temp_17", "owned", "12345", "3", "amount", "65017", "-1"}};
-  SetObservation(&before, identity, 8);
+      {"fixturedb", "pg_temp_17", "owned", "12345", "3", "amount", "65017", "-1",
+       "interval day to second"}};
+  SetObservation(&before, identity, 9);
   std::vector<RedshiftIntervalCatalogColumn> columns;
   ASSERT_TRUE(ParseIntervalCatalogIdentity(before, table, &columns).ok());
   for (const char* qualifier : {"DAY TO SECOND", "SECOND", "unrecognized", ""}) {
@@ -532,7 +675,7 @@ TEST(RedshiftIntervalCatalogTest, ObservationNeverPromotesPlausibleCatalogToKnow
     auto changed = identity;
     changed[0][col] = col == 5 ? "other" : col == 7 ? "999" : "0";
     PqResultHelper result(nullptr, "");
-    SetObservation(&result, changed, 8);
+    SetObservation(&result, changed, 9);
     EXPECT_FALSE(ParseIntervalCatalogIdentity(result, table, &columns).ok());
   }
 }

@@ -20,6 +20,10 @@
 # Status
 
 
+Task010s bounded interval ingestion qualification passed all four installed
+Python/C Bind and BindStream legs on macOS arm64, with verified full teardown. See
+[the source-specific results](#task010s-interval-ingestion-qualification).
+
 Task010q/q1 implements native SUPER observable JSON-wire reads at
 `26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
 and rebuilt installed-artifact validation. Isolated live qualification on macOS
@@ -45,11 +49,11 @@ cleanup checks. Actual billing is not reconciled.
 
 Native SUPER preserves received numeric spellings and wire NULLs in a separate
 output-only schema. The retained protocol collapses SQL NULL and parsed JSON
-null; input-lexeme/native-subtype losslessness is not claimed. These results do
+null; input-lexeme/native-subtype losslessness is not claimed. Those Task010q results do
 not claim positive interval ingestion, complete domains, every metadata API or
 cross-platform live qualification. Direct SUPER/spatial binds and mixed HLL
-output remain unsupported. Vendor REPLACE and actual interval-target writes
-retain their fail-closed boundaries. Final exact-head review, push and applicable
+output remain unsupported. Vendor REPLACE remains unsupported. Task010s adds bounded actual interval-target
+writes; unknown target constraints still fail closed. Final exact-head review, push and applicable
 green CI remain before integration; no release-ready claim is made.
 
 Current state only; history is in git and PR descriptions.
@@ -96,8 +100,9 @@ Current state only; history is in git and PR descriptions.
   validation steps passed). Task010e2 adds closed interval qualifier/precision
   schemas, exact reference reads/writes/DDL and bounded raw target observations;
   locally integrated 35584f5 after independent FULL approval and all 24 serial
-  validation steps. Native interval target constraint producers remain unqualified
-  and actual-target writes fail closed. Task010e3 adds an explicit fixed-offset
+  validation steps. Task010s supplies the bounded native target mapping and
+  four-leg write evidence [below](#task010s-interval-ingestion-qualification).
+  Task010e3 adds an explicit fixed-offset
   TIMETZ struct, checked reference reads/writes, source/target precision and
   bare declaration handling (locally integrated e2df066; independent FULL approval
   and all 25 serial validation steps passed). Task010f0 adds a separate noninstalled
@@ -123,9 +128,9 @@ Current state only; history is in git and PR descriptions.
   retain protocol observations and failures separately from installed-driver
   acceptance. Synthetic/local PostgreSQL evidence does not qualify Redshift;
   platform CI follows the local-first workflow. Full temporal/domain/precision,
-  character/binary size and interval constraint-producer qualification remain
+  remaining character/binary boundaries and interval native-domain qualification remain
   open before Task009. The bounded native SUPER and interval read results above
-  do not imply input-subtype losslessness or supported interval ingestion. No paid operation is performed or authorized here.
+  do not imply input-subtype losslessness or full interval-domain support. No paid operation is performed or authorized here.
   AO/timer and Task009 publication remain paused.
 - External host provisioning access is verified through 2027-12-31T23:00:00Z;
   earlier scoped denials remain historical evidence. Workers/reviewers stay
@@ -212,3 +217,40 @@ policy evidence. Native plain INSERT accepted exactly 16 MiB, but the raw
 size rejection nor a completed native-domain suite. Local oversize rejection is
 separate. Direct prepared SQL does not discover arbitrary destination widths.
 These bounded macOS arm64 results do not qualify every type, boundary or platform.
+
+## Task010s interval ingestion qualification
+
+Source `218b59859f7cc943ea7f2b0b6f43e8e32b78ee95` adds conservative internal
+ingestion-target decoding for 37 observed family/raw-modifier/`format_type`
+combinations: all 13 qualifiers, with precision 0..6 on SECOND-ending forms.
+Ordinary query and GetTableSchema metadata remain `unknown`; unsupported or
+inconsistent target observations still reject.
+
+| Installed macOS arm64 leg | Result | Operation |
+|---|---|---|
+| Python Bind array | 68/68 passed; full teardown independently verified | `43d976c2ffa34a17969fbbbcb87290f8` |
+| Standalone C Bind array | 68/68 passed; full teardown independently verified | `187df65251044bc89b17972c3e796d5b` |
+| Python BindStream | 68/68 passed; full teardown independently verified | `3a4098e58c8a466995a14ce54ddbb1e3` |
+| Standalone C BindStream | 68/68 passed; full teardown independently verified | `7e89616b451d40f9808489948034adeb` |
+
+All four legs passed: 272 successful case executions in total. Each leg covers
+37 exact CREATE/APPEND pairs and 31 first-invalid target-quantum rejections with
+retained rows. Independent catalog/SVV/binary
+observations bind literal expected values to runtime-discovered type OIDs and
+receive functions. Original controller results and independent audits verify
+child/handle closure, zero owned schemas and active runtime sessions, and absence
+of all seven owned resource classes. Evidence is retained under
+`task010s-interval-20261024/{python-array-43d,python-stream-3a40,c-array-187d,c-stream-7e89}-final-independent-v1`.
+
+The original Python array attempt `c7eae61057e14971b86257ca54ee9f70` qualified no
+case: the harness rejected a native-witness record after the first ingest and lost
+that witness. The retained startup exposed a signed system-column descriptor;
+the corrected harness accepts its diagnostic shape and preserves failed witness
+records. The original schema-residue/observer failure remains recorded separately
+from verified physical teardown. Earlier unsupported-target rejection receipts
+and Task010r's unsafe native size-boundary failure remain historical evidence.
+
+This is bounded macOS arm64 evidence, not native extrema/sentinel qualification,
+omitted-default proof, arbitrary prepared-SQL target discovery or a general
+streaming-atomicity guarantee. Final exact-head review and applicable green remote
+CI remain gates; actual billing is not reconciled.

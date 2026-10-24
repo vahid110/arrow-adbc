@@ -55,6 +55,9 @@ struct Recording {
   std::vector<std::vector<RecordedParameter>> executions;
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
+  bool qualified_interval = false;
+  bool interval_identity_drift = false;
+  int interval_identity_reads = 0;
   bool super_target = false;
   int32_t bytes_target_width = 0;
   Oid encoded_target = 0;
@@ -233,13 +236,23 @@ PGresult* Query(const char* query) {
                  ? Rows(3, {{"amount", "65113", code}, {"label", "75001", "6"}})
                  : Rows(3, {{"amount", "65113", code}});
     }
-    return Rows(3, {{"amount", "65017", "-1"}});
+    return Rows(3,
+                {{"amount", "65017", recording.qualified_interval ? "268435463" : "-1"}});
   }
-  if (q.find("SELECT current_database(), ns.nspname") != std::string::npos)
+  if (q.find("SELECT current_database(), ns.nspname") != std::string::npos) {
+    ++recording.interval_identity_reads;
     return Rows(
-        8, {{"fixturedb", "public", "owned", "12345", "1", "amount", "65017", "-1"}});
+        9, {{"fixturedb", "public", "owned", "12345", "1", "amount", "65017",
+             recording.qualified_interval ? "268435463" : "-1",
+             recording.interval_identity_drift && recording.interval_identity_reads > 1
+                 ? "interval second (4)"
+             : recording.qualified_interval ? "interval second (3)"
+                                            : "interval day to second"}});
+  }
   if (q.find("FROM svv_columns") != std::string::npos)
-    return Rows(5, {{"1", "amount", "DAY TO SECOND", "6", "3"}});
+    return recording.qualified_interval
+               ? Rows(5, {{"1", "amount", nullptr, nullptr, nullptr}})
+               : Rows(5, {{"1", "amount", "DAY TO SECOND", "6", "3"}});
   if (q.starts_with("CREATE ")) {
     recording.exists = true;
     return Command();
@@ -614,12 +627,127 @@ TEST_F(IntervalPublicRecordingTest,
                     ADBC_STATUS_OK)
               << Message();
         }
-        EXPECT_NE(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
-                  ADBC_STATUS_OK);
+        EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                  ADBC_STATUS_NOT_IMPLEMENTED);
         EXPECT_TRUE(recording.executions.empty());
         EXPECT_EQ(recording.committed, 0);
       }
 }
+TEST_F(IntervalPublicRecordingTest, QualifiedActualTargetSupportsBothBindingsAndModes) {
+  for (bool stream : {false, true})
+    for (const char* mode :
+         {ADBC_INGEST_OPTION_MODE_CREATE, ADBC_INGEST_OPTION_MODE_APPEND,
+          ADBC_INGEST_OPTION_MODE_CREATE_APPEND})
+      for (bool exists : {false, true}) {
+        if (std::string_view(mode) == ADBC_INGEST_OPTION_MODE_APPEND && !exists) continue;
+        recording.queries.clear();
+        recording.executions.clear();
+        recording.qualified_interval = true;
+        recording.exists = exists;
+        recording.committed = 7;
+        recording.pending = 0;
+        ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                            "owned", &error),
+                  ADBC_STATUS_OK);
+        ASSERT_EQ(
+            driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE, mode, &error),
+            ADBC_STATUS_OK);
+        nanoarrow::UniqueSchema schema;
+        nanoarrow::UniqueArray array;
+        Input(&schema, &array, {1000, -2000, std::nullopt, 0});
+        if (stream) {
+          nanoarrow::UniqueArrayStream input;
+          adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+          ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                    ADBC_STATUS_OK);
+        } else {
+          ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                    ADBC_STATUS_OK);
+        }
+        int64_t rows = -1;
+        ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, &rows, &error),
+                  ADBC_STATUS_OK)
+            << Message();
+        EXPECT_EQ(rows, 4);
+        // Recording tracks SQL statements, not rows in a parameterized batch.
+        EXPECT_EQ(recording.committed, 8);
+        ASSERT_EQ(recording.executions.size(), 1);
+        ASSERT_EQ(recording.executions[0].size(), 4);
+        EXPECT_EQ(recording.executions[0][0].oid, 65017U);
+        EXPECT_EQ(recording.executions[0][0].bytes,
+                  testing::NumericHex("00000000000003e8"));
+        EXPECT_EQ(recording.executions[0][1].bytes,
+                  testing::NumericHex("fffffffffffff830"));
+        EXPECT_TRUE(recording.executions[0][2].null);
+        EXPECT_EQ(recording.executions[0][3].bytes,
+                  testing::NumericHex("0000000000000000"));
+      }
+}
+
+TEST_F(IntervalPublicRecordingTest,
+       QualifiedTargetRejectsInexactStreamWithOwnedRollback) {
+  for (bool caller_owned : {false, true}) {
+    ASSERT_EQ(driver.ConnectionSetOption(
+                  &connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                  caller_owned ? ADBC_OPTION_VALUE_DISABLED : ADBC_OPTION_VALUE_ENABLED,
+                  &error),
+              ADBC_STATUS_OK);
+    recording.qualified_interval = true;
+    recording.committed = 7;
+    recording.pending = 0;
+    recording.executions.clear();
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                        "owned", &error),
+              ADBC_STATUS_OK);
+    ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                        ADBC_INGEST_OPTION_MODE_APPEND, &error),
+              ADBC_STATUS_OK);
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray first, last;
+    // Broader source p6, actual target p3. First batch is exact; second is not.
+    Input(&schema, &first, std::vector<std::optional<int64_t>>(16, 1000), "SECOND", "6");
+    ASSERT_EQ(testing::IntervalWriteBatch(schema.get(), last.get(), {1001}, nullptr), 0);
+    nanoarrow::UniqueArrayStream input;
+    ASSERT_EQ(ArrowBasicArrayStreamInit(input.get(), schema.get(), 2), 0);
+    ArrowBasicArrayStreamSetArray(input.get(), 0, first.get());
+    ArrowBasicArrayStreamSetArray(input.get(), 1, last.get());
+    ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+              ADBC_STATUS_OK);
+    int64_t rows = -1;
+    EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, &rows, &error),
+              ADBC_STATUS_INVALID_ARGUMENT)
+        << Message();
+    EXPECT_NE(std::string_view(Message()).find("inexact qualifier"), std::string::npos);
+    EXPECT_EQ(recording.executions.size(), 1);
+    EXPECT_EQ(recording.committed, 7);
+    EXPECT_EQ(recording.pending, caller_owned ? 1 : 0);
+    EXPECT_EQ(rows, caller_owned ? 16 : 0);
+    if (caller_owned) {
+      ASSERT_EQ(driver.ConnectionRollback(&connection, &error), ADBC_STATUS_OK);
+    }
+  }
+}
+
+TEST_F(IntervalPublicRecordingTest, QualifiedProducerDriftRejectsBeforePayload) {
+  recording.qualified_interval = true;
+  recording.interval_identity_drift = true;
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                      "owned", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                      ADBC_INGEST_OPTION_MODE_APPEND, &error),
+            ADBC_STATUS_OK);
+  nanoarrow::UniqueSchema schema;
+  nanoarrow::UniqueArray array;
+  Input(&schema, &array, {1000});
+  ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_INVALID_STATE);
+  EXPECT_TRUE(recording.executions.empty());
+  EXPECT_EQ(recording.committed, 0);
+}
+
 TEST_F(IntervalPublicRecordingTest,
        KnownReferenceTargetUsesWholeStreamOwnerAndPreservesPrimaryError) {
   // Internal labeled constraints exercise the same ownership/writer/transaction
@@ -2030,11 +2158,12 @@ class ErrnoFieldWriter : public PostgresCopyFieldWriter {
 TEST(IntervalParameterStatusTest,
      VendorInvalidArgumentDoesNotRemapOtherFailuresOrFields) {
   for (int code : {0, EINVAL, ENOMEM, EIO, EOVERFLOW})
-    for (int family = 0; family < 5; ++family) {
+    for (int family = 0; family < 6; ++family) {
       BindStream bind;
       ArrowBufferInit(&bind.param_buffer.value);
       bind.json_parse_fields = {family == 1, true};
       bind.bytes_fields = {false, false};
+      bind.interval_fields = {family == 5, false};
       bind.encoded_fields = {family == 2   ? RedshiftEncodedKind::kGeometry
                              : family == 3 ? RedshiftEncodedKind::kGeography
                              : family == 4 ? RedshiftEncodedKind::kHll
