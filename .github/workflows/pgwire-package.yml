@@ -373,9 +373,9 @@ jobs:
           - arch: x64
             runner: windows-latest
             msystem: UCRT64
-            msysbin: mingw64
-            environment: x86_64
-            compiler-package: mingw-w64-x86_64-gcc
+            msysbin: ucrt64
+            environment: ucrt-x86_64
+            compiler-package: mingw-w64-ucrt-x86_64-gcc
             postgres-package: mingw-w64-ucrt-x86_64-postgresql
             postgres-bin: ucrt64
             triplet: x64-windows-static-release

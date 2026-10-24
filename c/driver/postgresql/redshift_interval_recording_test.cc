@@ -722,8 +722,9 @@ TEST_F(IntervalPublicRecordingTest,
     EXPECT_EQ(recording.committed, 7);
     EXPECT_EQ(recording.pending, caller_owned ? 1 : 0);
     EXPECT_EQ(rows, caller_owned ? 16 : 0);
-    if (caller_owned)
+    if (caller_owned) {
       ASSERT_EQ(driver.ConnectionRollback(&connection, &error), ADBC_STATUS_OK);
+    }
   }
 }
 
