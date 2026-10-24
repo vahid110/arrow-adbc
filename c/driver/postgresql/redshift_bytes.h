@@ -34,6 +34,8 @@ struct RedshiftBytesSchema {
   RedshiftBytesKind kind = RedshiftBytesKind::kNone;
   std::optional<int32_t> width;
   bool enabled() const { return kind != RedshiftBytesKind::kNone; }
+  // Retained limit for unqualified routes, including explicitly marked PG COPY.
+  // Redshift parameters use the VARBYTE domain bound checked by Validate below.
   static constexpr int32_t kInsertBinaryLimit = 1000000;
   static ArrowErrorCode Invalid(ArrowError* error, const char* reason) {
     ArrowErrorSet(error, "[Redshift] Invalid character/binary value: %s", reason);
@@ -185,12 +187,12 @@ struct RedshiftBytesSchema {
   // single-byte domain is 1..127: bytes >=128 require multiple-byte sequences.
   static ArrowErrorCode Validate(ArrowBufferView bytes, RedshiftBytesKind kind,
                                  std::optional<int32_t> width, bool writing,
-                                 ArrowError* error) {
+                                 ArrowError* error, bool redshift_parameters = false) {
     if (bytes.size_bytes < 0 || bytes.size_bytes > ReadLimit(kind) ||
         (bytes.size_bytes && !bytes.data.data) || (width && bytes.size_bytes > *width))
       return Invalid(error, "byte length exceeds descriptor/format");
     if (kind == RedshiftBytesKind::kVarbyte) {
-      if (writing && bytes.size_bytes > kInsertBinaryLimit)
+      if (writing && !redshift_parameters && bytes.size_bytes > kInsertBinaryLimit)
         return Invalid(error, "plain INSERT binary envelope exceeded");
       return NANOARROW_OK;
     }

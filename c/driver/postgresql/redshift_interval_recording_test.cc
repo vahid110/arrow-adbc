@@ -20,6 +20,7 @@
 // There is no socket, server, configurable backend or native producer claim.
 #include <arrow-adbc/driver/redshift.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -31,6 +32,7 @@
 #include "connection.h"
 #include "driver/framework/utility.h"
 #include "metadata.h"
+#include "redshift_bytes_test_fixture.h"
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_super_allocation_test.h"
@@ -54,6 +56,7 @@ struct Recording {
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
   bool super_target = false;
+  int32_t bytes_target_width = 0;
   Oid encoded_target = 0;
   int vendor_result_calls = 0, vendor_result_drift = 0;
   Oid geometry_result_oid = 72113;
@@ -214,6 +217,10 @@ PGresult* Query(const char* query) {
       q.find("SELECT attname, atttypid, atttypmod") != std::string::npos) {
     if (!recording.exists) return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
     if (recording.super_target) return Rows(3, {{"amount", "72111", "-1"}});
+    if (recording.bytes_target_width) {
+      auto modifier = std::to_string(recording.bytes_target_width + 4);
+      return Rows(3, {{"value", "72112", modifier.c_str()}});
+    }
     if (recording.encoded_target) {
       auto oid = std::to_string(recording.encoded_target);
       return Rows(3, {{"amount", oid.c_str(), "-1"}});
@@ -362,6 +369,7 @@ PGresult* PQdescribePrepared(PGconn*, const char*) {
              : Command();
 }
 int PQnparams(const PGresult*) {
+  if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 1;
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
           recording.prepared.end())
@@ -369,6 +377,7 @@ int PQnparams(const PGresult*) {
   return recording.prepared_query == "SELECT owned_timetz_param" ? 1 : 0;
 }
 Oid PQparamtype(const PGresult*, int index) {
+  if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 72112;
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
           recording.prepared.end())
@@ -2025,6 +2034,7 @@ TEST(IntervalParameterStatusTest,
       BindStream bind;
       ArrowBufferInit(&bind.param_buffer.value);
       bind.json_parse_fields = {family == 1, true};
+      bind.bytes_fields = {false, false};
       bind.encoded_fields = {family == 2   ? RedshiftEncodedKind::kGeometry
                              : family == 3 ? RedshiftEncodedKind::kGeography
                              : family == 4 ? RedshiftEncodedKind::kHll
@@ -2197,5 +2207,86 @@ TEST_F(IntervalPublicRecordingTest,
     }
 }
 
+}  // namespace
+}  // namespace adbcpq
+
+namespace adbcpq {
+namespace {
+TEST_F(IntervalPublicRecordingTest, VarbyteDomainBothParameterRoutesAndBindings) {
+  for (bool marked : {false, true}) {
+    for (bool ingest : {false, true}) {
+      for (bool stream : {false, true}) {
+        for (int n : {-1, 0, 9, 1000000, 1000001, 1048575, 1048576, 1048577, 16777216,
+                      16777217}) {
+          ASSERT_EQ(driver.StatementRelease(&statement, &error), ADBC_STATUS_OK);
+          ASSERT_EQ(driver.StatementNew(&connection, &statement, &error), ADBC_STATUS_OK);
+          recording.bytes_target_width = n == 9 ? 8 : 16777216;
+          if (ingest) {
+            ASSERT_EQ(driver.StatementSetOption(
+                          &statement, ADBC_INGEST_OPTION_TARGET_TABLE, "owned", &error),
+                      ADBC_STATUS_OK);
+            ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                                ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                      ADBC_STATUS_OK);
+          } else {
+            ASSERT_EQ(driver.StatementSetSqlQuery(
+                          &statement, "INSERT INTO owned_varbyte VALUES($1)", &error),
+                      ADBC_STATUS_OK);
+          }
+          nanoarrow::UniqueSchema schema;
+          nanoarrow::UniqueArray array;
+          ASSERT_EQ(testing::BytesSchema(schema.get(), NANOARROW_TYPE_BINARY,
+                                         marked ? "VARBYTE" : nullptr,
+                                         !ingest && n == 9 ? "8" : "16777216"),
+                    0);
+          std::string value(std::max(n, 0), '\0');
+          for (int i = 0; i < n; ++i) value[i] = static_cast<char>(i);
+          ASSERT_EQ(
+              testing::BytesBatch(
+                  schema.get(), array.get(),
+                  {n < 0 ? std::nullopt : std::optional<std::string>(value)}, nullptr),
+              0);
+          if (stream) {
+            nanoarrow::UniqueArray empty;
+            ASSERT_EQ(testing::BytesBatch(schema.get(), empty.get(), {}, nullptr), 0);
+            nanoarrow::UniqueArrayStream input;
+            ASSERT_EQ(ArrowBasicArrayStreamInit(input.get(), schema.get(), 2), 0);
+            ArrowBasicArrayStreamSetArray(input.get(), 0, empty.get());
+            ArrowBasicArrayStreamSetArray(input.get(), 1, array.get());
+            ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                      ADBC_STATUS_OK);
+            EXPECT_FALSE(input->release);
+          } else {
+            ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                      ADBC_STATUS_OK);
+            EXPECT_FALSE(array->release);
+            EXPECT_FALSE(schema->release);
+          }
+          recording.executions.clear();
+          const int committed = recording.committed;
+          auto status =
+              driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error);
+          if (n > 16777216 || n == 9) {
+            EXPECT_EQ(status, ADBC_STATUS_INVALID_ARGUMENT) << Message();
+            EXPECT_EQ(std::string(error.sqlstate, 5), std::string(5, '\0'));
+            EXPECT_TRUE(recording.executions.empty());
+            EXPECT_EQ(recording.committed, committed);
+            if (error.release) error.release(&error);
+          } else {
+            ASSERT_EQ(status, ADBC_STATUS_OK) << Message();
+            ASSERT_EQ(recording.executions.size(), 1);
+            ASSERT_EQ(recording.executions[0].size(), 1);
+            const auto& param = recording.executions[0][0];
+            EXPECT_EQ(param.oid, 72112);
+            EXPECT_EQ(param.format, 1);
+            EXPECT_EQ(param.null, n < 0);
+            EXPECT_EQ(param.physical_length, std::max(n, 0));
+            EXPECT_EQ(param.bytes, value);
+          }
+        }
+      }
+    }
+  }
+}
 }  // namespace
 }  // namespace adbcpq

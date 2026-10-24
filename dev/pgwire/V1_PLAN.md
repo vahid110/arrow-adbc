@@ -176,3 +176,9 @@ final exact-head review and applicable green remote CI, then resolve the remaini
 release gates before Task009 publication. Mixed HLL output and direct
 SUPER/spatial binds remain unsupported.
 No arbitrary SQL rewrite or fallback is selected. Existing size caps, NULL semantics and transaction ownership remain.
+
+Task010r's bounded macOS arm64 character/binary read and four corrected VARBYTE
+write-route legs are complete, with full teardown recorded by their controllers.
+See [STATUS](STATUS.md#task010r-characterbinary-qualification) for source-specific
+evidence, retained failures and scope. Final exact-head review, applicable green
+remote CI and the remaining release gates are still required before publication.

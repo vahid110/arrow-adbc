@@ -27,6 +27,7 @@
 #include "bind_stream.h"
 #include "copy/reader.h"
 #include "copy/writer.h"
+#include "driver/framework/utility.h"
 #include "redshift_bytes_test_fixture.h"
 
 namespace adbcpq {
@@ -36,8 +37,16 @@ class BytesWriteCase {
  public:
   ArrowErrorCode Init(ArrowType storage, const char* family, const char* width,
                       const std::vector<std::optional<std::string>>& values,
-                      int target = -1, int32_t target_width = -1, bool redshift = true) {
-    NANOARROW_RETURN_NOT_OK(testing::BytesSchema(schema.get(), storage, family, width));
+                      int target = -1, int32_t target_width = -1, bool redshift = true,
+                      bool parameter_ingest = false) {
+    NANOARROW_RETURN_NOT_OK(testing::BytesSchema(
+        schema.get(),
+        storage == NANOARROW_TYPE_FIXED_SIZE_BINARY ? NANOARROW_TYPE_BINARY : storage,
+        family, width));
+    if (storage == NANOARROW_TYPE_FIXED_SIZE_BINARY) {
+      NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeFixedSize(
+          schema->children[0], storage, static_cast<int32_t>(values.at(0)->size())));
+    }
     NANOARROW_RETURN_NOT_OK(
         testing::BytesBatch(schema.get(), array.get(), values, &error));
     NANOARROW_RETURN_NOT_OK(
@@ -56,7 +65,7 @@ class BytesWriteCase {
     }
     return MakeCopyFieldWriter(schema->children[0], view->children[0], *resolver,
                                target < 0 ? nullptr : &destination, &writer, false,
-                               &error);
+                               &error, false, parameter_ingest);
   }
   ArrowErrorCode Write(int row = 0) {
     auto before = bytes->size_bytes;
@@ -76,6 +85,140 @@ class BytesWriteCase {
   std::unique_ptr<PostgresCopyFieldWriter> writer;
   ArrowError error{};
 };
+class FixedFailureWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit FixedFailureWriter(int code) : code_(code) {}
+  ArrowErrorCode Write(ArrowBuffer*, int64_t, ArrowError* error) override {
+    ArrowErrorSet(error, "fixed writer failure");
+    return code_;
+  }
+
+ private:
+  int code_;
+};
+
+TEST(RedshiftBytesTest, ParameterValidationErrorsAreInvalidArguments) {
+  struct Case {
+    ArrowType storage;
+    const char* family;
+    const char* width;
+    std::string value;
+  };
+  for (const auto& item :
+       {Case{NANOARROW_TYPE_STRING, "CHAR", "4", testing::NumericHex("c2a0")},
+        Case{NANOARROW_TYPE_STRING, "VARCHAR", "4", "abcde"},
+        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "4", "abcde"},
+        Case{NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", std::string(16777217, 'x')},
+        Case{NANOARROW_TYPE_STRING, nullptr, nullptr, std::string("a\0b", 3)}}) {
+    nanoarrow::UniqueSchema schema;
+    nanoarrow::UniqueArray array;
+    ArrowError error{};
+    ASSERT_EQ(testing::BytesSchema(schema.get(), item.storage, item.family, item.width),
+              0);
+    ASSERT_EQ(testing::BytesBatch(schema.get(), array.get(), {item.value}, &error), 0);
+    nanoarrow::UniqueArrayStream stream;
+    adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+    BindStream bind;
+    bind.SetBind(stream.get());
+    ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+    std::shared_ptr<PostgresTypeResolver> resolver;
+    ASSERT_EQ(testing::BytesResolver(BackendProfile::Redshift(), &resolver), 0);
+    ASSERT_TRUE(bind.SetParamTypes(nullptr, *resolver, true).ok());
+    ASSERT_TRUE(bind.PullNextArray().ok());
+    EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INVALID_ARGUMENT);
+    EXPECT_EQ(bind.param_buffer->size_bytes, 0);
+    for (int code : {ENOMEM, EIO}) {
+      bind.bind_field_writers[0] = std::make_unique<FixedFailureWriter>(code);
+      EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+    }
+  }
+}
+
+TEST(RedshiftBytesTest, BinaryDomainExpansionRequiresRedshiftParameterRoute) {
+  for (auto storage : {NANOARROW_TYPE_BINARY, NANOARROW_TYPE_LARGE_BINARY,
+                       NANOARROW_TYPE_BINARY_VIEW, NANOARROW_TYPE_FIXED_SIZE_BINARY}) {
+    for (int n : {1000000, 1000001, 1048575, 1048576, 1048577, 16777216, 16777217}) {
+      std::string value(n, '\0');
+      for (int i = 0; i < n; ++i) value[i] = static_cast<char>(i);
+      BytesWriteCase qualified;
+      ASSERT_EQ(qualified.Init(storage, "VARBYTE", "16777216", {value}, 2, 16777216, true,
+                               true),
+                0);
+      const auto code = qualified.Write();
+      EXPECT_EQ(code == 0, n <= 16777216);
+      if (!code) {
+        const auto wire = qualified.Wire();
+        ASSERT_EQ(wire.size(), value.size() + 4);
+        EXPECT_EQ(wire.substr(4), value);
+      }
+      for (bool redshift : {false, true}) {
+        BytesWriteCase unqualified;
+        ASSERT_EQ(unqualified.Init(storage, "VARBYTE", "16777216", {value},
+                                   redshift ? 2 : -1, 16777216, redshift, !redshift),
+                  0);
+        EXPECT_EQ(unqualified.Write() == 0, n <= 1000000);
+      }
+    }
+  }
+  BytesWriteCase postgres;
+  const std::string unmarked(1000001, 'x');
+  ASSERT_EQ(postgres.Init(NANOARROW_TYPE_BINARY, nullptr, nullptr, {unmarked}, -1, -1,
+                          false, true),
+            0);
+  ASSERT_EQ(postgres.Write(), 0);
+  EXPECT_EQ(postgres.Wire().substr(4), unmarked);
+  BytesWriteCase target;
+  ASSERT_EQ(target.Init(NANOARROW_TYPE_BINARY, "VARBYTE", "16777216", {"123456789"}, 2, 8,
+                        true, true),
+            0);
+  EXPECT_EQ(target.Write(), EINVAL);
+  BytesWriteCase source;
+  ASSERT_EQ(source.Init(NANOARROW_TYPE_BINARY, "VARBYTE", "8", {"123456789"}, 2, 16777216,
+                        true, true),
+            0);
+  EXPECT_EQ(source.Write(), EINVAL);
+}
+
+TEST(RedshiftBytesTest, ParameterFamilyMismatchIsInvalidArgumentBeforeSql) {
+  for (bool binary_source : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(
+        testing::BytesSchema(
+            schema.get(), binary_source ? NANOARROW_TYPE_BINARY : NANOARROW_TYPE_STRING,
+            binary_source ? "VARBYTE" : "VARCHAR", "8"),
+        0);
+    nanoarrow::UniqueArrayStream stream;
+    nanoarrow::EmptyArrayStream(schema.get()).ToArrayStream(stream.get());
+    BindStream bind;
+    bind.SetBind(stream.get());
+    ASSERT_TRUE(bind.Begin([] { return Status::Ok(); }).ok());
+    std::shared_ptr<PostgresTypeResolver> resolver;
+    ASSERT_EQ(testing::BytesResolver(BackendProfile::Redshift(), &resolver), 0);
+    PostgresType destination;
+    ASSERT_EQ(resolver->Find(testing::kBytesOids[binary_source ? 1 : 2], &destination,
+                             &bind.na_error),
+              0);
+    destination = destination.WithFieldDescriptor(12, BackendProfile::Redshift());
+    PostgresType targets(PostgresTypeId::kRecord);
+    targets.AppendChild("value", destination);
+    EXPECT_EQ(bind.SetParamTypes(nullptr, *resolver, true, &targets).ToAdbc(nullptr),
+              ADBC_STATUS_INVALID_ARGUMENT);
+    ASSERT_EQ(bind.bind_field_writers.size(), 1U);
+    EXPECT_EQ(bind.bind_field_writers[0], nullptr);
+    EXPECT_EQ(bind.param_buffer->size_bytes, 0);
+  }
+}
+
+TEST(RedshiftBytesTest, OrdinaryPostgresWriterErrorsRemainInternal) {
+  BindStream bind;
+  ArrowBufferInit(&bind.param_buffer.value);
+  bind.bytes_fields = {false};
+  bind.json_parse_fields = {false};
+  bind.encoded_fields = {RedshiftEncodedKind::kNone};
+  bind.bind_field_writers.push_back(std::make_unique<FixedFailureWriter>(EINVAL));
+  EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr), ADBC_STATUS_INTERNAL);
+}
+
 TEST(RedshiftBytesTest, LiteralWirePreservesUtf8SpacesQuotesBackslashesAndRawBinary) {
   BytesWriteCase text;
   ASSERT_EQ(text.Init(NANOARROW_TYPE_STRING, "VARCHAR", "20",
@@ -212,6 +355,74 @@ TEST(RedshiftBytesTest, RawCharPaddingEmptyNullAndStrictReadBoundsPreserveBytes)
   EXPECT_EQ(std::string(got.data, got.size_bytes), padded);
   EXPECT_EQ(ArrowArrayViewGetStringUnsafe(view.get(), 1).size_bytes, 0);
   EXPECT_TRUE(ArrowArrayViewIsNull(view.get(), 2));
+}
+TEST(RedshiftBytesTest, ReaderMaximumAndAdjacentOversizePreservePrefixAndCursor) {
+  struct Case {
+    RedshiftBytesKind kind;
+    ArrowType storage;
+    int32_t maximum;
+  };
+  // Literal protocol boundaries are independent of ReadLimit(): changing the
+  // production predicate must not silently change the expected test boundary.
+  for (const auto test :
+       {Case{RedshiftBytesKind::kVarchar, NANOARROW_TYPE_STRING, 16000000},
+        Case{RedshiftBytesKind::kVarbyte, NANOARROW_TYPE_BINARY, 16777216}}) {
+    SCOPED_TRACE(test.maximum);
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), test.storage), 0);
+    nanoarrow::UniqueArray array;
+    ArrowError error{};
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    // Unknown descriptor width isolates the family-wide read limit: a narrow
+    // descriptor or the write guard must not be the reason for rejection.
+    PostgresCopyBinaryFieldReader reader({test.kind, std::nullopt});
+    ASSERT_EQ(reader.InitSchema(schema.get()), 0);
+    ASSERT_EQ(reader.InitArray(array.get()), 0);
+    const std::string prefix = "KEEP";
+    ArrowBufferView data{};
+    data.data.data = prefix.data();
+    data.size_bytes = prefix.size();
+    ASSERT_EQ(reader.Read(&data, 4, array.get(), &error), 0);
+
+    std::string payload(test.maximum + 1, 'x');
+    if (test.kind == RedshiftBytesKind::kVarbyte) {
+      payload[0] = 0;
+      payload[test.maximum - 1] = static_cast<char>(0xff);
+    }
+    data.data.data = payload.data();
+    data.size_bytes = payload.size();
+    const auto* cursor = data.data.data;
+    const auto offsets_size = ArrowArrayBuffer(array.get(), 1)->size_bytes;
+    const auto values_size = ArrowArrayBuffer(array.get(), 2)->size_bytes;
+    ASSERT_EQ(reader.Read(&data, test.maximum + 1, array.get(), &error), EINVAL);
+    EXPECT_NE(std::strstr(error.message, "byte length exceeds descriptor/format"),
+              nullptr);
+    EXPECT_EQ(data.data.data, cursor);
+    EXPECT_EQ(data.size_bytes, test.maximum + 1);
+    EXPECT_EQ(array->length, 1);
+    EXPECT_EQ(array->null_count, 0);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 1)->size_bytes, offsets_size);
+    EXPECT_EQ(ArrowArrayBuffer(array.get(), 2)->size_bytes, values_size);
+
+    // The neighboring valid value must still decode after the failed field,
+    // consuming exactly its own bytes and retaining the untouched suffix.
+    ASSERT_EQ(reader.Read(&data, test.maximum, array.get(), &error), 0);
+    EXPECT_EQ(data.size_bytes, 1);
+    EXPECT_EQ(data.data.as_char, payload.data() + test.maximum);
+    ASSERT_EQ(reader.FinishArray(array.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), &error), 0);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), &error), 0);
+    ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), &error), 0);
+    ASSERT_EQ(array->length, 2);
+    const auto first = ArrowArrayViewGetBytesUnsafe(view.get(), 0);
+    EXPECT_EQ(first.size_bytes, 4);
+    EXPECT_EQ(std::memcmp(first.data.data, prefix.data(), 4), 0);
+    const auto actual = ArrowArrayViewGetBytesUnsafe(view.get(), 1);
+    ASSERT_EQ(actual.size_bytes, test.maximum);
+    EXPECT_EQ(std::memcmp(actual.data.data, payload.data(), test.maximum), 0);
+  }
 }
 TEST(RedshiftBytesTest, DynamicVarbyteOidCannotFallBackToByteaAndMarkersAreValidated) {
   std::shared_ptr<PostgresTypeResolver> resolver;

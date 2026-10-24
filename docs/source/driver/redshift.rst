@@ -226,6 +226,23 @@ Spatial EWKB and HLL serialization subsets are also described below. Explicit
 ``JSON_SERIALIZE(super_column)`` can return text for values that fit Redshift's
 ``VARCHAR`` limit; it is not a lossless strategy for arbitrary ``SUPER`` values.
 
+VARBYTE parameter limits
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Redshift prepared parameters and generated ingestion accept VARBYTE values up to
+16 MiB (16,777,216 bytes) through both array and stream binding. Larger values are
+rejected locally. Declared source widths and discovered ingestion target widths
+still apply; arbitrary prepared SQL does not discover destination-column widths.
+The marked PostgreSQL COPY route retains its separate 1,000,000-byte guard.
+No automatic fallback or general stream atomicity is implied by these limits.
+
+Installed macOS arm64 checks covered 18 cases per route through Python and C,
+for both generated ingestion and direct prepared parameters, on ``3be87d3``.
+Read checks on ``d5b39f4`` included 16,000,000-byte VARCHAR and 16,777,216-byte
+VARBYTE through both languages. These results do not qualify other platforms or
+all type boundaries. A native 16 MiB+1 probe stopped on unsafe ``XX000``; local
+oversize rejection is not evidence of a classified server size rejection.
+
 Platform evidence and limits
 ============================
 

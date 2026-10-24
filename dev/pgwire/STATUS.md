@@ -186,3 +186,29 @@ remain. Actual compute costs await reconciliation; no further attempt is authori
 | 2026-10-16 | [38920727258](https://github.com/vahid110/arrow-adbc/actions/runs/38920727258) | `36b786d1c569c0f0c727c70dcc06995d0b31a173` | created dedicated resources; post-usage gate failed with original response status unrecorded; cleanup SQL FAILED on STV access and cancellation masked error; independent physical teardown later verified, no admission/claim/client batch | pending |
 | 2026-10-16 | [38933278088](https://github.com/vahid110/arrow-adbc/actions/runs/38933278088) | `44bc188350125045e42a8b65e1fc1dc7820e3683` | installed preflight/OIDC/bootstrap/SYS proof passed; exact claim PutParameter denied before driver payload; claim absent, supported post-failure observer zero; independent full physical/secret/IAM teardown verified, original namespace uncertainty retained | pending |
 | 2026-10-18 | [39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470) | `3460c541914560a91872e4417c4c3b4ccbb81df0` | installed C/Linux-wheel temporary-IAM query/params/int64 metadata/create+append passed; independent full physical/secret/IAM teardown verified separately from original helper namespace uncertainty; all-types qualification remains pending | not reconciled |
+
+## Task010r character/binary qualification
+
+Installed macOS arm64 reads on `d5b39f4` passed Python small 61 cases, C small
+16 cases and two maximum-read cases per language: 16,000,000-byte VARCHAR and
+16,777,216-byte VARBYTE. All four legs have independently verified evidence and
+full physical teardown. Python also exercised character/binary generated writes,
+width/family rejection and retention; this is not a standalone C character-write
+cross-product or a general streaming-atomicity guarantee.
+
+Corrected source `3be87d3` passed 18 installed VARBYTE Bind/BindStream cases in
+each of four routes: Python generated ingestion (`66b794`), C generated ingestion
+(`517d`), Python direct prepared parameters (`e771`) and C direct prepared
+parameters (`cdee`). Original controllers report completion and all seven owned
+resource classes removed for each leg. Source review and serial rebuilt offline
+validation cover the correction; the live read evidence remains on `d5b39f4`.
+Test-only successor `50f9f8643` adds adjacent unsupported reader-boundary coverage.
+Final exact-head review and applicable green remote CI remain gates.
+
+The parameter guard is 16 MiB; marked PostgreSQL COPY retains its 1,000,000-byte
+guard. Earlier installed rejections above 1,000,000 bytes preserve the superseded
+policy evidence. Native plain INSERT accepted exactly 16 MiB, but the raw
+16 MiB+1 attempt stopped on unsafe `XX000`: it is neither a classified server
+size rejection nor a completed native-domain suite. Local oversize rejection is
+separate. Direct prepared SQL does not discover arbitrary destination widths.
+These bounded macOS arm64 results do not qualify every type, boundary or platform.
