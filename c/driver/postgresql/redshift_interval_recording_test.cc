@@ -728,6 +728,97 @@ TEST_F(IntervalPublicRecordingTest,
   }
 }
 
+TEST_F(IntervalPublicRecordingTest, SignedConversionAndTargetFailuresKeepOwnership) {
+  struct Case {
+    ArrowTimeUnit unit;
+    int64_t invalid;
+    const char* reason;
+  };
+  const Case cases[] = {
+      {NANOARROW_TIME_UNIT_SECOND, 9223372036855LL, "duration unit overflow"},
+      {NANOARROW_TIME_UNIT_SECOND, -9223372036855LL, "duration unit overflow"},
+      {NANOARROW_TIME_UNIT_MILLI, 9223372036854776LL, "duration unit overflow"},
+      {NANOARROW_TIME_UNIT_MILLI, -9223372036854776LL, "duration unit overflow"},
+      {NANOARROW_TIME_UNIT_MICRO, -1001, "inexact qualifier"},
+      {NANOARROW_TIME_UNIT_NANO, -1001, "submicrosecond loss"}};
+  for (bool stream : {false, true}) {
+    for (bool caller_owned : {false, true}) {
+      for (const auto& item : cases) {
+        SCOPED_TRACE(item.invalid);
+        SCOPED_TRACE(stream);
+        SCOPED_TRACE(caller_owned);
+        ASSERT_EQ(
+            driver.ConnectionSetOption(
+                &connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                caller_owned ? ADBC_OPTION_VALUE_DISABLED : ADBC_OPTION_VALUE_ENABLED,
+                &error),
+            ADBC_STATUS_OK);
+        recording.qualified_interval = true;
+        recording.committed = 7;
+        recording.pending = 0;
+        recording.executions.clear();
+        recording.queries.clear();
+        ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                            "owned", &error),
+                  ADBC_STATUS_OK);
+        ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                            ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                  ADBC_STATUS_OK);
+        nanoarrow::UniqueSchema schema;
+        nanoarrow::UniqueArray invalid;
+        ASSERT_EQ(
+            testing::IntervalWriteSchema(schema.get(), RedshiftIntervalFamily::kDaySecond,
+                                         "known", "SECOND", "6", item.unit),
+            0);
+        ASSERT_EQ(testing::IntervalWriteBatch(schema.get(), invalid.get(), {item.invalid},
+                                              nullptr),
+                  0);
+        if (stream) {
+          nanoarrow::UniqueArray first;
+          ASSERT_EQ(testing::IntervalWriteBatch(
+                        schema.get(), first.get(),
+                        std::vector<std::optional<int64_t>>(16, 0), nullptr),
+                    0);
+          nanoarrow::UniqueArrayStream input;
+          ASSERT_EQ(ArrowBasicArrayStreamInit(input.get(), schema.get(), 2), 0);
+          ArrowBasicArrayStreamSetArray(input.get(), 0, first.get());
+          ArrowBasicArrayStreamSetArray(input.get(), 1, invalid.get());
+          ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                    ADBC_STATUS_OK);
+        } else {
+          ASSERT_EQ(driver.StatementBind(&statement, invalid.get(), schema.get(), &error),
+                    ADBC_STATUS_OK);
+        }
+        int64_t rows = -1;
+        EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, &rows, &error),
+                  ADBC_STATUS_INVALID_ARGUMENT)
+            << Message();
+        EXPECT_NE(std::string_view(Message()).find(item.reason), std::string_view::npos);
+        EXPECT_EQ(std::string(error.sqlstate, 5), std::string(5, '\0'));
+        // Recorder counts simulated dispatches, not actual database rows.
+        ASSERT_EQ(recording.executions.size(), stream ? 1U : 0U);
+        if (stream) {
+          ASSERT_EQ(recording.executions[0].size(), 16U);
+          for (const auto& value : recording.executions[0]) {
+            EXPECT_EQ(value.bytes, testing::NumericHex("0000000000000000"));
+          }
+        }
+        EXPECT_EQ(recording.committed, 7);
+        EXPECT_EQ(recording.pending, stream && caller_owned ? 1 : 0);
+        EXPECT_EQ(rows, stream && caller_owned ? 16 : 0);
+        EXPECT_EQ(
+            std::count(recording.queries.begin(), recording.queries.end(), "ROLLBACK"),
+            caller_owned ? 0 : 1);
+        if (caller_owned) {
+          ASSERT_EQ(driver.ConnectionRollback(&connection, &error), ADBC_STATUS_OK);
+          EXPECT_EQ(recording.pending, 0);
+          EXPECT_EQ(recording.committed, 7);
+        }
+      }
+    }
+  }
+}
+
 TEST_F(IntervalPublicRecordingTest, QualifiedProducerDriftRejectsBeforePayload) {
   recording.qualified_interval = true;
   recording.interval_identity_drift = true;
