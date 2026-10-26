@@ -56,6 +56,8 @@ struct Recording {
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
   bool qualified_interval = false;
+  std::string interval_raw = "268435463";
+  std::string interval_formatted = "interval second (3)";
   bool interval_identity_drift = false;
   int interval_identity_reads = 0;
   bool super_target = false;
@@ -237,16 +239,17 @@ PGresult* Query(const char* query) {
                  : Rows(3, {{"amount", "65113", code}});
     }
     return Rows(3,
-                {{"amount", "65017", recording.qualified_interval ? "268435463" : "-1"}});
+                {{"amount", "65017",
+                  recording.qualified_interval ? recording.interval_raw.c_str() : "-1"}});
   }
   if (q.find("SELECT current_database(), ns.nspname") != std::string::npos) {
     ++recording.interval_identity_reads;
     return Rows(
         9, {{"fixturedb", "public", "owned", "12345", "1", "amount", "65017",
-             recording.qualified_interval ? "268435463" : "-1",
+             recording.qualified_interval ? recording.interval_raw.c_str() : "-1",
              recording.interval_identity_drift && recording.interval_identity_reads > 1
                  ? "interval second (4)"
-             : recording.qualified_interval ? "interval second (3)"
+             : recording.qualified_interval ? recording.interval_formatted.c_str()
                                             : "interval day to second"}});
   }
   if (q.find("FROM svv_columns") != std::string::npos)
@@ -682,6 +685,59 @@ TEST_F(IntervalPublicRecordingTest, QualifiedActualTargetSupportsBothBindingsAnd
         EXPECT_EQ(recording.executions[0][3].bytes,
                   testing::NumericHex("0000000000000000"));
       }
+}
+
+TEST_F(IntervalPublicRecordingTest, OmittedPrecisionTargetsPreserveSignedMicroseconds) {
+  const std::pair<const char*, const char*> captured[] = {
+      {"268500995", "interval second"},
+      {"470351875", "interval day to second"},
+      {"469827587", "interval hour to second"},
+      {"402718723", "interval minute to second"}};
+  for (const auto& [raw, formatted] : captured) {
+    for (bool stream : {false, true}) {
+      SCOPED_TRACE(formatted);
+      recording.queries.clear();
+      recording.executions.clear();
+      recording.qualified_interval = true;
+      recording.interval_raw = raw;
+      recording.interval_formatted = formatted;
+      recording.exists = true;
+      recording.committed = 7;
+      recording.pending = 0;
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                          "owned", &error),
+                ADBC_STATUS_OK);
+      ASSERT_EQ(driver.StatementSetOption(&statement, ADBC_INGEST_OPTION_MODE,
+                                          ADBC_INGEST_OPTION_MODE_APPEND, &error),
+                ADBC_STATUS_OK);
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      Input(&schema, &array, {1, -1, std::nullopt, 0}, "SECOND", "6");
+      if (stream) {
+        nanoarrow::UniqueArrayStream input;
+        adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+        ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                  ADBC_STATUS_OK);
+      } else {
+        ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                  ADBC_STATUS_OK);
+      }
+      int64_t rows = -1;
+      ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, &rows, &error),
+                ADBC_STATUS_OK)
+          << Message();
+      EXPECT_EQ(rows, 4);
+      EXPECT_EQ(recording.committed, 8);
+      ASSERT_EQ(recording.executions.size(), 1);
+      const auto& values = recording.executions[0];
+      ASSERT_EQ(values.size(), 4);
+      EXPECT_EQ(values[0].oid, 65017U);
+      EXPECT_EQ(values[0].bytes, testing::NumericHex("0000000000000001"));
+      EXPECT_EQ(values[1].bytes, testing::NumericHex("ffffffffffffffff"));
+      EXPECT_TRUE(values[2].null);
+      EXPECT_EQ(values[3].bytes, testing::NumericHex("0000000000000000"));
+    }
+  }
 }
 
 TEST_F(IntervalPublicRecordingTest,

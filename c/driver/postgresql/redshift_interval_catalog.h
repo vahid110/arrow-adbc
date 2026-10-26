@@ -79,7 +79,13 @@ inline Status ParseIntervalCatalogIdentity(
 // Captured on native Redshift operation cd9f2ad028224383be5e7fb164691305:
 // pg_attribute/format_type observations 104 and 708 agree for these 37 explicit
 // declarations. SVV observations 105 and 709 are NULL in all three fields.
-// This is a closed lookup, not PostgreSQL typmod arithmetic or a default rule.
+// Omitted SECOND-ending precision tuples were captured by operation
+// b09060267ff24f3b83815a5fb80a099c, defaults.catalog.before. The nonempty
+// defaults.binary/text results preserve both signs of one microsecond and the
+// same column descriptors. Redshift documents omitted precision as six:
+// https://docs.aws.amazon.com/redshift/latest/dg/r_interval_data_types.html
+// Empty query projections are not catalog evidence. This remains a closed
+// lookup, not PostgreSQL typmod arithmetic or a general default rule.
 inline void QualifyIntervalCatalogTarget(const RedshiftIntervalCatalogColumn& identity,
                                          RedshiftIntervalConstraint* constraint) {
   using Family = RedshiftIntervalFamily;
@@ -92,6 +98,13 @@ inline void QualifyIntervalCatalogTarget(const RedshiftIntervalCatalogColumn& id
     std::string_view formatted;
   };
   static const Observation qualified[] = {
+      {268500995, Family::kDaySecond, Qualifier::kSecond, 6, "interval second"},
+      {470351875, Family::kDaySecond, Qualifier::kDayToSecond, 6,
+       "interval day to second"},
+      {469827587, Family::kDaySecond, Qualifier::kHourToSecond, 6,
+       "interval hour to second"},
+      {402718723, Family::kDaySecond, Qualifier::kMinuteToSecond, 6,
+       "interval minute to second"},
       {327683, Family::kYearMonth, Qualifier::kYear, std::nullopt, "interval year"},
       {196611, Family::kYearMonth, Qualifier::kMonth, std::nullopt, "interval month"},
       {458755, Family::kYearMonth, Qualifier::kYearToMonth, std::nullopt,

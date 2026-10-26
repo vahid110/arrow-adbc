@@ -649,6 +649,12 @@ TEST(RedshiftIntervalCatalogTest, ExactNativeProducerMatrixAndForeignFacts) {
     bool months;
   };
   const Captured captured[] = {
+      // Operation b09060267ff24f3b83815a5fb80a099c, defaults.catalog.before;
+      // nonempty binary/text readback preserves +/-1 microsecond.
+      {"268500995", "interval second", "SECOND", 6, false},
+      {"470351875", "interval day to second", "DAY TO SECOND", 6, false},
+      {"469827587", "interval hour to second", "HOUR TO SECOND", 6, false},
+      {"402718723", "interval minute to second", "MINUTE TO SECOND", 6, false},
       {"327683", "interval year", "YEAR", -1, true},
       {"196611", "interval month", "MONTH", -1, true},
       {"458755", "interval year to month", "YEAR TO MONTH", -1, true},
@@ -691,12 +697,15 @@ TEST(RedshiftIntervalCatalogTest, ExactNativeProducerMatrixAndForeignFacts) {
   ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
   for (const auto& item : captured) {
     SCOPED_TRACE(item.formatted);
-    for (int variant = 0; variant < 10; ++variant) {
+    for (int variant = 0; variant < 12; ++variant) {
       // Matched, family mismatch, absent/-1/foreign raw, NULL/text drift,
       // and each previously unqualified non-NULL SVV diagnostic.
       const bool months = item.months != (variant == 1);
       const char* oid = months ? "64001" : "65017";
-      const char* raw = variant == 2   ? nullptr
+      const std::string adjacent =
+          std::to_string(std::stoi(item.raw) + (variant == 10 ? -1 : 1));
+      const char* raw = variant >= 10  ? adjacent.c_str()
+                        : variant == 2 ? nullptr
                         : variant == 3 ? "-1"
                         : variant == 4 ? "12345"
                                        : item.raw;
