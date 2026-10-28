@@ -19,72 +19,89 @@
 
 # First-release Redshift type contract
 
-Original audit: 2026-10-18, source `3460c541914560a91872e4417c4c3b4ccbb81df0`.
-Current evidence below identifies its actual tested source. This is a design and
-evidence inventory, not implemented all-type support.
-**All 21 table types are first-release work before Task009.** Aliases resolve to
-canonical server types; recovering the original CREATE spelling is not required.
-The [AWS list](https://docs.aws.amazon.com/redshift/latest/dg/c_Supported_data_types.html)
-is the inventory boundary: PostgreSQL UUID/JSON/JSONB/arrays/domains/ranges/money,
-quoted `"char"`, and SUPER's nested arrays/objects are not additional Redshift
-SQL column types. NCHAR/NVARCHAR also have NATIONAL CHARACTER / NATIONAL CHARACTER
-VARYING spellings documented in [character types](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html).
+Reconciled 2026-10-28 against merged PR29 source
+`fca2eab2e05e1a63cfbd9adecc802c53334bdbd0` (tree
+`0fa498a6e88c30eb1758195c614755a9942c51af`). **All 21 canonical SQL column
+types remain first-release scope.** This inventory separates implementation from
+retained installed evidence; it does not declare release readiness. The finite
+remaining gates are in [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md).
+
+Aliases resolve to canonical types; recovering original CREATE spelling is not
+required. The [AWS list](https://docs.aws.amazon.com/redshift/latest/dg/c_Supported_data_types.html)
+is the inventory boundary. PostgreSQL UUID/JSON/JSONB/arrays/domains/ranges/money,
+quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 ## Current evidence, by operation
 
-`C`: code present; `O-PG`: existing PostgreSQL codec/schema offline assertions
-passed in [CI 38899143218](https://github.com/vahid110/arrow-adbc/actions/runs/38899143218)
-(baseline PostgreSQL evidence; Task010b changes are separately identified below).
-`T`: opt-in Redshift test declaration, not a qualification receipt.
-`L`: narrowly live proven by [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470).
-`F`: Task010b offline protocol/C Data checks passed in PR22; Task010c1 adds
-synthetic descriptor/parser and C Data metadata checks. Neither is captured
-Redshift traffic or a live libpq qualification.
-`M`: the fixed macOS arm64 installed-wheel/public-C-API subset passed on
-2026-10-21, operation `726f4b3594e048e29f4571b2770549c3`, source `a239f66cc`
-(15 positive and three expected-boundary cases). This is separate from historical Linux `L`; full-envelope `NQ` remains.
-Spatial/HLL CREATE and query schemas were exercised, not APPEND or every metadata
-API. All seven owned resource classes were verified absent after child reap.
-`I`: Task010s bounded installed Python/C Bind and BindStream CREATE/APPEND
-and target rejection evidence on macOS arm64, with verified full teardown. See
-[STATUS](STATUS.md#task010s-interval-ingestion-qualification).
-`NQ`: full Redshift envelope not qualified; `N`: no semantic implementation.
-`opaque` means unsupported external bytes, **not full type support**.
-C/O-PG/T alone supplies no native proof; L/M/I have only their stated scope. No row
-is a claim of full-range support.
-Create and append are separate in the fourth column. Metadata is current schema/
-canonical name evidence, not proof of precision, scale, length or qualifier.
+`C` = implemented, but the selected retained evidence does not qualify this
+operation for this family. It is an **evidence gap**, not a finding that code fails.
+`L/M/Q/R/S/T` = bounded installed live evidence at the exact source listed below;
+none means every value, API, platform or final candidate was tested. `P` limits
+that evidence to Python through the installed C driver; standalone C is separate.
+`U` = explicitly unsupported operation. Mixed HLL rows and direct SUPER/spatial
+binds are mandatory v1 work under the human decision of 2026-10-28.
+A direct bind is application-supplied prepared SQL, distinct from the driver's
+generated CREATE/APPEND SQL. Bind/BindStream ingest proof never fills a direct-bind
+gap. Metadata evidence below covers the indicated query/schema observations;
+full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 
-| SQL column type and aliases (21 entries) | Native read | Bind | Create / append | Metadata | Recommended representation |
-|---|---|---|---|---|---|
-| SMALLINT / INT2 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | int16 |
-| INTEGER / INT / INT4 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | int32 |
-| BIGINT / INT8 | C,O-PG,T,L | C-checked,NQ; prior L | C-canonical / C-target-checked,NQ; prior L | C-canonical name,NQ; prior L | int64 |
-| DECIMAL / NUMERIC | C-decimal128/exact-text,F,NQ; PG O-PG; T | C-exact128/256/marked-text,NQ | C-explicit-p/s / C-target-exact,NQ | C,F numeric modifiers; NQ | decimal128(p,s); exact text for unresolved expression modifiers |
-| REAL / FLOAT4 | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float32 |
-| DOUBLE PRECISION / FLOAT8 / FLOAT | C,O-PG,T,NQ | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | float64 |
-| CHAR / CHARACTER / NCHAR / BPCHAR | C-checked raw padding,F,NQ; O-PG | C-UTF8 single-byte/width,NQ | C-explicit width / C-target checked,NQ | C,F byte width/identity,NQ | utf8 + CHAR byte width/identity |
-| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | C-checked UTF8,F,NQ; O-PG,T | C-checked UTF8/width,NQ | C-explicit/fixed default / C-target checked,NQ | C,F,T byte width/identity,NQ | utf8/large_utf8 + byte limit |
-| DATE | C-checked,F,NQ; O-PG,T | C-exact date32/date64,NQ | C-canonical / C-target exact,NQ | C,F identity/raw modifier,NQ | date32 |
-| TIME / TIME WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | time64(us) or closed int64 extension |
-| TIMETZ / TIME WITH TIME ZONE | C-reference,F,NQ | C-exact reference,NQ | C-bare DDL / C-known target,NQ | C-family/known precision,F,NQ | fixed-offset struct extension, below |
-| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | C-checked,F,NQ; O-PG,T | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us) civil or closed native-count extension |
-| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | C-checked,F,NQ; O-PG | C-exact units/extension,NQ | C-bare/precision gate / C-target exact,NQ | C,F known fractional precision,NQ | timestamp(us, UTC) or closed native-count extension |
-| INTERVAL YEAR TO MONTH | C-checked,F,NQ | C-exact reference,NQ | C-exact DDL / C-target checked,I,NQ | C,F closed qualifier states,NQ | month_day_nano_interval(months,0,0) |
-| INTERVAL DAY TO SECOND | C-checked,F,NQ | C-exact units,NQ | C-exact DDL / C-target checked,I,NQ | C,F closed qualifier/precision states,NQ | duration(us) + interval family |
-| BOOLEAN / BOOL | C-strict,NQ; O-PG,T | C-checked,NQ | C-canonical / C-target-checked,NQ | C-canonical name,NQ | bool |
-| HLLSKETCH | C-serialization all-HLL only,M,NQ | C-text subset,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_utf8 serialized sketch |
-| SUPER | C-observable JSON wire,NQ | N-direct; C-generated JSON subset,M | C-JSON subset,M / C-target-checked,M | C-output/input contracts,NQ | large_utf8 native wire JSON; separate JSON-subset input |
-| VARBYTE / VARBINARY / BINARY VARYING | C-raw reference,F,M,NQ | C-raw/provisional size cap,NQ | C-explicit width,M / C-target checked,NQ | C,F byte width/identity,NQ | binary/large_binary |
-| GEOMETRY | C-bounded EWKB,M,NQ | C-generated raw constructor,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, per-value SRID |
-| GEOGRAPHY | C-bounded EWKB,M,NQ | C-generated constructor/cast,M,NQ | C-DDL,M / exact target,NQ | C-family/extension,M,NQ | large_binary EWKB, explicit per-value SRID |
+| Canonical SQL type and aliases (21) | Native read | Direct bind | Create | Append | Metadata | Arrow representation |
+|---|---|---|---|---|---|---|
+| SMALLINT / INT2 | C | C | C | C | C identity | int16 |
+| INTEGER / INT / INT4 | C | C | C | C | C identity | int32 |
+| BIGINT / INT8 | L | L | L | L | L bounded schema | int64 |
+| DECIMAL / NUMERIC | Q | C | Q-P | Q-P | Q query p/s; unknown expressions exact text | decimal128 or exact text |
+| REAL / FLOAT4 | C | C | C | C | C identity | float32 |
+| DOUBLE PRECISION / FLOAT8 / FLOAT | C | C | C | C | C identity | float64 |
+| CHAR / CHARACTER / NCHAR / BPCHAR | R | C | R-P | R-P | R widths/identity | utf8, padding retained |
+| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | Q,R | C | R-P | R-P | R widths/identity | utf8/large_utf8 |
+| DATE | Q | C | Q-P | Q-P | Q query identity; C remaining APIs | date32 |
+| TIME / TIME WITHOUT TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | time64(us) or native-count extension |
+| TIMETZ / TIME WITH TIME ZONE | Q | C | Q-P | Q-P | Q query family/offset struct | fixed-offset struct extension |
+| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | timestamp(us) or native-count extension |
+| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | timestamp(us, UTC) or native-count extension |
+| INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
+| INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
+| BOOLEAN / BOOL | C | C | C | C | C identity | bool |
+| HLLSKETCH | M-P,Q-P all-HLL; U mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
+| SUPER | Q; corrected C Arrow rerun open | U semantic direct bind | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
+| VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
+| GEOMETRY | M-P,Q-P bounded EWKB | U | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOGRAPHY | M-P,Q-P bounded EWKB | U | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
 
-L covers installed C archive and Linux x86-64 wheel, temporary IAM/verify-full TLS,
-query/parameter value 42, small int64 create+append, schema/roundtrip and owned
-fixture cleanup. Python also checked invalid-replace preservation. Independent
-physical/secret/IAM absence was verified separately after the helper's original
-namespace-removal uncertainty; no receipt was relabeled. This is not all-types,
-all-platform or every-API qualification; actual dollars remain unreconciled.
+Evidence keys (precise retained paths/operations are indexed in
+[V1_ACCEPTANCE.md](V1_ACCEPTANCE.md#retained-evidence-index)):
+
+- **L:** Linux installed C archive/Python wheel, source `3460c5419`,
+  [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470):
+  temporary IAM/TLS, value 42, int64 create/append/schema and rejection retention.
+- **M:** macOS arm64 source `a239f66cc`, operation `726f4b3594e048e29f4571b2770549c3`:
+  15 positive vendor cases and three expected rejections through the Python
+  client/public C API, not a standalone C client. Spatial/HLL CREATE and
+  readback are proven; APPEND is not. The then-expected SUPER read rejection was
+  superseded by Q, while its original receipt remains unchanged.
+- **Q:** macOS arm64 source `26fb72348`: Python Arrow 76/76, lossless 11/11,
+  writes 60/60 (48 decimal/temporal/TIMETZ positive, 12 interval-target rejections);
+  standalone C Arrow 22/23, interval reads 37/37, lossless 24/24. The original C
+  SUPER fixture failure remains; the corrected fixture passed only in lossless mode.
+- **R:** macOS arm64 reads at `d5b39f4`: Python 61, C 16 small cases and two
+  maximum reads per language. Corrected `3be87d3` passed 18 VARBYTE cases in each
+  Python/C generated/direct route. Python character writes do not establish the
+  standalone C character-write cross-product. See [R details](STATUS.md#task010r-characterbinary-qualification).
+- **S:** `218b59859`, four macOS arm64 Python/C array/stream ingestion legs,
+  68 cases each: 37 qualifier/precision create+append pairs, 31 target-quantum
+  rejections/retention. See [S details](STATUS.md#task010s-interval-ingestion-qualification).
+- **T:** `77da4599c`, four macOS arm64 Python/C array/stream legs, 57/60/57/60
+  cases: selected extrema/defaults/negative and late-failure behavior. All 234
+  cases passed. Full resource closure is verified separately from the original C
+  stream cleanup timeout. See [T details](STATUS.md#task010t-interval-edge-qualification).
+
+Public interval constraints remaining unknown are an intentional truthful
+representation, not missing proof of a guessed qualifier. S/T target decoding is
+internal ingestion evidence only. Opaque bytes never qualify semantic reads.
+All receipts retain their original failures, source and platform scope; actual
+billing is unreconciled. PR29 is merged with applicable CI green; candidate
+validation after new changes remains a separate gate.
 
 ## Source audit and gaps
 
@@ -123,13 +140,13 @@ all-platform or every-API qualification; actual dollars remain unreconciled.
   OIDs. Task010e1 extends aligned targets to four temporal families, checking
   source and known target precision independently. Other prepared parameters keep
   their Arrow-derived types. Native VARBYTE
-  receive/modifier/parameter qualification remains pending.
+  receive/modifier/parameter evidence must be read per operation in the matrix above.
   The staged CSV helper is not selected by the supported ingest path.
 - Remaining scalar hazards: Task010c4 guards Redshift integer/float narrowing;
   unmarked PostgreSQL retains its previous conversion policy. Task010e1 rejects
   temporal submicrosecond remainder and checked unit/epoch overflow, including
-  source-unit epoch cancellation. Native full finite/calendar/sentinel domains
-  and negotiated temporal wire qualification remain open; generic interval
+  source-unit epoch cancellation. Q provides bounded native temporal evidence;
+  remaining finite cases are B4 in the acceptance checklist; generic interval
   nanosecond conversion is separate successor work.
 - Tests: [RedshiftSmokeTest](../../c/driver/postgresql/redshift_test.cc#L387) declares
   scalar/null/edge/metadata cases, including `DECIMAL(38,0)`, but SUPER coverage is
@@ -283,10 +300,9 @@ on PostgreSQL remain unsupported, and ordinary unmarked PostgreSQL is unchanged.
 [Literal codecs/allocator tests](../../c/driver/postgresql/redshift_timetz_test.cc),
 [test-linked public API recorder](../../c/driver/postgresql/redshift_interval_recording_test.cc)
 and [codec-produced installed PyArrow C Data/IPC](../../ci/scripts/pgwire_timetz_c_data_test.py)
-are offline reference evidence. Real libpq TIMETZ layout (including 8/12 bytes),
-local versus UTC counts, sign/unit/offset retention, finite/calendar/sentinel
-bounds, 24:00 behavior, catalog precision and session independence remain native
-qualification gates before first release. No network producer or public backend
+are offline reference evidence. Q subsequently qualified selected stored TIMETZ
+offsets and installed reads/Python writes. Remaining direct/C-write, metadata and
+finite offset/precision cases are B4/B5; a passed subset is not a full-domain claim. No network producer or public backend
 identity override is introduced by these test fixtures.
 
 ## Current Redshift descriptor metadata (Task010c1)
@@ -338,7 +354,7 @@ reference's int16 count/weight and 14-bit display scale bound per-field work and
 text allocation. PostgreSQL's existing public schema/reader stays unchanged.
 Literal reference vectors, actual normal/bound/empty PostgreSQL plumbing and
 codec-produced C Data/PyArrow decimals are offline evidence, **not captured
-Redshift traffic**. Native precision19 coefficient limits, scale37/38 boundaries
+Redshift traffic**. Native precision 19 coefficient limits, scale37/38 boundaries
 and actual libpq protocol qualification remain open. Task010c3's write contract
 below is independently bounded; offline PostgreSQL execution is not Redshift proof.
 
@@ -362,7 +378,7 @@ Ordinary unmarked PostgreSQL string dictionaries retain their text behavior.
 CREATE/REPLACE/CREATE_APPEND validates and renders `DECIMAL(p,s)` before destructive
 SQL: p1..38, s0..min(p,37). APPEND aligns actual name/OID/modifier catalog fields,
 including reordered/subset fields, and permits only exact target rescaling with
-precision/range checks; stored precision19 additionally checks signed64 coefficient
+precision/range checks; stored precision 19 additionally checks signed 64-bit coefficient
 bounds. Decimal128/256, DECIMAL-marked text and Arrow null are accepted numeric
 ingest sources; unmarked text, integer and float inputs reject on Redshift numeric
 targets. OID-only SQL parameters preserve the offered exact value; application
@@ -388,7 +404,7 @@ invented. Ordinary PostgreSQL metadata remains unchanged.
 
 Redshift Arrow primitive inputs use checked source and actual-target widths;
 explicit canonical metadata opts into the same contract on PostgreSQL. Signed
-and unsigned integer endpoints are checked before casting, including unsigned64's
+and unsigned integer endpoints are checked before casting, including unsigned 64-bit's
 high bit. Within-family integral narrowing accepts only fitting values. Float32
 narrowing checks finite bounds before casting and rejects inexact values, including
 underflow; widening is exact. Signed zero, NaN and signed infinities have numeric
@@ -514,12 +530,12 @@ share bounded checks. Canonical markers opt PostgreSQL into these source/target
 checks without pretending its connection is Redshift. Native charset, padding,
 large values and wire boundaries remain qualification gates.
 
-A **provisional** plain parameterized/COPY semantic VARBYTE guard accepts at most
-1,000,000 bytes. It deliberately does not guess whether AWS's documented “1 MB”
-means 1,048,576 bytes. This narrower checkpoint guard does **not** complete the
-all-type release contract: native independent value/length probes must resolve
-1,000,000/+1 and 1,048,575/576/577. No staging/file upload, S3 or automatic route
-switch is added. Larger declarations and reads are separate from this write guard.
+Redshift direct prepared parameters and generated ingestion accept VARBYTE up to
+16,777,216 bytes, with source/target widths still enforced. Larger values reject
+locally. Marked PostgreSQL COPY retains a separate 1,000,000-byte guard. R supplies
+18 corrected cases in each of four installed Python/C generated/direct routes;
+the native 16 MiB+1 probe stopped on unsafe XX000 and is not a classified size
+rejection. No staging/file upload, S3 or automatic route switch is added.
 
 Fresh client-encoding checks require UTF8 for Redshift and explicitly marked PG
 character writes. A changed/missing encoding rejects rather than repairing or
@@ -530,178 +546,20 @@ claim that a failed encoding postcheck undoes arbitrary SQL is made. Ordinary
 unmarked PostgreSQL remains unchanged. Codec/public/installed local evidence is
 separate from native Redshift and final platform CI.
 
-## Recommended lossless contract and acceptance
+## Finite release acceptance
 
-These are proposals for bounded implementation PRs. A representation is supported
-only after native SELECT, typed binding, create, append and metadata each have
-identified tests/evidence. No per-query user casts, silent coercion, undocumented
-bytes or opaque fallback can satisfy the all-type milestone.
+[V1_ACCEPTANCE.md](V1_ACCEPTANCE.md) replaces the historical implementation
+sequence and open-ended "full envelope" gate. Every canonical family needs a
+reviewed representation, required installed C/Python workflows, a finite boundary
+set and checked rejection outside the supported contract. Native SELECT must work
+without user casts or opaque fallback. Ordinary mixed rows, direct vendor binds,
+metadata truthfulness and vendor size restrictions are explicit gates;
+an unsupported important workflow is not accepted merely by documenting it.
 
-1. **Shared schema contract.** Keep Arrow validity for SQL NULL, including all-null,
-   empty results and mixed-type projections. Proposed custom field keys
-   under the `ADBC:redshift:` prefix (`typname`, `precision`, `scale`, `length`,
-   `interval_qualifier`, `fractional_precision`) preserve canonical DB identity/modifiers when available;
-   omit unknown modifiers rather than invent defaults. These are driver proposals,
-   not standardized ADBC keys; preserve existing metadata compatibility. Bind and
-   generated DDL must honor validated type identity, independent of storage type.
-   Aliases must agree across query schema, ExecuteSchema, parameter schema,
-   GetTableSchema and GetObjects. Native table columns and computed expressions
-   require separate tests; a schema must stay stable across batches.
-2. **Numbers/boolean.** [AWS numeric rules](https://docs.aws.amazon.com/redshift/latest/dg/r_Numeric_types201.html):
-   signed minima/maxima and overflow on every integer width; reject oversized
-   Arrow unsigned inputs. Check decimals at precision 1/18/19/20/38 and scale 0/2/37,
-   negative/zero/trailing zeros and exact rescaling. Precision 19 has a signed64
-   coefficient limit; preserve p/s in DDL. Prefer decimal128(p,s) when modifiers are
-   reliable; expression results with unknown p/s need a separately specified exact
-   decimal-text representation, never float or row-inferred schema. Arrow decimal256
-   is accepted only when exactly representable in Redshift. Float tests cover +/-0,
-   finite extremes, subnormals where retained by the server, NaN and +/-Infinity;
-   promise numeric semantics, not NaN payload bits.
-   [BOOLEAN](https://docs.aws.amazon.com/redshift/latest/dg/r_Boolean_type.html) tests require true,
-   false and SQL NULL; accepted literal spellings are server conversions, not new types.
-3. **Characters/binary.** [Stored CHAR/VARCHAR](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html)
-   use byte widths: CHAR(4096)/single-byte, VARCHAR(65535)/UTF-8; TEXT and BPCHAR have
-   width 256 defaults. Preserve CHAR padding, empty versus NULL, quotes/backslashes,
-   trailing spaces, four-byte UTF-8 and invalid-input rejection. In-memory VARCHAR
-   expressions/string functions now allow 16,000,000 bytes: do not impose a universal
-   64 KB result cap. [VARBYTE](https://docs.aws.amazon.com/redshift/latest/dg/r_VARBYTE_type.html)
-   reaches 16,777,216 bytes (default 64000); test zero bytes, high bits, empty/NULL,
-   boundary sizes, and aggregate batch-offset overflow. Values over 1 MB have
-   file-format ingest restrictions. Plain parameterized INSERT must reject an
-   unsupported size before effects; a separately approved staged route would be
-   required for those writes, not a hidden truncation or automatic S3 operation.
-4. **Temporal.** [AWS datetime semantics](https://docs.aws.amazon.com/redshift/latest/dg/r_Datetime_types.html)
-   advertise DATE/TIMESTAMP years 4713 BC..294276 AD and TIME 00:00..24:00.
-   Require microsecond precision, BC dates/epoch boundaries, fractional
-   second endpoints and signed timezone offsets. TIMESTAMP stays timezone-free;
-   TIMESTAMPTZ preserves the UTC instant, not an original offset/name discarded
-   by the server. TIMETZ needs an explicit offset-time extension/struct if an
-   offset is server-retained; never silently drop it. [Arrow's type definitions](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
-   exclude24:00 from Time and bound timestamp(us) to int64. At these mismatches,
-   Task010e1 supplies explicit checked Arrow/lossless representations above. Native
-   full-range/calendar/sentinel qualification remains a release gate, without
-   modulo-day wrapping, infinity substitution or nanosecond truncation. Cover session timezone changes,
-   DST instants and restoration after bind failure without promising server-lost information.
-5. **Both intervals.** [AWS qualifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_interval_data_types.html):
-   YEAR, MONTH, YEAR TO MONTH; DAY, HOUR, MINUTE, SECOND, DAY TO HOUR,
-   DAY TO MINUTE, DAY TO SECOND, HOUR TO MINUTE, HOUR TO SECOND, MINUTE TO SECOND. SECOND-bearing forms accept fractional
-   precision 0..6. Prefer month_day_nano_interval with (months,0,0) and duration(us)
-   for day/second signed elapsed microseconds, retaining SQL family/qualifier.
-   [PyArrow](https://github.com/apache/arrow/blob/main/python/pyarrow/types.py#L47)
-   does not support month-only/day-time interval types; the month/day/nanosecond
-   layout avoids a C-only result. Require actual installed C and Python import
-   tests; year/month uses zero days/nanoseconds, with no multiplication.
-   Do not convert calendar months to days, use millisecond day_time (loses fractions),
-   or multiply the whole int64 duration into nanoseconds. Check signs, zero,
-   boundaries, null/empty/mixed projections, malformed lengths and all qualifiers;
-   reflect server qualifier truncation without adding driver truncation. Generic
-   PostgreSQL INTERVAL is not a third supported table family.
-6. **SUPER.** [AWS SUPER](https://docs.aws.amazon.com/redshift/latest/dg/r_SUPER_type.html)
-   can hold 16 MB and heterogeneous nested/scalar values; over 1 MB ingest has specific
-   file-format restrictions. Prefer `arrow.json` on large_utf8 with Redshift identity
-   only after native protocol evidence proves RFC8259, exact numeric lexemes and
-   SQL NULL versus non-null JSON null. Test mixed numbers/strings/bools/null,
-   empty/nested arrays/objects, case-sensitive keys, escapes and precision/size
-   boundaries without decoding through host float. Full dynamic scalar subtype
-   preservation/non-JSON values remain explicit design gates; a versioned
-   `adbc.redshift.super` semantic extension may be needed. Do not label it complete
-   by returning `arrow.opaque`. [JSON_SERIALIZE](https://docs.aws.amazon.com/redshift/latest/dg/JSON_SERIALIZE.html)
-   returns VARCHAR, has a system-size limit and maps NULL to the JSON string null;
-   it is not a lossless substitute for raw SELECT. The separate
-   [VARBYTE serializer](https://docs.aws.amazon.com/redshift/latest/dg/JSON_SERIALIZE_TO_VARBYTE.html)
-   is evidence for another path, not authority to rewrite arbitrary queries.
-7. **HLLSKETCH.** Prefer a versioned `adbc.redshift.hllsketch` extension on large_utf8
-   with documented Redshift sketch serialization and precision identity; do not
-   imply ordinary text or JSON semantics. [Sparse JSON and dense Base64](https://docs.aws.amazon.com/redshift/latest/dg/r_HLLSKTECH_type.html)
-   require distinct validation and roundtrip fixtures, including transitions,
-   NULL, empty input and maximum size 24,580 bytes. Validate
-   [logm=15 and engine restrictions](https://docs.aws.amazon.com/redshift/latest/dg/hyperloglog-functions-limitations.html).
-   Preserve the sketch, not merely its estimated cardinality; native parameter/
-   ingest acceptance remains unproved, and unsupported routes must reject clearly.
-8. **GEOMETRY/GEOGRAPHY.** Prefer `geoarrow.wkb` only where its CRS/edge semantics fit.
-   [GeoArrow](https://geoarrow.org/format.html#serialized-encodings) permits consumers
-   to ignore embedded EWKB SRIDs; [column metadata](https://geoarrow.org/extension-types.html)
-   cannot pretend a mixed-SRID result has one CRS. Otherwise propose separate
-   `adbc.redshift.geometry` / `adbc.redshift.geography` semantic extensions over
-   a documented WKB+per-value SRID representation, not undocumented opaque bytes.
-   Preserve [planar versus geodetic identity](https://docs.aws.amazon.com/redshift/latest/dg/geospatial-overview.html),
-   coordinate order, all seven shape families, XY/XYZ/XYM/XYZM, empty versus NULL,
-   SRID 0/4326/other valid SRIDs and mixed-SRID rows; no implicit reprojection or
-   invented spherical/ellipsoidal edge algorithm. Test shape equality and SRID/
-   dimension preservation, malformed data and
-   [maximum 1,048,447-byte objects](https://docs.aws.amazon.com/redshift/latest/dg/spatial-limitations.html).
-
-[Arrow canonical extensions](https://arrow.apache.org/docs/format/CanonicalExtensions.html)
-reserve `arrow.json` for valid UTF-8 JSON and describe `arrow.opaque` as unsupported
-external data. Custom names above are proposed driver contracts, not new Arrow
-canonical types. Their exact versioned storage/metadata and cross-language behavior
-must be reviewed before implementation; an unresolved representation blocks release.
-
-## Bounded sequence (coordinator briefs define each implementation task)
-
-- **010b implemented, offline qualification:** backend-owned catalog-name
-  classification and runtime-discovered OIDs for `intervaly2m` / `intervald2s`;
-  strict 4-byte signed months -> month_day_nano_interval(months,0,0) and 8-byte
-  signed microseconds -> duration(us). C++ and installed PyArrow checks consume
-  actual codec-produced arrays, including null/empty/mixed results, signs, extrema,
-  unaligned input and malformed widths. Shared `SetSchema` carries
-  `ADBC:redshift:interval_family` plus canonical type name across query/metadata
-  schema paths. Qualifiers/fractional precision remain unknown because current
-  descriptors do not expose them. No extension or qualifier metadata is invented.
-  The original read-only gate rejected family-marked schemas before ownership transfer/SQL/DDL;
-  Redshift also rejects interval/duration storage with stripped metadata. Unknown
-  family-marker values reject. Unmarked PostgreSQL interval behavior is preserved.
-  Task010e2 adds the bounded semantic write contract above. The test-only C Data producer is excluded
-  from driver artifacts and normal installs. Later bounded installed read and
-  Task010s write results are recorded in [STATUS](STATUS.md); full native-domain
-  coverage remains open and this slice does not complete Task010.
-- **010c1 merged (PR23), offline CI passed:** per-field descriptor plumbing and
-  bounded Redshift schema/GetObjects metadata, including normal/bound/empty query
-  readers and OID-only parameter identity. Synthetic descriptor/C Data and local
-  PostgreSQL regressions cover the actual parser/consumer seams.
-- **010c2 merged (PR24), offline CI passed:** known numeric p/s selects decimal128;
-  unknown modifiers keep exact decimal text. Strict finite base-10000 reference
-  fields pass through the production reader and C Data import tests. Native
-  Redshift/libpq format/boundary qualification remains pending.
-- **010c3 locally integrated d04f2d2, review/native/installed validation passed:** explicit decimal DDL,
-  bounded exact decimal/marked-text binding, actual target-aware append and owned
-  rollback uncertainty handling. Final platform CI is deferred until development ends.
-- **010c4 locally integrated b90664a, review/native/installed validation passed:** checked primitive
-  scalar conversions, canonical identity/DDL, exact known-target append and strict
-  boolean wire reads. Final platform CI follows development.
-- **010d locally integrated c07f811, independent FULL review and 20 validation steps passed:** CHAR/VARCHAR/VARBYTE
-  read, binding, explicit DDL, target-aware append and metadata checks, with native
-  format/charset/size qualification (including the provisional binary write cap)
-  still open.
-- **010e1 locally integrated 7fc46fa, independent FULL review and 22 validation steps passed:** four temporal core
-  families with connection-local Arrow/lossless contexts, exact binding, known
-  precision checks and target-aware ingest. Native wire/domain/sentinel/calendar
-  and precision DDL gates remain open.
-- **010e2 locally integrated 35584f5, independent FULL approval and 24 validation steps passed:** both interval families,
-  all 13 qualifier identities and precision 0..6, exact reference writes/DDL and
-  raw diagnostic catalog observation. Task010s adds the bounded internal target
-  producer and bounded four-leg installed write qualification described above.
-- **010e3 locally integrated e2df066, independent FULL approval and 25 validation steps passed:** explicit TIMETZ fixed-offset
-  struct, checked reference codecs, source/actual-target precision and bare DDL.
-  Native layout/domain/offset/precision qualification remains open.
-- **010f0 locally integrated 65e7e9b, independent FULL approval and 30 validation steps passed:** noninstalled bounded
-  raw-protocol observations and fixed probe plans, not a native executor or type codec.
-  See [the observation boundary](native-protocol-observation.md).
-- **Local evidence dependencies:** G0 (1f35366) and G1 (0285eba) are locally integrated
-  after exact independent approval and retained validation. G1's named load uses
-  approved G0 artifacts; it is not native execution or additional type coverage.
-- **010h1 and bounded vendor implementations locally integrated:** the runner's
-  exact review/full 32 validation completed at `3c956e3`. SUPER JSON-subset ingest,
-  HLL serialization and spatial EWKB subsets are implemented through `a239f66cc`;
-  fixed installed evidence is marked M above. Native SUPER losslessness and the
-  remaining full-type qualification gates are not closed.
-- **Final all-type qualification:** complete the 21-row read/bind/create/append/
-  metadata evidence on installed C and wheel artifacts, all aliases and bounded
-  unsupported operations. The coordinator controls the separately admitted finite
-  own-resource live window/teardown and final push/applicable green platform CI.
-  No live run, AWS action, staged upload, publication or automatic retry is authorized
-  by this document. Only then can Task009 release readiness be assessed.
-
+The detailed contracts above and below describe current code. The evidence
+matrix identifies what was actually exercised. Existing limits, including native
+SUPER wire-NULL collapse, remain visible; no exhaustive-domain proof or additional
+paid operation is authorized by this document.
 
 ### Task010i1 bounded SUPER input
 
@@ -722,8 +580,8 @@ changes these settings. Semantic schemas/actual target identities are strict eve
 for all-NULL/empty streams. Arbitrary SQL is not rewritten, and SUPER REPLACE is
 rejected before ownership/DROP. CREATE or missing CREATE_APPEND may leave a newly
 created empty table following a later payload failure. APPEND keeps the existing
-data transaction owner. The fixed installed JSON-subset cases passed; native
-read losslessness and broader qualification stay open. HLL's documented
+data transaction owner. The fixed installed JSON-subset cases passed; native output has the separate
+Task010q contract below. Lossless reconstruction of input subtypes is not promised. HLL's documented
 24,580-byte number is a raw sketch-object bound, not the serialized UTF8 budget (retained dense examples exceed it).
 
 ### Task010i2 bounded spatial and HLL subsets
@@ -737,7 +595,7 @@ ISO offset variants and conflicting nested SRIDs reject. A missing top-level
 GEOMETRY SRID means0; GEOGRAPHY requires an embedded SRID. Empty POINT requires
 all ordinates NaN, other coordinates finite. Structure validation is not topology
 or reprojection. The local read payload cap is1,048,447 bytes, not full native
-boundary proof. Generated writes cap raw bytes at500,000, pass owned raw EWKB as
+boundary proof. Generated writes cap raw bytes at 500,000, pass owned raw EWKB as
 VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
 spatial binding stays unsupported. Installed POINT controls accepted raw binary
 VARBYTE and rejected ASCIIhex VARBYTE. Subsequent installed evidence preserved

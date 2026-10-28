@@ -19,13 +19,19 @@
 
 # Status
 
+Merged baseline: PR29, `fca2eab2e05e1a63cfbd9adecc802c53334bdbd0`, reviewed
+identical tree `0fa498a6e88c30eb1758195c614755a9942c51af` (2026-10-28).
+Task010t completed all four installed Python/C array/stream legs (234 cases),
+independent review, applicable green CI and merge. Full resource closure is
+verified, preserving the original C-stream cleanup timeout and separate cleanup.
+[Its bounded evidence](#task010t-interval-edge-qualification) is complete;
+**the all-21-type first-release milestone remains open**.
 
-Task010t interval edges passed all four installed Python/C array and stream legs
-(234 cases), with resource closure verified. See [the bounded evidence](#task010t-interval-edge-qualification).
-
-Task010s bounded interval ingestion qualification passed all four installed
-Python/C Bind and BindStream legs on macOS arm64, with verified full teardown. See
-[the source-specific results](#task010s-interval-ingestion-qualification).
+The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
+[finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
+blockers are mandatory mixed HLL rows and direct SUPER/spatial binding, specific
+installed-operation and metadata gaps, and final candidate delivery. No exhaustive
+mathematical-domain proof is required. No release-ready claim is made.
 
 Task010q/q1 implements native SUPER observable JSON-wire reads at
 `26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
@@ -56,90 +62,27 @@ null; input-lexeme/native-subtype losslessness is not claimed. Those Task010q re
 not claim positive interval ingestion, complete domains, every metadata API or
 cross-platform live qualification. Direct SUPER/spatial binds and mixed HLL
 output remain unsupported. Vendor REPLACE remains unsupported. Task010s adds bounded actual interval-target
-writes; unknown target constraints still fail closed. Final exact-head review, push and applicable
-green CI remain before integration; no release-ready claim is made.
-
-Current state only; history is in git and PR descriptions.
+writes; unknown target constraints still fail closed. PR29 is merged; its exact reviewed tree and applicable CI are recorded in
+`task010t-interval-edges-20261026/goal-completion-v1/receipt.json`. This does not
+qualify later candidate changes.
 
 ## Active
 
-- Done: 000 (PR #1), 001 (PR #2), 003 (PR #3), 004 (PR #4),
-  004b (release hardening, PR #8), 005 (Python package, PR #7),
-  005b (portable wheels, PR #10), 006 (offline IAM recipe/helper, PR #11),
-  007 (user documentation, PR #12), 008a (offline isolation contract, PR #13).
-- Task006 IAM helper and Task008a/b/c/d (PRs #11, #13–#20) are merged.
-  Installed C archive and Linux x86-64 wheel temporary-IAM qualification passed
-  [run 39138655470](https://github.com/vahid110/arrow-adbc/actions/runs/39138655470)
-  on `3460c541914560a91872e4417c4c3b4ccbb81df0`: query, parameters, int64
-  metadata/create+append/roundtrip and Python invalid-replace preservation.
-  Independent full physical/managed-secret/IAM teardown is verified. The helper's
-  original namespace-removal uncertainty and all earlier failures remain separate
-  immutable evidence; operation parameters/guard are retained. Actual billing is
-  not reconciled. See [the finite host contract](qualification-live.md) and
-  [merged PR20](https://github.com/vahid110/arrow-adbc/pull/20).
-- Task010 is now the first-release priority: **all 21 Redshift table types**, not
-  SUPER alone. [The source audit/type contract](REDSHIFT_TYPES.md) separates native
-  read, bind, create, append and metadata evidence. The passed live batch proves
-  its narrow int64 scope, not all-type support or release readiness. Task010a
-  source audit/docs is merged (PR #21). Task010b adds distinct catalog-driven
-  interval read/schema/family metadata, strict reference-format codecs, C/Python
-  C Data tests and unsupported-write guards (PR #22 merged; offline CI passed).
-  Task010c1 adds per-field raw modifiers and bounded numeric/character metadata
-  across query/schema/catalog/parameter paths (PR23 merged; offline CI passed).
-  Task010c2 adds descriptor-driven decimal128 reads or exact UTF-8 for unknown
-  modifiers, with strict finite base-10000 reference decoding and codec-produced
-  C Data/PyArrow tests (PR24 merged; offline CI passed). Task010c3 implements
-  explicit decimal DDL, bounded exact binding and target-aware append, including
-  DECIMAL-marked text and owned rollback uncertainty (locally integrated at d04f2d2;
-  independent review and serial native/installed tests passed). Task010c4 adds
-  checked integer/float/boolean binding, canonical DDL/metadata and target-aware
-  append (locally integrated b90664a; independent review and serial native/installed
-  validation passed). Task010d adds checked character/binary identity, widths, explicit DDL and
-  target-aware append (locally integrated c07f811; independent review and all 20
-  serial native/installed validation steps passed), retaining a provisional
-  VARBYTE plain-route size gate. Task010e1 implements four temporal core families
-  with immutable per-connection Arrow/lossless output contexts, exact binding and
-  target-aware ingest (locally integrated 7fc46fa; independent FULL review and all 22
-  validation steps passed). Task010e2 adds closed interval qualifier/precision
-  schemas, exact reference reads/writes/DDL and bounded raw target observations;
-  locally integrated 35584f5 after independent FULL approval and all 24 serial
-  validation steps. Task010s supplies the bounded native target mapping and
-  four-leg write evidence [below](#task010s-interval-ingestion-qualification).
-  Task010e3 adds an explicit fixed-offset
-  TIMETZ struct, checked reference reads/writes, source/target precision and
-  bare declaration handling (locally integrated e2df066; independent FULL approval
-  and all 25 serial validation steps passed). Task010f0 adds a separate noninstalled
-  bounded protocol observer/fixed plans (locally integrated 65e7e9b; independent
-  FULL approval and all 30 serial validation steps passed). Task010g0 adds a pure
-  anchored historical local-evidence/package-byte linker (locally integrated
-  1f35366 after independent FULL approval, actual historical receipt linkage and
-  retained 30-step validation). Task010g1 adds trusted in-place install comparisons
-  and a fixed same-host load-only observation (locally integrated 0285eba after
-  exact independent approval and all 30 serial validation steps). Its named G0
-  artifact load observed 328 images: 28 non-OS and 300 OS; collector source is G1.
-  Task010g2 adds a bounded output fd for the existing seven-probe own-PG test
-  (locally integrated cfe9feb after actual seven-record/stale-fd/cleanup checks,
-  all 31 serial validation steps and exact independent approval). Task010g4 adds
-  a noninstalled owned single replay parameter with distinct observed and
-  controlled NULL/empty origins (locally integrated def7084; independent approval,
-  all 31 serial validation steps and ten own-PG echoes/15 calls). Task010h0 adds
-  closed compiled native discovery plans/capture shapes (locally integrated 4bdc23b;
-  independent approval, all 31 serial stages and nine own-PG checks/15 calls).
-  Task010h1's noninstalled closed 715-step async runner and eight bounded output
-  descriptors were locally integrated at `3c956e3` after exact independent approval,
-  all 32 serial stages and controlled own-PG checks. Later private native runs
-  retain protocol observations and failures separately from installed-driver
-  acceptance. Synthetic/local PostgreSQL evidence does not qualify Redshift;
-  platform CI follows the local-first workflow. Full temporal/domain/precision,
-  remaining character/binary boundaries and interval native-domain qualification remain
-  open before Task009. The bounded native SUPER and interval read results above
-  do not imply input-subtype losslessness or full interval-domain support. No paid operation is performed or authorized here.
-  AO/timer and Task009 publication remain paused.
-- External host provisioning access is verified through 2027-12-31T23:00:00Z;
-  earlier scoped denials remain historical evidence. Workers/reviewers stay
-  offline; only the coordinator operates the authorized dedicated host path.
-- AO/timer and automatic daily dispatch remain paused. The coordinator may
-  manually dispatch Native Daily; this update changes no workflow enablement.
+- The stale public SUPER rejection assertion is repaired locally in coordinator
+  commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and
+  independent review. B4 still requires its native installed execution and the
+  corrected standalone C Arrow-mode fixture; no new live pass is claimed.
+- Execute B1–B6 in [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md), retaining all 21 types and
+  separating code, installed evidence, deliberate restrictions and human decisions.
+- Reuse S/T interval and R character/binary evidence at its exact source; do not
+  repeat completed tasks merely because historical prose called them pending.
+- Coordinator owns local integration, one serial installed build and authorized
+  dedicated live campaigns with full teardown. Workers/reviewers remain offline.
+  Existing authorization does not include shared targets, auth expansion or other
+  projects. Actual billing remains unreconciled.
+- AO/timer and automatic daily dispatch remain paused. Manual candidate Native
+  Daily and final remote gates follow [CLAUDE.md](../../CLAUDE.md). Publication is
+  a separate human decision.
 
 ## Known issues
 
@@ -211,7 +154,7 @@ parameters (`cdee`). Original controllers report completion and all seven owned
 resource classes removed for each leg. Source review and serial rebuilt offline
 validation cover the correction; the live read evidence remains on `d5b39f4`.
 Test-only successor `50f9f8643` adds adjacent unsupported reader-boundary coverage.
-Final exact-head review and applicable green remote CI remain gates.
+The changes are included in merged PR29; new candidate changes require their own review and CI.
 
 The parameter guard is 16 MiB; marked PostgreSQL COPY retains its 1,000,000-byte
 guard. Earlier installed rejections above 1,000,000 bytes preserve the superseded
@@ -255,8 +198,8 @@ and Task010r's unsafe native size-boundary failure remain historical evidence.
 
 This is bounded macOS arm64 evidence, not native extrema/sentinel qualification,
 omitted-default proof, arbitrary prepared-SQL target discovery or a general
-streaming-atomicity guarantee. Final exact-head review and applicable green remote
-CI remain gates; actual billing is not reconciled.
+streaming-atomicity guarantee. The changes are included in merged PR29; candidate review/CI remains separate.
+Actual billing is not reconciled.
 
 ## Task010t interval edge qualification
 
@@ -311,5 +254,6 @@ its original teardown failure remains preserved.
 Earlier C provisioning and Python bootstrap failures qualified no case. A C harness
 accounting-cap failure completed only 39 prefix cases and did not qualify that leg;
 physical teardown succeeded, with the pre-deletion schema residue recorded separately.
-Original failures and cleanup evidence remain preserved. Final exact-head review
-and applicable CI remain completion gates; actual billing is not reconciled.
+Original failures and cleanup evidence remain preserved. PR29 completed exact-head
+review and applicable green CI; the merged tree matches the reviewed tree.
+Actual billing is not reconciled.
