@@ -575,6 +575,8 @@ AdbcStatusCode PostgresStatement::New(struct AdbcConnection* connection,
 AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
                                        struct ArrowSchema* schema,
                                        struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   if (!values || !values->release) {
     InternalAdbcSetError(error, "%s", "[libpq] Must provide non-NULL array");
     return ADBC_STATUS_INVALID_ARGUMENT;
@@ -638,6 +640,8 @@ AdbcStatusCode PostgresStatement::Bind(struct ArrowArray* values,
 
 AdbcStatusCode PostgresStatement::Bind(struct ArrowArrayStream* stream,
                                        struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   if (!stream || !stream->release) {
     InternalAdbcSetError(error, "%s", "[libpq] Must provide non-NULL stream");
     return ADBC_STATUS_INVALID_ARGUMENT;
@@ -1169,12 +1173,14 @@ AdbcStatusCode PostgresStatement::ExecuteBind(struct ArrowArrayStream* stream,
 AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
                                                int64_t* rows_affected,
                                                struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   if (!connection_->conn()) {
     InternalAdbcSetError(error, "[libpq] Connection was released");
     return ADBC_STATUS_INVALID_STATE;
   }
   ClearResult();
-  if (bind_.release) {
+  if (bind_.release && !ingest_.target.empty()) {
     nanoarrow::UniqueSchema schema;
     ArrowError na_error{};
     CHECK_NA_DETAIL(INVALID_ARGUMENT,
@@ -1269,6 +1275,8 @@ AdbcStatusCode PostgresStatement::ExecuteQuery(struct ArrowArrayStream* stream,
 
 AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
                                                 struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   RAISE_ADBC(connection_->CheckConnectionUsable(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
@@ -1281,9 +1289,18 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
+  const std::string original_query = query_;
+  PqResultHelper helper(connection_->conn(), original_query,
+                        type_resolver_->is_redshift());
+  PostgresType output_type;
+  bool converted = false;
+  std::shared_ptr<void> lease;
 
   if (bind_.release) {
+    lease = std::make_shared<int>(0);
+    if (!connection_->TryClaimBoundStream(lease))
+      return Status::InvalidState("[libpq] Connection has an active operation")
+          .ToAdbc(error);
     nanoarrow::UniqueSchema param_schema;
     struct ArrowError na_error;
     ArrowErrorInit(&na_error);
@@ -1296,6 +1313,16 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
       return ADBC_STATUS_INVALID_STATE;
     }
 
+    if (!connection_->conn())
+      return Status::InvalidState("[libpq] Connection released by schema callback")
+          .ToAdbc(error);
+    bool has_super = false;
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    RedshiftSuperSchema::ValidateRoute(
+                        param_schema.get(), type_resolver_->is_redshift(), false, false,
+                        &has_super, &na_error),
+                    &na_error, error);
+    std::vector<bool> selected(param_schema->n_children, false);
     std::vector<Oid> param_oids(param_schema->n_children);
     for (int64_t i = 0; i < param_schema->n_children; i++) {
       PostgresType pg_type;
@@ -1304,18 +1331,39 @@ AdbcStatusCode PostgresStatement::ExecuteSchema(struct ArrowSchema* schema,
                                                &pg_type, &na_error),
                       &na_error, error);
       param_oids[i] = pg_type.oid();
+      RedshiftSuperSchema super;
+      CHECK_NA_DETAIL(
+          INVALID_ARGUMENT,
+          RedshiftSuperSchema::Parse(param_schema->children[i],
+                                     type_resolver_->is_redshift(), &super, &na_error),
+          &na_error, error);
+      selected[i] = super.enabled;
     }
 
-    RAISE_STATUS(error, helper.Prepare(param_oids));
+    if (has_super) {
+      auto physical = param_oids;
+      for (size_t i = 0; i < selected.size(); ++i)
+        if (selected[i])
+          physical[i] = type_resolver_->GetBytesOID(RedshiftBytesKind::kVarbyte);
+      RedshiftSuperPrepared plan(original_query);
+      RAISE_STATUS(
+          error, plan.Prepare(connection_->conn(), *type_resolver_, param_oids, physical,
+                              selected, connection_->temporal_representation()));
+      output_type = plan.output();
+      converted = true;
+    } else {
+      RAISE_STATUS(error, helper.Prepare(param_oids));
+    }
   } else {
     RAISE_STATUS(error, helper.Prepare());
   }
 
-  RAISE_STATUS(error, helper.DescribePrepared());
-
-  PostgresType output_type;
-  RAISE_STATUS(error, helper.ResolveOutputTypes(*type_resolver_, &output_type,
-                                                connection_->temporal_representation()));
+  if (!converted) {
+    RAISE_STATUS(error, helper.DescribePrepared());
+    RAISE_STATUS(error,
+                 helper.ResolveOutputTypes(*type_resolver_, &output_type,
+                                           connection_->temporal_representation()));
+  }
 
   nanoarrow::UniqueSchema tmp;
   ArrowSchemaInit(tmp.get());
@@ -1529,6 +1577,8 @@ AdbcStatusCode PostgresStatement::GetOptionInt(const char* key, int64_t* value,
 
 AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
                                                      struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   RAISE_ADBC(connection_->CheckConnectionUsable(error));
   if (!connection_->conn() || connection_->HasActiveBoundStream()) {
     InternalAdbcSetError(
@@ -1540,7 +1590,61 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
     return ADBC_STATUS_INVALID_STATE;
   }
 
-  PqResultHelper helper(connection_->conn(), query_, type_resolver_->is_redshift());
+  const std::string original_query = query_;
+  std::shared_ptr<void> lease;
+  if (bind_.release) {
+    lease = std::make_shared<int>(0);
+    if (!connection_->TryClaimBoundStream(lease))
+      return Status::InvalidState("[libpq] Connection has an active operation")
+          .ToAdbc(error);
+    nanoarrow::UniqueSchema offered;
+    ArrowError na_error{};
+    CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                    ArrowArrayStreamGetSchema(&bind_, offered.get(), &na_error),
+                    &na_error, error);
+    if (!connection_->conn())
+      return Status::InvalidState("[libpq] Connection released by schema callback")
+          .ToAdbc(error);
+    bool has_super = false;
+    CHECK_NA_DETAIL(
+        INVALID_ARGUMENT,
+        RedshiftSuperSchema::ValidateRoute(offered.get(), type_resolver_->is_redshift(),
+                                           false, false, &has_super, &na_error),
+        &na_error, error);
+    if (has_super) {
+      if (std::string_view(offered->format) != "+s")
+        return Status::InvalidArgument("[libpq] Bind parameters require STRUCT")
+            .ToAdbc(error);
+      std::vector<Oid> logical(offered->n_children), physical(offered->n_children);
+      std::vector<bool> selected(offered->n_children);
+      for (int64_t i = 0; i < offered->n_children; ++i) {
+        PostgresType type;
+        CHECK_NA_DETAIL(INVALID_ARGUMENT,
+                        PostgresType::FromSchema(*type_resolver_, offered->children[i],
+                                                 &type, &na_error),
+                        &na_error, error);
+        RedshiftSuperSchema super;
+        CHECK_NA_DETAIL(
+            INVALID_ARGUMENT,
+            RedshiftSuperSchema::Parse(offered->children[i],
+                                       type_resolver_->is_redshift(), &super, &na_error),
+            &na_error, error);
+        selected[i] = super.enabled;
+        logical[i] = type.oid();
+        physical[i] = super.enabled
+                          ? type_resolver_->GetBytesOID(RedshiftBytesKind::kVarbyte)
+                          : logical[i];
+      }
+      RedshiftSuperPrepared plan(original_query);
+      RAISE_STATUS(error,
+                   plan.Prepare(connection_->conn(), *type_resolver_, logical, physical,
+                                selected, connection_->temporal_representation()));
+      offered.move(schema);
+      return ADBC_STATUS_OK;
+    }
+  }
+  PqResultHelper helper(connection_->conn(), original_query,
+                        type_resolver_->is_redshift());
   RAISE_STATUS(error, helper.Prepare());
   RAISE_STATUS(error, helper.DescribePrepared());
   PostgresType param_types;
@@ -1559,6 +1663,7 @@ AdbcStatusCode PostgresStatement::GetParameterSchema(struct ArrowSchema* schema,
 }
 
 AdbcStatusCode PostgresStatement::Prepare(struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   if (query_.empty()) {
     InternalAdbcSetError(error, "%s", "[libpq] Must SetSqlQuery() before Prepare()");
     return ADBC_STATUS_INVALID_STATE;
@@ -1571,6 +1676,8 @@ AdbcStatusCode PostgresStatement::Prepare(struct AdbcError* error) {
 }
 
 AdbcStatusCode PostgresStatement::Release(struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
+  OperationGuard operation(operation_active_);
   ClearResult();
   if (bind_.release) {
     bind_.release(&bind_);
@@ -1580,6 +1687,7 @@ AdbcStatusCode PostgresStatement::Release(struct AdbcError* error) {
 
 AdbcStatusCode PostgresStatement::SetSqlQuery(const char* query,
                                               struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   ingest_.target.clear();
   ingest_.db_schema.clear();
   query_ = query;
@@ -1589,6 +1697,7 @@ AdbcStatusCode PostgresStatement::SetSqlQuery(const char* query,
 
 AdbcStatusCode PostgresStatement::SetOption(const char* key, const char* value,
                                             struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
     query_.clear();
     ingest_.target = value;
@@ -1668,18 +1777,21 @@ AdbcStatusCode PostgresStatement::SetOption(const char* key, const char* value,
 
 AdbcStatusCode PostgresStatement::SetOptionBytes(const char* key, const uint8_t* value,
                                                  size_t length, struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   InternalAdbcSetError(error, "%s%s", "[libpq] Unknown statement option ", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
 AdbcStatusCode PostgresStatement::SetOptionDouble(const char* key, double value,
                                                   struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   InternalAdbcSetError(error, "%s%s", "[libpq] Unknown statement option ", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
 AdbcStatusCode PostgresStatement::SetOptionInt(const char* key, int64_t value,
                                                struct AdbcError* error) {
+  RAISE_STATUS(error, CheckIdle());
   if (std::strcmp(key, ADBC_POSTGRESQL_OPTION_BATCH_SIZE_HINT_BYTES) == 0) {
     if (value <= 0) {
       InternalAdbcSetError(error, "[libpq] Invalid value '%" PRIi64 "' for option '%s'",

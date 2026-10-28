@@ -111,9 +111,8 @@ struct RedshiftSuperSchema {
         return Invalid(error, "unsupported spatial/HLL route, nested source or REPLACE");
       if (field.enabled) {
         if (!direct || dictionary) return Invalid(error, "nested semantic field");
-        if (!generated_ingest || replace)
-          return Invalid(error,
-                         "requires generated ingest; SUPER REPLACE is unsupported");
+        if (generated_ingest && replace)
+          return Invalid(error, "SUPER REPLACE is unsupported");
         *has_super = true;
       }
       for (int64_t i = 0; i < node->n_children; ++i)

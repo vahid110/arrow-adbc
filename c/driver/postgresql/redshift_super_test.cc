@@ -108,7 +108,7 @@ TEST(RedshiftSuperTest, ExactStorageBackendAndRoutePreflight) {
       RedshiftSuperSchema::ValidateRoute(schema.get(), true, true, false, &has, &error),
       0);
   EXPECT_TRUE(has);
-  EXPECT_NE(
+  EXPECT_EQ(
       RedshiftSuperSchema::ValidateRoute(schema.get(), true, false, false, &has, &error),
       0);
   EXPECT_NE(

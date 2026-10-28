@@ -337,7 +337,8 @@ if(ADBC_BUILD_TESTS)
           PQexecPrepared
           PQdescribePrepared
           PQnparams
-          PQparamtype)
+          PQparamtype
+          PQresultErrorField)
     target_compile_definitions(adbc-driver-redshift-interval-recording-test
                                PRIVATE ${PQ_SYMBOL}=IntervalRecording_${PQ_SYMBOL})
   endforeach()

@@ -79,6 +79,7 @@ struct BindStream {
 
   // OIDs for parameter types
   std::vector<uint32_t> param_types;
+  std::vector<Oid> logical_param_types;
   std::vector<char*> param_values;
   std::vector<int> param_formats;
   std::vector<int> param_lengths;
@@ -202,7 +203,13 @@ struct BindStream {
     if (ingest_targets && ingest_targets->n_children() != bind_schema->n_children) {
       return Status::InvalidArgument("Ingest target/source column count mismatch");
     }
+    bool route_super = false;
+    UNWRAP_NANOARROW(na_error, InvalidArgument,
+                     RedshiftSuperSchema::ValidateRoute(
+                         &bind_schema.value, type_resolver.is_redshift(),
+                         generated_super_ingest, false, &route_super, &na_error));
     param_types.resize(bind_schema->n_children);
+    logical_param_types.resize(bind_schema->n_children);
     param_values.resize(bind_schema->n_children);
     param_lengths.resize(bind_schema->n_children);
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
@@ -247,11 +254,6 @@ struct BindStream {
                                                   &type, &na_error));
       }
 
-      if (!generated_super_ingest &&
-          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
-          type.encoded_kind() != RedshiftEncodedKind::kHll)
-        return Status::NotImplemented(
-            "[Redshift] Direct vendor parameter binding is unsupported");
       // Delay the session change until all parameter types and writers are valid.
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
@@ -266,6 +268,12 @@ struct BindStream {
           na_error, InvalidArgument,
           RedshiftEncodedSchema::Parse(bind_schema->children[i],
                                        type_resolver.is_redshift(), &encoded, &na_error));
+      if (!generated_super_ingest &&
+          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
+          type.encoded_kind() != RedshiftEncodedKind::kHll && !super.enabled)
+        return Status::NotImplemented(
+            "[Redshift] Direct vendor parameter binding is unsupported");
+
       encoded_fields[i] = encoded.kind;
       has_encoded_fields |= encoded.enabled();
       if (type.encoded_kind() != RedshiftEncodedKind::kNone &&
@@ -330,7 +338,7 @@ struct BindStream {
              ingest_targets->child(i).scalar_kind() != RedshiftScalarKind::kNone)))) {
         writer_target = &ingest_targets->child(i);
       }
-      if (!ingest_targets && encoded.kind == RedshiftEncodedKind::kHll)
+      if (!ingest_targets && (encoded.kind == RedshiftEncodedKind::kHll || super.enabled))
         writer_target = &type;
       bytes_fields[i] =
           bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
@@ -362,6 +370,7 @@ struct BindStream {
                    writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
               ? writer_target->oid()
               : type.oid();
+      logical_param_types[i] = param_types[i];
       if (super.enabled || encoded.spatial()) {
         param_types[i] = type_resolver.GetBytesOID(RedshiftBytesKind::kVarbyte);
         if (!param_types[i])
@@ -378,6 +387,10 @@ struct BindStream {
     }
 
     return Status::Ok();
+  }
+
+  bool DirectSuperParameters() const {
+    return has_super_fields && !generated_super_ingest;
   }
 
   bool HasHllParameters() const {
@@ -482,6 +495,12 @@ struct BindStream {
       }
     }
 
+    if (current->release && DirectSuperParameters()) {
+      const auto saved = current_row;
+      for (current_row = 0; current_row < current->length; ++current_row)
+        UNWRAP_STATUS(BindCurrentRow());
+      current_row = saved;
+    }
     return Status::Ok();
   }
 
@@ -538,10 +557,7 @@ struct BindStream {
     return Status::Ok();
   }
 
-  Status BindAndExecuteCurrentRow(PGconn* pg_conn,
-                                  adbc::driver::pgwire::UniqueResult* result_out,
-                                  int result_format) {
-    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+  Status BindCurrentRow() {
     param_buffer->size_bytes = 0;
     int64_t last_offset = 0;
     std::vector<bool> is_null_param(array_view->n_children);
@@ -586,8 +602,22 @@ struct BindStream {
       last_offset += param_lengths[col];
     }
 
+    return Status::Ok();
+  }
+
+  Status BindAndExecuteCurrentRow(PGconn* pg_conn,
+                                  adbc::driver::pgwire::UniqueResult* result_out,
+                                  int result_format) {
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    UNWRAP_STATUS(BindCurrentRow());
     if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
+    return ExecuteCurrentRow(pg_conn, result_out, result_format);
+  }
+
+  Status ExecuteCurrentRow(PGconn* pg_conn,
+                           adbc::driver::pgwire::UniqueResult* result_out,
+                           int result_format) {
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecPrepared(pg_conn, /*stmtName=*/"",
                        /*nParams=*/bind_schema->n_children, param_values.data(),

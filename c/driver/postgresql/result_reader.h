@@ -30,6 +30,7 @@
 
 #include "bind_stream.h"
 #include "copy/reader.h"
+#include "redshift_super_prepared.h"
 #include "result_helper.h"
 
 namespace adbcpq {
@@ -43,6 +44,7 @@ class PqResultArrayReader {
                       adbc::driver::pgwire::TemporalRepresentation temporal =
                           adbc::driver::pgwire::TemporalRepresentation::kArrow)
       : conn_(conn),
+        original_query_(query),
         helper_(conn, std::move(query), type_resolver->is_redshift()),
         type_resolver_(type_resolver),
         autocommit_(false),
@@ -87,7 +89,11 @@ class PqResultArrayReader {
   PGconn* conn_;
   std::weak_ptr<PostgresConnection> connection_;
   std::shared_ptr<void> bound_stream_lease_;
+  std::string original_query_;
   PqResultHelper helper_;
+  std::unique_ptr<RedshiftSuperPrepared> direct_super_;
+  bool direct_plan_ready_ = false;
+  Status PrepareDirectSuper();
   std::unique_ptr<BindStream> bind_stream_;
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
   std::vector<std::unique_ptr<PostgresCopyFieldReader>> field_readers_;
@@ -107,7 +113,10 @@ class PqResultArrayReader {
       : conn_(other->conn_),
         connection_(std::move(other->connection_)),
         bound_stream_lease_(std::move(other->bound_stream_lease_)),
+        original_query_(std::move(other->original_query_)),
         helper_(std::move(other->helper_)),
+        direct_super_(std::move(other->direct_super_)),
+        direct_plan_ready_(other->direct_plan_ready_),
         bind_stream_(std::move(other->bind_stream_)),
         type_resolver_(std::move(other->type_resolver_)),
         field_readers_(std::move(other->field_readers_)),

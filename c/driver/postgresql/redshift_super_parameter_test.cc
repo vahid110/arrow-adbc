@@ -144,7 +144,6 @@ TEST(RedshiftSuperParameterTest, RejectsUnqualifiedScopesAndMalformedTokens) {
            "CREATE FUNCTION f() AS $$SELECT $1$$",
            "COPY t FROM $1",
            "SHOW $1",
-           "WITH q AS (PREPARE s AS SELECT $1) SELECT * FROM q",
            R"(SELECT U&"$1")",
            R"(SELECT U&'$1')",
            R"(SELECT \ $1)",
@@ -157,6 +156,30 @@ TEST(RedshiftSuperParameterTest, RejectsUnqualifiedScopesAndMalformedTokens) {
   Plan plan;
   std::string error;
   ASSERT_TRUE(Plan::Parse("SELECT $1; /* terminal */ -- end", 1, true, &plan, &error));
+}
+
+TEST(RedshiftSuperParameterTest, ContinuedEscapeStringsRejectBeforeConversion) {
+  for (bool standard : {true, false}) {
+    for (const std::string sql : {
+             "SELECT E'a'\n'\\' $1 -- '\n, $2",
+             "SELECT E'a' /* newline\n comment */ '\\' $1 -- '\n, $2",
+             "SELECT 'a'\n'$1', $2",
+             "SELECT E'a' E'$1', $2",
+         }) {
+      Plan plan;
+      std::string error;
+      EXPECT_FALSE(Plan::Parse(sql, 2, standard, &plan, &error));
+      EXPECT_EQ(error, "Adjacent string segments are not qualified");
+    }
+  }
+}
+TEST(RedshiftSuperParameterTest, UtilityWordsAsColumnLabelsHaveNoParameterScope) {
+  for (const std::string word : {"prepare", "call", "execute", "copy"}) {
+    Plan plan;
+    std::string error;
+    ASSERT_TRUE(Plan::Parse("SELECT $1 AS " + word, 1, true, &plan, &error)) << error;
+    ASSERT_EQ(plan.references().size(), 1);
+  }
 }
 
 TEST(RedshiftSuperParameterTest, InvalidUtf8AndNulRejectBeforePlanning) {
@@ -250,6 +273,60 @@ TEST(RedshiftSuperParameterTest, OpaquePayloadPropertyAcrossReferenceIndices) {
       EXPECT_EQ(generated.replacements.size(), 2);
     }
   }
+}
+
+TEST(RedshiftSuperParameterTest, DualModeRequiresEveryReferenceSpanToAgree) {
+  const std::string sql = "SELECT '\\' || $1 -- ' || $1 -- '\n, $2";
+  Plan standard, escaped, stable;
+  std::string error;
+  ASSERT_TRUE(Plan::Parse(sql, 2, true, &standard, &error)) << error;
+  ASSERT_TRUE(Plan::Parse(sql, 2, false, &escaped, &error)) << error;
+  ASSERT_EQ(standard.references().size(), 2U);
+  ASSERT_EQ(escaped.references().size(), 2U);
+  EXPECT_EQ(standard.references()[0].index, escaped.references()[0].index);
+  EXPECT_NE(standard.references()[0].begin, escaped.references()[0].begin);
+  EXPECT_FALSE(Plan::ParseUnambiguous(sql, 2, &stable, &error));
+
+  // Only $2 is SUPER: rewriting selected references alone would look identical.
+  Plan::Generated left, right;
+  ASSERT_TRUE(standard.Convert({false, true}, "verified", &left, &error));
+  ASSERT_TRUE(escaped.Convert({false, true}, "verified", &right, &error));
+  EXPECT_EQ(left.sql, right.sql);
+  EXPECT_FALSE(Plan::ParseUnambiguous(sql, 2, &stable, &error));
+}
+
+TEST(RedshiftSuperParameterTest, DualModeAcceptsEqualBoundariesNotEqualStringValues) {
+  for (const std::string sql : {
+           R"(SELECT 'a\b', $1, E'\'$2', $2)",
+           "SELECT '$1', /* $2 */ $1, $2",
+           R"(SELECT $$ \ $1 $$, $2)",
+           R"(SELECT foo$1, "$2", $1, $2)",
+       }) {
+    Plan stable, standard, escaped;
+    std::string error;
+    ASSERT_TRUE(Plan::ParseUnambiguous(sql, 2, &stable, &error)) << sql << ": " << error;
+    ASSERT_TRUE(Plan::Parse(sql, 2, true, &standard, &error));
+    ASSERT_TRUE(Plan::Parse(sql, 2, false, &escaped, &error));
+    Plan::Generated generated, left, right;
+    ASSERT_TRUE(stable.Convert({true, true}, "verified", &generated, &error));
+    ASSERT_TRUE(standard.Convert({true, true}, "verified", &left, &error));
+    ASSERT_TRUE(escaped.Convert({true, true}, "verified", &right, &error));
+    EXPECT_EQ(generated.sql, left.sql);
+    EXPECT_EQ(generated.sql, right.sql);
+    ASSERT_EQ(left.replacements.size(), right.replacements.size());
+    for (size_t i = 0; i < left.replacements.size(); ++i) {
+      EXPECT_EQ(left.replacements[i].source_begin, right.replacements[i].source_begin);
+      EXPECT_EQ(left.replacements[i].source_end, right.replacements[i].source_end);
+      EXPECT_EQ(left.replacements[i].generated_begin,
+                right.replacements[i].generated_begin);
+      EXPECT_EQ(left.replacements[i].generated_end, right.replacements[i].generated_end);
+    }
+  }
+  Plan plan;
+  std::string error;
+  EXPECT_FALSE(
+      Plan::ParseUnambiguous("SELECT E'a'\n'\\' $1 -- '\n, $2", 2, &plan, &error));
+  EXPECT_FALSE(Plan::ParseUnambiguous(R"(SELECT '\', $1)", 1, &plan, &error));
 }
 
 }  // namespace

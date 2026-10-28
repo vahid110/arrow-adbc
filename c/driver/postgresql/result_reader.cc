@@ -236,6 +236,16 @@ Status PqResultArrayReader::CheckHllParamDescriptor() {
   return bind_stream_->ValidateHllParameters(params);
 }
 
+Status PqResultArrayReader::PrepareDirectSuper() {
+  UNWRAP_STATUS(
+      direct_super_->Prepare(conn_, *type_resolver_, bind_stream_->logical_param_types,
+                             bind_stream_->param_types, bind_stream_->json_parse_fields,
+                             temporal_representation_));
+  result_format_ = direct_super_->result_format();
+  direct_plan_ready_ = true;
+  return Status::Ok();
+}
+
 Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   helper_.set_output_format(PqResultHelper::Format::kBinary);
   helper_.set_param_format(PqResultHelper::Format::kBinary);
@@ -244,11 +254,25 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   // there is a result with more than zero rows to populate.
   if (bind_stream_) {
     UNWRAP_STATUS(bind_stream_->Begin([] { return Status::Ok(); }));
+    if (!IsConnectionLive())
+      return Status::InvalidState("[libpq] Connection released by schema callback");
 
     const bool has_na_params = std::any_of(
         bind_stream_->bind_schema_fields.begin(), bind_stream_->bind_schema_fields.end(),
         [](const ArrowSchemaView& view) { return view.type == NANOARROW_TYPE_NA; });
     if (has_na_params) {
+      // A writable SUPER plan must not infer an encoding for an untyped neighbor.
+      // Explicit typed all-null fields remain supported.
+      for (int64_t i = 0; i < bind_stream_->bind_schema->n_children; ++i) {
+        RedshiftSuperSchema source;
+        UNWRAP_NANOARROW(na_error_, InvalidArgument,
+                         RedshiftSuperSchema::Parse(
+                             bind_stream_->bind_schema->children[i],
+                             type_resolver_->is_redshift(), &source, &na_error_));
+        if (source.enabled)
+          return Status::InvalidArgument(
+              "[Redshift] SUPER parameters require typed adjacent fields");
+      }
       // Prepare WITHOUT parameter types to let PostgreSQL infer them. This is required
       // to resolve Arrow NA (all-null) parameters to the expected PostgreSQL types.
       UNWRAP_STATUS(helper_.Prepare());
@@ -267,19 +291,23 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
     helper_.set_require_utf8(helper_.require_utf8() || bind_stream_->require_utf8);
 
-    // Re-prepare with the actual parameter types
-    Status prepare_status = helper_.Prepare(bind_stream_->param_types);
-    if (!prepare_status.ok()) {
-      // Preserve the preparation error even if rollback also fails.
-      (void)FinishBoundStream(/*failed=*/true);
-      return prepare_status;
-    }
+    if (bind_stream_->DirectSuperParameters()) {
+      direct_super_ = std::make_unique<RedshiftSuperPrepared>(original_query_);
+    } else {
+      // Re-prepare with the actual parameter types
+      Status prepare_status = helper_.Prepare(bind_stream_->param_types);
+      if (!prepare_status.ok()) {
+        // Preserve the preparation error even if rollback also fails.
+        (void)FinishBoundStream(/*failed=*/true);
+        return prepare_status;
+      }
 
-    if (type_resolver_->is_redshift()) {
-      UNWRAP_STATUS(helper_.DescribePrepared());
-      UNWRAP_STATUS(SelectDescribedResult());
+      if (type_resolver_->is_redshift()) {
+        UNWRAP_STATUS(helper_.DescribePrepared());
+        UNWRAP_STATUS(SelectDescribedResult());
+      }
+      UNWRAP_STATUS(CheckHllParamDescriptor());
     }
-    UNWRAP_STATUS(CheckHllParamDescriptor());
     UNWRAP_STATUS(BindNextAndExecute(nullptr));
 
     // If there were no arrays in the bind stream, we still need a result
@@ -319,8 +347,12 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
   // Use the same per-field descriptors as ExecuteSchema/COPY, including PQfmod.
   // The resolved root is local: two same-OID fields retain independent modifiers.
   PostgresType output_type;
-  UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type,
-                                           temporal_representation_));
+  if (direct_super_) {
+    output_type = direct_super_->output();
+  } else {
+    UNWRAP_STATUS(helper_.ResolveOutputTypes(*type_resolver_, &output_type,
+                                             temporal_representation_));
+  }
   UNWRAP_STATUS(CheckVendorReadBoundary(output_type));
   ArrowSchemaInit(schema_.get());
   UNWRAP_ERRNO(Internal, output_type.SetSchema(schema_.get(), vendor_name_));
@@ -387,17 +419,42 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       return fail_bind(std::move(next_status));
     }
 
+    if (!IsConnectionLive())
+      return fail_bind(
+          Status::InvalidState("[libpq] Connection released by bind callback"));
     if (!bind_stream_->current->release) {
+      if (direct_super_ && !direct_plan_ready_) {
+        Status status = PrepareDirectSuper();
+        if (!status.ok()) return fail_bind(std::move(status));
+        helper_.SetResult(direct_super_->CopyPhysicalDescriptor());
+        if (!helper_.HasResult())
+          return fail_bind(Status::Internal("[Redshift] Could not retain empty schema"));
+      }
       return FinishBoundStream(/*failed=*/false);
     }
 
     adbc::driver::pgwire::UniqueResult result;
-    Status execute_status =
-        bind_stream_->BindAndExecuteCurrentRow(conn_, &result, result_format_);
+    Status execute_status;
+    if (direct_super_) {
+      execute_status = bind_stream_->BindCurrentRow();
+      if (execute_status.ok()) execute_status = PrepareDirectSuper();
+      if (execute_status.ok()) {
+        execute_status = bind_stream_->ExecuteCurrentRow(conn_, &result, result_format_);
+        if (!execute_status.ok())
+          execute_status = direct_super_->Decorate(std::move(execute_status));
+      }
+    } else {
+      execute_status =
+          bind_stream_->BindAndExecuteCurrentRow(conn_, &result, result_format_);
+    }
     if (!execute_status.ok()) {
       return fail_bind(std::move(execute_status));
     }
     helper_.SetResult(result.release());
+    if (direct_super_) {
+      Status descriptor = direct_super_->CheckResult(helper_);
+      if (!descriptor.ok()) return fail_bind(std::move(descriptor));
+    }
     if (described_) {
       Status descriptor = helper_.CheckDescriptor(described_.get(), result_format_);
       if (!descriptor.ok()) return fail_bind(std::move(descriptor));
@@ -416,11 +473,25 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
   // stream (if there is one) or execute the query without binding.
   if (bind_stream_) {
     UNWRAP_STATUS(bind_stream_->Begin([] { return Status::Ok(); }));
+    if (!IsConnectionLive())
+      return Status::InvalidState("[libpq] Connection released by schema callback");
 
     const bool has_na_params = std::any_of(
         bind_stream_->bind_schema_fields.begin(), bind_stream_->bind_schema_fields.end(),
         [](const ArrowSchemaView& view) { return view.type == NANOARROW_TYPE_NA; });
     if (has_na_params) {
+      // A writable SUPER plan must not infer an encoding for an untyped neighbor.
+      // Explicit typed all-null fields remain supported.
+      for (int64_t i = 0; i < bind_stream_->bind_schema->n_children; ++i) {
+        RedshiftSuperSchema source;
+        UNWRAP_NANOARROW(na_error_, InvalidArgument,
+                         RedshiftSuperSchema::Parse(
+                             bind_stream_->bind_schema->children[i],
+                             type_resolver_->is_redshift(), &source, &na_error_));
+        if (source.enabled)
+          return Status::InvalidArgument(
+              "[Redshift] SUPER parameters require typed adjacent fields");
+      }
       // Prepare without parameter types so PostgreSQL can infer them. This is required
       // to resolve Arrow NA (all-null) parameters to the expected PostgreSQL types.
       UNWRAP_STATUS(helper_.Prepare());
@@ -433,14 +504,18 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
 
     UNWRAP_STATUS(bind_stream_->SetParamTypes(conn_, *type_resolver_, autocommit_));
     helper_.set_require_utf8(helper_.require_utf8() || bind_stream_->require_utf8);
-    Status prepare_status = helper_.Prepare(bind_stream_->param_types);
-    if (!prepare_status.ok()) {
-      // Preserve the preparation error even if rollback also fails.
-      (void)FinishBoundStream(/*failed=*/true);
-      return prepare_status;
-    }
+    if (bind_stream_->DirectSuperParameters()) {
+      direct_super_ = std::make_unique<RedshiftSuperPrepared>(original_query_);
+    } else {
+      Status prepare_status = helper_.Prepare(bind_stream_->param_types);
+      if (!prepare_status.ok()) {
+        // Preserve the preparation error even if rollback also fails.
+        (void)FinishBoundStream(/*failed=*/true);
+        return prepare_status;
+      }
 
-    UNWRAP_STATUS(CheckHllParamDescriptor());
+      UNWRAP_STATUS(CheckHllParamDescriptor());
+    }
     // Reset affected rows to zero before binding and executing any
     if (affected_rows) {
       (*affected_rows) = 0;

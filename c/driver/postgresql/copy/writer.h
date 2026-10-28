@@ -1322,12 +1322,13 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
   }
   if (super.enabled ||
       vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kNone) {
-    if (!generated_super_ingest || !super.enabled || !target_type ||
+    if ((!generated_super_ingest && !redshift_parameters) || !super.enabled ||
+        !target_type ||
         vendor_target != adbc::driver::pgwire::CatalogVendorFamily::kSuper ||
         !target_type->oid() ||
         target_type->oid() != type_resolver.GetVendorOID(vendor_target))
       return RedshiftSuperSchema::Invalid(
-          error, "requires generated SUPER ingest and exact target");
+          error, "requires explicit SUPER parameter/ingest source and exact target");
     *out = PostgresCopyFieldWriter::Create<RedshiftSuperFieldWriter>(array_view);
     return NANOARROW_OK;
   }

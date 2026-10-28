@@ -80,7 +80,7 @@ class RedshiftSuperParameterPlan {
     plan.parameter_count_ = parameter_count;
     if (!ValidUtf8(sql)) return Fail(error, "SQL must be non-NUL valid UTF8");
     size_t pos = 0;
-    bool first = true, terminal = false;
+    bool first = true, terminal = false, previous_string = false;
     while (pos < sql.size()) {
       const auto c = static_cast<unsigned char>(sql[pos]);
       if (Space(c)) {
@@ -125,27 +125,31 @@ class RedshiftSuperParameterPlan {
             return Fail(error, "SUPER parameters require a SELECT, VALUES or DML scope");
           first = false;
         }
-        // These introduce parameter namespaces or embedded statement scopes not
-        // admitted by this plan. Quoted identifiers with these names are inert.
-        if (word == "PREPARE" || word == "EXECUTE" || word == "CALL" || word == "DO" ||
-            word == "DECLARE" || word == "CREATE" || word == "ALTER" || word == "COPY")
-          return Fail(error, "Nested or utility parameter scopes are unsupported");
         if (word == "U" && sql.substr(pos, 2) == "&\"")
           return Fail(error, "Unicode escape identifiers are not qualified");
         if (word == "U" && sql.substr(pos, 2) == "&'")
           return Fail(error, "Unicode escape strings are not qualified");
         if (word == "E" && pos < sql.size() && sql[pos] == '\'') {
+          if (previous_string)
+            return Fail(error, "Adjacent string segments are not qualified");
           if (!Quoted(sql, &pos, '\'', true))
             return Fail(error, "Unterminated escape string");
+          previous_string = true;
+        } else {
+          previous_string = false;
         }
         continue;
       }
       if (first) return Fail(error, "Unqualified prepared statement scope");
       if (c == '\'' || c == '"') {
+        if (c == '\'' && previous_string)
+          return Fail(error, "Adjacent string segments are not qualified");
         if (!Quoted(sql, &pos, c, c == '\'' && !standard_conforming_strings))
           return Fail(error, "Unterminated quoted token");
+        previous_string = c == '\'';
         continue;
       }
+      previous_string = false;
       if (c == '$') {
         const size_t begin = pos;
         if (pos + 1 < sql.size() && Digit(sql[pos + 1])) {
@@ -187,6 +191,26 @@ class RedshiftSuperParameterPlan {
     }
     if (first) return Fail(error, "Empty prepared statement");
     *out = std::move(plan);
+    return true;
+  }
+
+  // No server string-mode assumption: both lexical interpretations must find
+  // the same complete parameter namespace, including unselected references.
+  static bool ParseUnambiguous(std::string_view sql, size_t parameter_count,
+                               RedshiftSuperParameterPlan* out, std::string* error) {
+    RedshiftSuperParameterPlan standard, escaped;
+    if (!Parse(sql, parameter_count, true, &standard, error) ||
+        !Parse(sql, parameter_count, false, &escaped, error))
+      return false;
+    if (standard.references_.size() != escaped.references_.size())
+      return Fail(error, "SQL parameter tokens depend on string escape mode");
+    for (size_t i = 0; i < standard.references_.size(); ++i) {
+      const auto& left = standard.references_[i];
+      const auto& right = escaped.references_[i];
+      if (left.begin != right.begin || left.end != right.end || left.index != right.index)
+        return Fail(error, "SQL parameter tokens depend on string escape mode");
+    }
+    *out = std::move(standard);
     return true;
   }
 
