@@ -20,6 +20,9 @@
 # Status
 
 
+Task010t interval edges passed all four installed Python/C array and stream legs
+(234 cases), with resource closure verified. See [the bounded evidence](#task010t-interval-edge-qualification).
+
 Task010s bounded interval ingestion qualification passed all four installed
 Python/C Bind and BindStream legs on macOS arm64, with verified full teardown. See
 [the source-specific results](#task010s-interval-ingestion-qualification).
@@ -254,3 +257,59 @@ This is bounded macOS arm64 evidence, not native extrema/sentinel qualification,
 omitted-default proof, arbitrary prepared-SQL target discovery or a general
 streaming-atomicity guarantee. Final exact-head review and applicable green remote
 CI remain gates; actual billing is not reconciled.
+
+## Task010t interval edge qualification
+
+Source `77da4599ca79f86a0afcae9cfe66a42da9b0f503` adds four observed
+omitted-precision ingestion-target tuples (SECOND, DAY TO SECOND, HOUR TO SECOND
+and MINUTE TO SECOND), each with precision 6. Unrecognized/conflicting targets
+still reject; public query, empty-result and GetTableSchema constraints remain unknown.
+
+| Installed macOS arm64 leg | Result | Operation |
+|---|---|---|
+| Python Bind array | 57/57 passed; full teardown independently verified | `1ab44b8fddf74a2dab3199a9e9f1b66b` |
+| Python BindStream | 60/60 passed; full teardown independently verified | `886d0323c1f1488696f8710e72b807c9` |
+| Standalone C array | 57/57 passed; full teardown independently verified | `af4f27a1ae734794b55d6b0dc3923875` |
+| Standalone C stream | 60/60 passed; resource closure separately reconciled | `61bd8de8b627438a9458cd7ed5affc59` |
+
+These 234 case executions cover selected signed extrema and conversion thresholds,
+negative/inexact rejection, omitted defaults and retained rows. Stream cases also
+check late conversion failure under driver-owned and caller-owned transactions;
+the observed retained rows do not establish general streaming atomicity.
+Native discovery separately retained 114 observations: 16 exact binary echoes
+supported exploratory installed tests; four default columns preserved stored
++1/-1 microsecond. Four infinity text inputs rejected with SQLSTATE 22007. Outside-range text
+parameters returned the following altered values without SQLSTATE:
+
+| Text interval input | Observed binary result |
+|---|---|
+| -2147483649 months | 2147483647 months |
+| 2147483648 months | -2147483648 months |
+| -9223372036854.775809 seconds | -2077252342775809 microseconds |
+| 9223372036854.775808 seconds | 2077252342775808 microseconds |
+
+For these samples, month results match signed 32-bit wrap; second results match
+signed 32-bit wrap of whole seconds with the six fractional digits preserved.
+DAY TO SECOND text and SQL literals also altered the signed 64-bit microsecond
+endpoint samples, whereas binary parameters and installed stored readbacks were
+exact. These observations do not establish a general parser algorithm.
+Successful installed
+CREATE/APPEND/readback proves only the tested stored samples, not a contiguous
+finite domain, sentinel interpretation or arithmetic behavior.
+
+Evidence under `task010t-interval-edges-20261026`:
+`native-complete-oracle-independent-v1`, `python-array-live-independent-v1`,
+`python-stream-budget-live-independent-v1`, `c-array-accounting-live-independent-v1`
+and `c-stream-accounting-live-independent-v1`; exact retained overflow comparisons
+are in `native-overflow-dispositions-v1`. All four installed audits verify closed
+handles and zero owned schemas/runtime sessions. Three controllers verified all
+seven resource classes absent; the final C stream controller timed out waiting
+for security-group cleanup after all 60 cases passed. Separate exact-group cleanup
+and absence verification are audited in `c-stream-final-group-cleanup-independent-v1`;
+its original teardown failure remains preserved.
+
+Earlier C provisioning and Python bootstrap failures qualified no case. A C harness
+accounting-cap failure completed only 39 prefix cases and did not qualify that leg;
+physical teardown succeeded, with the pre-deletion schema residue recorded separately.
+Original failures and cleanup evidence remain preserved. Final exact-head review
+and applicable CI remain completion gates; actual billing is not reconciled.
