@@ -19,7 +19,8 @@
 
 PostgreSQL mode proves rejection and existing binary plumbing only. Redshift mode
 exercises generated JSON-subset/spatial/HLL ingest and bounded typed vendor reads;
-it does not qualify lossless SUPER reads or mixed HLL projections.
+SUPER reads preserve observable native JSON bytes and wire NULLs, not every
+server-side distinction. Mixed HLL projections remain unsupported.
 The native CLI is a manual primitive, not a credential/admission mechanism. Root
 live orchestration imports these fixed recipes in-process rather than putting
 credentials in argv.
@@ -315,22 +316,74 @@ class VendorPublicTest(unittest.TestCase):
                     [b"\x00\x80\xff", b"", None],
                 )
 
-    def test_json_subset_ingest_semantic_witness_and_unsupported_raw_read(self):
+    def test_json_subset_ingest_native_read_and_ipc(self):
         if self.backend != "redshift":
             with self.assertRaises(adm.Error):
                 self.ingest("create", ["null"])
             return
-        self.ingest("create", [None, "null", '""', "true", "[]", '{"x":1.20}'])
+        # JSON_PARSE fixtures from native_protocol_plan_data.inc and their
+        # retained native bytes in redshift_super_native_corpus_test.inc.
+        values = [
+            None,
+            "null",
+            '""',
+            "true",
+            "[]",
+            '{"other":1}',
+            "9007199254740993",
+            "1e0",
+            '"é🙂\\u0001"',
+            '"null"',
+        ]
+        self.ingest("create", values)
         rows = self.query(
             "SELECT row_id, JSON_TYPEOF(amount) AS kind, "
             f'JSON_SERIALIZE(amount) AS value FROM "{self.table}" ORDER BY row_id'
         )
         self.assertEqual([x["value"] for x in rows[:3]], ["null", "null", '""'])
         self.assertEqual(
-            [x["kind"] for x in rows[2:]], ["string", "boolean", "array", "object"]
+            [x["kind"] for x in rows[2:6]], ["string", "boolean", "array", "object"]
         )
-        with self.assertRaises(adm.Error):
-            self.query(f'SELECT amount FROM "{self.table}"')
+        table = self.query_table(
+            f'SELECT row_id, amount FROM "{self.table}" ORDER BY row_id'
+        )
+        self.assertEqual(table.column("row_id").to_pylist(), list(range(len(values))))
+        field = table.schema.field("amount")
+        self.assertEqual(field.type, pa.large_string())
+        self.assertEqual(
+            field.metadata[b"ARROW:extension:name"], b"adbc.redshift.super.native_json"
+        )
+        self.assertEqual(
+            field.metadata[b"ARROW:extension:metadata"],
+            b'{"version":1,"encoding":"redshift-json-wire",'
+            b'"scope":"native-result","numbers":"lexemes",'
+            b'"nulls":"wire-null"}',
+        )
+        self.assertEqual(field.metadata[b"ADBC:redshift:sql_type"], b"SUPER")
+        self.assertNotEqual(field.metadata, SUPER_METADATA)
+        # SQL NULL and JSON null both arrived as wire NULL in retained evidence.
+        # JSON_PARSE also normalized 1e0 to 1: assert received bytes, not inputs.
+        expected = [
+            None,
+            None,
+            b'""',
+            b"true",
+            b"[]",
+            b'{"other":1}',
+            b"9007199254740993",
+            b"1",
+            '"é🙂\\u0001"'.encode(),
+            b'"null"',
+        ]
+        self.assertEqual(
+            table.column("amount").cast(pa.large_binary()).to_pylist(), expected
+        )
+        self.assertEqual(table.column("amount").null_count, 2)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        restored = pa.ipc.open_stream(sink.getvalue()).read_all()
+        self.assertTrue(restored.equals(table, check_metadata=True))
         before = self.query(f'SELECT count(*) AS n FROM "{self.table}"')
         for stream in (False, True):
             with self.assertRaises(adm.Error) as failure:
