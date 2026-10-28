@@ -194,10 +194,13 @@ observations. Relation OID, schema/table, name, ordinal, type OID and raw modifi
 are checked around bound exact SVV_COLUMNS reads. Missing/duplicate/inconsistent
 observations and SQL errors fail; raw `interval_type`, `interval_precision` and
 `datetime_precision` remain `interval_raw_type`, `interval_raw_precision` and
-`interval_raw_datetime_precision` diagnostics. Task010s promotes only 37 observed exact
+`interval_raw_datetime_precision` diagnostics. Task010s promotes 37 observed exact
 family/raw-modifier/`format_type` tuples, with all three SVV fields NULL, to known
 constraints inside actual ingestion-target resolution. This covers the 13
-qualifiers and precision 0..6 on SECOND-ending forms. Other tuples, conflicting
+qualifiers and precision 0..6 on SECOND-ending forms. Task010t adds four exact
+observed omitted-precision tuples (SECOND, DAY TO SECOND, HOUR TO SECOND and
+MINUTE TO SECOND), each decoded as precision 6; native stored +1/-1 microsecond
+readback independently supports that mapping. Other tuples, conflicting
 facts and unsupported targets remain unknown and fail closed; plausible SVV text,
 a PostgreSQL mask/default or driver-issued DDL alone is not sufficient proof.
 
@@ -207,7 +210,17 @@ retained rows after first-invalid target rejection.
 Ordinary query and GetTableSchema metadata still report unknown constraints and
 raw diagnostics: internal target decoding does not authorize rebinding readback
 as a known source. Explicit source metadata remains an application assertion.
-Omitted SQL defaults and native extrema are not established by these cases.
+Task010s cases do not establish omitted SQL defaults or native extrema. Task010t
+adds installed Python/C array/stream CREATE/APPEND/readback of selected extrema,
+conversion thresholds and omitted defaults.
+Exact binary parameter echoes alone do not prove stored values. The installed
+stored samples do not establish contiguous finite domains, sentinel meaning or
+arithmetic behavior. Native text overflow samples returned altered values rather
+than errors: observed month wrapping and whole-second narrowing are recorded in
+[STATUS](STATUS.md#task010t-interval-edge-qualification). Those text/literal
+observations do not change the driver's checked binary conversion contract.
+Empty-result descriptors can differ from nonempty descriptors and retain unknown
+constraint metadata, without promotion to a known source contract.
 Read observations detect observed changes, not every concurrent external DDL
 race or a later typmod change.
 

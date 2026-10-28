@@ -94,6 +94,9 @@ grant no live authority. Task010s completed bounded interval target qualificatio
 through four installed Python/C Bind/BindStream legs and independent teardown
 audits. Final review and applicable green CI remain gates; see
 [STATUS](STATUS.md#task010s-interval-ingestion-qualification).
+Task010t adds observed omitted-precision target decoding and bounded native
+and all four installed Python/C array/stream edge legs (234 cases), with resource
+closure verified. See [its scope and gates](STATUS.md#task010t-interval-edge-qualification).
 The fixed temporal endpoints and precision cases listed in [STATUS](STATUS.md)
 have installed live evidence; exhaustive domains and sentinels remain qualification
 gates. Platform CI follows the local-first workflow.

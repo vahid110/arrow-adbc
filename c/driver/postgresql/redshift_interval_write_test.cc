@@ -154,21 +154,180 @@ TEST(RedshiftIntervalWriteTest,
       const int strictest = source < destination ? source : destination;
       IntervalWriteCase exact;
       ASSERT_EQ(
-          exact.Init(Family::kDaySecond, {quanta[strictest]}, "known", "DAY TO SECOND",
-                     p.c_str(), NANOARROW_TIME_UNIT_MICRO, &target),
+          exact.Init(Family::kDaySecond, {quanta[strictest], -quanta[strictest]}, "known",
+                     "DAY TO SECOND", p.c_str(), NANOARROW_TIME_UNIT_MICRO, &target),
           0);
       ASSERT_EQ(exact.Write(), 0);
       EXPECT_EQ(exact.Wire(), testing::NumericHex(wires[strictest]));
+      ArrowBufferReset(exact.bytes.get());
+      ASSERT_EQ(exact.Write(1), 0);
+      const char* negative_wires[] = {
+          "00000008fffffffffff0bdc0", "00000008fffffffffffe7960",
+          "00000008ffffffffffffd8f0", "00000008fffffffffffffc18",
+          "00000008ffffffffffffff9c", "00000008fffffffffffffff6",
+          "00000008ffffffffffffffff"};
+      EXPECT_EQ(exact.Wire(), testing::NumericHex(negative_wires[strictest]));
       if (quanta[strictest] > 1) {
         IntervalWriteCase invalid;
         ASSERT_EQ(
-            invalid.Init(Family::kDaySecond, {quanta[strictest] - 1}, "known",
+            invalid.Init(Family::kDaySecond,
+                         {quanta[strictest] - 1, -quanta[strictest] + 1}, "known",
                          "DAY TO SECOND", p.c_str(), NANOARROW_TIME_UNIT_MICRO, &target),
             0);
-        EXPECT_NE(invalid.Write(), 0);
+        EXPECT_EQ(invalid.Write(), EINVAL);
+        EXPECT_EQ(invalid.Write(1), EINVAL);
+        EXPECT_EQ(invalid.bytes->size_bytes, 0);
       }
     }
 }
+TEST(RedshiftIntervalWriteTest, SignedAlignedStorageEdgesForEveryDeclaration) {
+  struct Case {
+    Family family;
+    const char* qualifier;
+    const char* precision;
+    int64_t low;
+    int64_t high;
+    const char* wire;
+  };
+  // Storage bounds rounded inward by integer mathematics, not native SQL limits.
+  const Case cases[] = {
+      {Family::kYearMonth, "YEAR", nullptr, -2147483640LL, 2147483640LL,
+       "0000000480000008000000047ffffff8"},
+      {Family::kYearMonth, "MONTH", nullptr, -2147483648LL, 2147483647LL,
+       "0000000480000000000000047fffffff"},
+      {Family::kYearMonth, "YEAR TO MONTH", nullptr, -2147483648LL, 2147483647LL,
+       "0000000480000000000000047fffffff"},
+      {Family::kDaySecond, "DAY", nullptr, -9223372022400000000LL, 9223372022400000000LL,
+       "00000008800000035d926000000000087ffffffca26da000"},
+      {Family::kDaySecond, "HOUR", nullptr, -9223372036800000000LL, 9223372036800000000LL,
+       "00000008800000000343d000000000087ffffffffcbc3000"},
+      {Family::kDaySecond, "MINUTE", nullptr, -9223372036800000000LL,
+       9223372036800000000LL, "00000008800000000343d000000000087ffffffffcbc3000"},
+      {Family::kDaySecond, "DAY TO HOUR", nullptr, -9223372036800000000LL,
+       9223372036800000000LL, "00000008800000000343d000000000087ffffffffcbc3000"},
+      {Family::kDaySecond, "DAY TO MINUTE", nullptr, -9223372036800000000LL,
+       9223372036800000000LL, "00000008800000000343d000000000087ffffffffcbc3000"},
+      {Family::kDaySecond, "HOUR TO MINUTE", nullptr, -9223372036800000000LL,
+       9223372036800000000LL, "00000008800000000343d000000000087ffffffffcbc3000"},
+      {Family::kDaySecond, "SECOND", "0", -9223372036854000000LL, 9223372036854000000LL,
+       "0000000880000000000bd680000000087ffffffffff42980"},
+      {Family::kDaySecond, "SECOND", "1", -9223372036854700000LL, 9223372036854700000LL,
+       "000000088000000000012820000000087ffffffffffed7e0"},
+      {Family::kDaySecond, "SECOND", "2", -9223372036854770000LL, 9223372036854770000LL,
+       "0000000880000000000016b0000000087fffffffffffe950"},
+      {Family::kDaySecond, "SECOND", "3", -9223372036854775000LL, 9223372036854775000LL,
+       "000000088000000000000328000000087ffffffffffffcd8"},
+      {Family::kDaySecond, "SECOND", "4", -9223372036854775800LL, 9223372036854775800LL,
+       "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "SECOND", "5", -9223372036854775800LL, 9223372036854775800LL,
+       "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "SECOND", "6", INT64_MIN, 9223372036854775807LL,
+       "000000088000000000000000000000087fffffffffffffff"},
+      {Family::kDaySecond, "DAY TO SECOND", "0", -9223372036854000000LL,
+       9223372036854000000LL, "0000000880000000000bd680000000087ffffffffff42980"},
+      {Family::kDaySecond, "DAY TO SECOND", "1", -9223372036854700000LL,
+       9223372036854700000LL, "000000088000000000012820000000087ffffffffffed7e0"},
+      {Family::kDaySecond, "DAY TO SECOND", "2", -9223372036854770000LL,
+       9223372036854770000LL, "0000000880000000000016b0000000087fffffffffffe950"},
+      {Family::kDaySecond, "DAY TO SECOND", "3", -9223372036854775000LL,
+       9223372036854775000LL, "000000088000000000000328000000087ffffffffffffcd8"},
+      {Family::kDaySecond, "DAY TO SECOND", "4", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "DAY TO SECOND", "5", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "DAY TO SECOND", "6", INT64_MIN, 9223372036854775807LL,
+       "000000088000000000000000000000087fffffffffffffff"},
+      {Family::kDaySecond, "HOUR TO SECOND", "0", -9223372036854000000LL,
+       9223372036854000000LL, "0000000880000000000bd680000000087ffffffffff42980"},
+      {Family::kDaySecond, "HOUR TO SECOND", "1", -9223372036854700000LL,
+       9223372036854700000LL, "000000088000000000012820000000087ffffffffffed7e0"},
+      {Family::kDaySecond, "HOUR TO SECOND", "2", -9223372036854770000LL,
+       9223372036854770000LL, "0000000880000000000016b0000000087fffffffffffe950"},
+      {Family::kDaySecond, "HOUR TO SECOND", "3", -9223372036854775000LL,
+       9223372036854775000LL, "000000088000000000000328000000087ffffffffffffcd8"},
+      {Family::kDaySecond, "HOUR TO SECOND", "4", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "HOUR TO SECOND", "5", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "HOUR TO SECOND", "6", INT64_MIN, 9223372036854775807LL,
+       "000000088000000000000000000000087fffffffffffffff"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "0", -9223372036854000000LL,
+       9223372036854000000LL, "0000000880000000000bd680000000087ffffffffff42980"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "1", -9223372036854700000LL,
+       9223372036854700000LL, "000000088000000000012820000000087ffffffffffed7e0"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "2", -9223372036854770000LL,
+       9223372036854770000LL, "0000000880000000000016b0000000087fffffffffffe950"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "3", -9223372036854775000LL,
+       9223372036854775000LL, "000000088000000000000328000000087ffffffffffffcd8"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "4", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "5", -9223372036854775800LL,
+       9223372036854775800LL, "000000088000000000000008000000087ffffffffffffff8"},
+      {Family::kDaySecond, "MINUTE TO SECOND", "6", INT64_MIN, 9223372036854775807LL,
+       "000000088000000000000000000000087fffffffffffffff"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.qualifier);
+    SCOPED_TRACE(item.precision ? item.precision : "no precision");
+    IntervalWriteCase write;
+    ASSERT_EQ(write.Init(item.family, {item.low, item.high}, "known", item.qualifier,
+                         item.precision),
+              0);
+    ASSERT_EQ(write.Write(0), 0) << write.error.message;
+    ASSERT_EQ(write.Write(1), 0) << write.error.message;
+    EXPECT_EQ(write.Wire(), testing::NumericHex(item.wire));
+  }
+}
+
+TEST(RedshiftIntervalWriteTest, SignedConversionThresholdsPreserveExistingBytes) {
+  struct Case {
+    ArrowTimeUnit unit;
+    int64_t exact;
+    int64_t invalid;
+    const char* wire;
+  };
+  // Literal boundaries and wire bytes, independent of the production conversion.
+  const Case cases[] = {
+      {NANOARROW_TIME_UNIT_SECOND, 9223372036854LL, 9223372036855LL,
+       "000000087ffffffffff42980"},
+      {NANOARROW_TIME_UNIT_SECOND, -9223372036854LL, -9223372036855LL,
+       "0000000880000000000bd680"},
+      {NANOARROW_TIME_UNIT_MILLI, 9223372036854775LL, 9223372036854776LL,
+       "000000087ffffffffffffcd8"},
+      {NANOARROW_TIME_UNIT_MILLI, -9223372036854775LL, -9223372036854776LL,
+       "000000088000000000000328"},
+      {NANOARROW_TIME_UNIT_NANO, 9223372036854775000LL, 9223372036854775001LL,
+       "000000080020c49ba5e353f7"},
+      {NANOARROW_TIME_UNIT_NANO, -9223372036854775000LL, -9223372036854775001LL,
+       "00000008ffdf3b645a1cac09"},
+      {NANOARROW_TIME_UNIT_NANO, 1000LL, 1001LL, "000000080000000000000001"},
+      {NANOARROW_TIME_UNIT_NANO, -1000LL, -1001LL, "00000008ffffffffffffffff"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.exact);
+    IntervalWriteCase write;
+    ASSERT_EQ(write.Init(Family::kDaySecond, {item.exact, item.invalid}, "unspecified",
+                         nullptr, nullptr, item.unit),
+              0);
+    ASSERT_EQ(write.Write(), 0) << write.error.message;
+    EXPECT_EQ(write.Wire(), testing::NumericHex(item.wire));
+    const auto before = write.Wire();
+    EXPECT_EQ(write.Write(1), EINVAL);
+    EXPECT_EQ(write.Wire(), before);
+    EXPECT_NE(std::string_view(write.error.message)
+                  .find(item.unit == NANOARROW_TIME_UNIT_NANO ? "submicrosecond loss"
+                                                              : "duration unit overflow"),
+              std::string_view::npos);
+  }
+  IntervalWriteCase submicro;
+  ASSERT_EQ(submicro.Init(Family::kDaySecond, {-1, -999}, "unspecified", nullptr, nullptr,
+                          NANOARROW_TIME_UNIT_NANO),
+            0);
+  EXPECT_EQ(submicro.Write(0), EINVAL);
+  EXPECT_EQ(submicro.Write(1), EINVAL);
+  EXPECT_EQ(submicro.bytes->size_bytes, 0);
+}
+
 TEST(RedshiftIntervalWriteTest,
      ReferenceExtremaExactUnitsAndRuntimeMixturesNeverMutateBuffer) {
   for (auto family : {Family::kYearMonth, Family::kDaySecond}) {
@@ -490,6 +649,12 @@ TEST(RedshiftIntervalCatalogTest, ExactNativeProducerMatrixAndForeignFacts) {
     bool months;
   };
   const Captured captured[] = {
+      // Operation b09060267ff24f3b83815a5fb80a099c, defaults.catalog.before;
+      // nonempty binary/text readback preserves +/-1 microsecond.
+      {"268500995", "interval second", "SECOND", 6, false},
+      {"470351875", "interval day to second", "DAY TO SECOND", 6, false},
+      {"469827587", "interval hour to second", "HOUR TO SECOND", 6, false},
+      {"402718723", "interval minute to second", "MINUTE TO SECOND", 6, false},
       {"327683", "interval year", "YEAR", -1, true},
       {"196611", "interval month", "MONTH", -1, true},
       {"458755", "interval year to month", "YEAR TO MONTH", -1, true},
@@ -532,12 +697,15 @@ TEST(RedshiftIntervalCatalogTest, ExactNativeProducerMatrixAndForeignFacts) {
   ASSERT_EQ(testing::FixtureResolver(BackendProfile::Redshift(), &resolver), 0);
   for (const auto& item : captured) {
     SCOPED_TRACE(item.formatted);
-    for (int variant = 0; variant < 10; ++variant) {
+    for (int variant = 0; variant < 12; ++variant) {
       // Matched, family mismatch, absent/-1/foreign raw, NULL/text drift,
       // and each previously unqualified non-NULL SVV diagnostic.
       const bool months = item.months != (variant == 1);
       const char* oid = months ? "64001" : "65017";
-      const char* raw = variant == 2   ? nullptr
+      const std::string adjacent =
+          std::to_string(std::stoi(item.raw) + (variant == 10 ? -1 : 1));
+      const char* raw = variant >= 10  ? adjacent.c_str()
+                        : variant == 2 ? nullptr
                         : variant == 3 ? "-1"
                         : variant == 4 ? "12345"
                                        : item.raw;
