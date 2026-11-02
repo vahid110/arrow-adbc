@@ -183,7 +183,7 @@ TEST(RedshiftSuperParameterTest, UtilityWordsAsColumnLabelsHaveNoParameterScope)
 }
 
 TEST(RedshiftSuperParameterTest, InvalidUtf8AndNulRejectBeforePlanning) {
-  for (const std::string bad :
+  for (const std::string& bad :
        {std::string("SELECT $1\0", 10), std::string("SELECT '\xc0\x80'"),
         std::string("SELECT '\xed\xa0\x80'"), std::string("SELECT '\xf4\x90\x80\x80'"),
         std::string("SELECT '\xe2\x82'")}) {
