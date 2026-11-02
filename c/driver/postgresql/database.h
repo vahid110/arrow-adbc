@@ -24,7 +24,7 @@
 #include <string>
 
 #include <arrow-adbc/adbc.h>
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include "driver/framework/status.h"
 #include "driver/pgwire/backend.h"

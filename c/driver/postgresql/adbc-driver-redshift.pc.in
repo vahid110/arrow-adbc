@@ -23,4 +23,5 @@ Name: Apache Arrow Database Connectivity (ADBC) Redshift driver
 Description: The ADBC Redshift driver provides an ADBC driver for Amazon Redshift.
 Version: @ADBC_VERSION@
 Libs: -L${libdir} -ladbc_driver_redshift
+Requires.private: adbc-redshift-private-pq = 17.11.1
 Cflags: -I${includedir}

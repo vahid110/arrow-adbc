@@ -27,8 +27,8 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
-#include <libpq-fe.h>
 #include <limits>
+#include "driver/pgwire/libpq.h"
 
 #include "copy/reader.h"
 #include "driver/framework/status.h"
@@ -180,11 +180,35 @@ class PqResultHelper {
   Status Execute(const std::vector<std::string>& params = {},
                  PostgresType* param_types = nullptr);
   Status ExecuteCopy();
-  Status ExecutePreparedOutput();
+  Status ExecutePreparedOutput(const std::vector<int>* formats = nullptr);
   PGresult* CopyDescriptor() const {
     return PQcopyResult(result_.get(), PG_COPYRES_ATTRS);
   }
   Status CheckDescriptor(const PGresult* expected, int format) const;
+  Status CheckDescriptor(const PGresult* expected, const std::vector<int>& formats) const;
+
+  static PGresult* ExecutePrepared(PGconn* conn, int n_params, const char* const* values,
+                                   const int* lengths, const int* param_formats,
+                                   int uniform,
+                                   const std::vector<int>* formats = nullptr) {
+    if (formats) {
+#ifdef ADBC_PGWIRE_PRIVATE_PQ
+      return ADBCPQexecPreparedFormats(conn, "", n_params, values, lengths, param_formats,
+                                       static_cast<int>(formats->size()),
+                                       formats->data());
+#elif defined(ADBC_PGWIRE_RESULT_FORMATS_TEST)
+      return IntervalRecording_ExecPreparedFormats(
+          conn, "", n_params, values, lengths, param_formats,
+          static_cast<int>(formats->size()), formats->data());
+#else
+      // The selector has rejected mixed formats before any Execute. Retain
+      // stock PostgreSQL and all-HLL compatibility in the PostgreSQL artifact.
+      for (int format : *formats)
+        if (format != uniform) return nullptr;
+#endif
+    }
+    return PQexecPrepared(conn, "", n_params, values, lengths, param_formats, uniform);
+  }
   Status ResolveParamTypes(PostgresTypeResolver& type_resolver, PostgresType* param_types,
                            adbc::driver::pgwire::TemporalRepresentation temporal =
                                adbc::driver::pgwire::TemporalRepresentation::kArrow);

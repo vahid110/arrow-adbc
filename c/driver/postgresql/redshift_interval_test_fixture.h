@@ -25,8 +25,8 @@
 #include <memory>
 #include <utility>
 
-#include <libpq-fe.h>
 #include <nanoarrow/nanoarrow.hpp>
+#include "driver/pgwire/libpq.h"
 
 #include "postgres_type.h"
 #include "result_helper.h"

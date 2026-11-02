@@ -59,12 +59,20 @@ struct Recording {
   int spatial_mismatch = 0, spatial_prepare_calls = 0, spatial_output_drift = 0;
   int converter_drift = 0, direct_descriptor_drift = 0, direct_columns = 1;
   bool direct_integer_projection = false;
+  bool mixed_projection = false;
+  bool plain_count_drift = false;
+  int mixed_layout = 0;
   std::string direct_failure;
   std::vector<std::string> events;
   std::map<const PGresult*, std::vector<Oid>> parameter_descriptions;
   std::map<const PGresult*, std::map<int, std::string>> diagnostics;
   std::string prepared_query;
   std::vector<std::vector<RecordedParameter>> executions;
+  std::vector<int> selected_formats;
+  Oid mixed_neighbor_oid = 67009;
+  int32_t mixed_neighbor_modifier = -1;
+  std::string mixed_neighbor = adbcpq::testing::NumericHex("8000000000000001");
+  std::vector<std::vector<int>> format_requests;
   PGTransactionStatusType transaction = PQTRANS_IDLE;
   bool exists = true;
   bool qualified_interval = false;
@@ -109,7 +117,8 @@ PGresult* TimetzResult(bool empty = false, ExecStatusType status = PGRES_TUPLES_
   attr.typid = 65113;
   attr.format = 1;
   attr.atttypmod = 3;
-  if (!PQsetResultAttrs(out, 1, &attr)) std::abort();
+  std::vector<PGresAttDesc> attrs(!empty && recording.plain_count_drift ? 2 : 1, attr);
+  if (!PQsetResultAttrs(out, attrs.size(), attrs.data())) std::abort();
   if (!empty) {
     const auto wire = adbcpq::testing::NumericHex("00000000000003e80000001e");
     if (!PQsetvalue(out, 0, 0, const_cast<char*>(wire.data()), 12) ||
@@ -127,29 +136,40 @@ PGresult* VendorResult(std::string_view query, int format,
     return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
   const bool spatial = query == "SELECT owned_geometry";
   const bool super = query.starts_with("SELECT owned_super");
-  const bool mixed = query == "SELECT owned_hll_mixed";
-  const int columns = mixed || query == "SELECT owned_hll_pair" ||
+  const bool mixed = query.starts_with("SELECT owned_hll_mixed");
+  const int columns = mixed && recording.mixed_layout == 2 ? 3
+                      : mixed || query == "SELECT owned_hll_pair" ||
                               query.find("super_mixed") != std::string_view::npos
                           ? 2
                           : 1;
+  const int neighbor = recording.mixed_layout == 1 ? 0 : 1;
   auto* out = PQmakeEmptyPGresult(nullptr, status);
   std::vector<PGresAttDesc> attrs(columns);
   for (int i = 0; i < columns; ++i) {
     attrs[i].name = const_cast<char*>(i ? "other" : "amount");
-    attrs[i].typid = super        ? (i ? 67009 : 72111)
-                     : spatial    ? recording.geometry_result_oid
-                     : mixed && i ? 67009
-                                  : 72115;
-    attrs[i].format = format;
-    attrs[i].atttypmod = super && i == 0 ? 16384000 : -1;
+    attrs[i].typid = super                    ? (i ? 67009 : 72111)
+                     : spatial                ? recording.geometry_result_oid
+                     : mixed && i == neighbor ? recording.mixed_neighbor_oid
+                                              : 72115;
+    attrs[i].format = !describe && !recording.selected_formats.empty()
+                          ? recording.selected_formats.at(i)
+                          : format;
+    attrs[i].atttypmod = mixed && i        ? recording.mixed_neighbor_modifier
+                         : super && i == 0 ? 16384000
+                                           : -1;
   }
   if (!describe && recording.vendor_result_drift) {
     if (recording.vendor_result_drift == 1) attrs[0].name = const_cast<char*>("changed");
     if (recording.vendor_result_drift == 2) attrs[0].typid = super ? 72112 : 72111;
-    if (recording.vendor_result_drift == 3) attrs[0].format = 1 - format;
+    if (recording.vendor_result_drift == 3) attrs[0].format = 1 - attrs[0].format;
     if (recording.vendor_result_drift == 4) attrs[0].atttypmod = 9;
     if (recording.vendor_result_drift == 5) attrs[0].tableid = 123;
     if (recording.vendor_result_drift == 6) attrs[0].columnid = 2;
+    if (recording.vendor_result_drift == 8) attrs[0].typlen = 123;
+    if (recording.vendor_result_drift == 7) {
+      if (!PQsetResultAttrs(out, 0, nullptr)) std::abort();
+      return out;
+    }
   }
   if (!PQsetResultAttrs(out, columns, attrs.data())) std::abort();
   if (super) {
@@ -173,14 +193,16 @@ PGresult* VendorResult(std::string_view query, int format,
     }
     return out;
   }
-  if (!describe && query != "SELECT owned_hll_empty") {
+  if (!describe && query != "SELECT owned_hll_empty" &&
+      query != "SELECT owned_hll_mixed_empty") {
     const std::string value =
         spatial && recording.geometry_result_invalid ? std::string("not EWKB")
         : spatial
             ? adbcpq::testing::NumericHex("0101000000000000000000f03f000000000000f03f")
             : std::string(kSparseHll);
     for (int i = 0; i < columns; ++i) {
-      if (!PQsetvalue(out, 0, i, const_cast<char*>(value.data()), value.size()) ||
+      const std::string cell = mixed && i == neighbor ? recording.mixed_neighbor : value;
+      if (!PQsetvalue(out, 0, i, const_cast<char*>(cell.data()), cell.size()) ||
           !PQsetvalue(out, 1, i, nullptr, -1))
         std::abort();
     }
@@ -197,6 +219,9 @@ PGresult* DirectSuperError() {
   return result;
 }
 PGresult* DirectSuperResult(bool describe, int format) {
+  if (recording.mixed_projection)
+    return VendorResult("SELECT owned_hll_mixed", format,
+                        describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
   const bool physical =
       recording.prepared_query.find("\"pg_catalog\".\"json_parse\"") != std::string::npos;
   const bool select = recording.prepared_query.starts_with("SELECT") ||
@@ -277,6 +302,16 @@ PGresult* Query(const char* query) {
                     {"65017", "intervald2s", "unqualified_fixture_receive", "0", "0"},
                     {"67009", "int8", "int8recv", "0", "0"},
                     {"23", "int4", "int4recv", "0", "0"},
+                    {"16", "bool", "boolrecv", "0", "0"},
+                    {"21", "int2", "int2recv", "0", "0"},
+                    {"700", "float4", "float4recv", "0", "0"},
+                    {"701", "float8", "float8recv", "0", "0"},
+                    {"1700", "numeric", "numeric_recv", "0", "0"},
+                    {"1082", "date", "date_recv", "0", "0"},
+                    {"1083", "time", "time_recv", "0", "0"},
+                    {"1114", "timestamp", "timestamp_recv", "0", "0"},
+                    {"1184", "timestamptz", "timestamptz_recv", "0", "0"},
+                    {"1043", "varchar", "varcharrecv", "0", "0"},
                     {"65113", "timetz", "timetz_recv", "0", "0"},
                     {"75001", "bpchar", "bpcharrecv", "0", "0"},
                     {"75002", "text", "textrecv", "0", "0"},
@@ -358,6 +393,9 @@ PGresult* Query(const char* query) {
   return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
 }
 PGresult* SpatialParameterResult(bool describe) {
+  if (recording.mixed_projection)
+    return VendorResult("SELECT owned_hll_mixed", 0,
+                        describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
   if (!recording.spatial_projection) return Command();
   auto* out = PQmakeEmptyPGresult(nullptr, describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
   PGresAttDesc attr{};
@@ -494,6 +532,20 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   }
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
+PGresult* IntervalRecording_ExecPreparedFormats(PGconn* conn, const char* name, int n,
+                                                const char* const* values,
+                                                const int* lengths, const int* formats,
+                                                int count, const int* results) {
+  EXPECT_GE(count, 0);
+  recording.selected_formats.clear();
+  if (count) recording.selected_formats.assign(results, results + count);
+  recording.format_requests.push_back(recording.selected_formats);
+  auto* result =
+      PQexecPrepared(conn, name, n, values, lengths, formats, count ? results[0] : 0);
+  recording.selected_formats.clear();
+  return result;
+}
+
 PGresult* PQdescribePrepared(PGconn*, const char*) {
   if (recording.direct_spatial) return SpatialParameterResult(true);
   if (recording.direct_super) {
@@ -1989,18 +2041,219 @@ TEST_F(IntervalPublicRecordingTest,
               std::string_view(query) != "SELECT owned_hll_empty");
   }
 }
+TEST_F(IntervalPublicRecordingTest, MixedHllKeepsBinaryNeighborsNullAndEmptyInBothModes) {
+  struct Cell {
+    Oid oid;
+    const char* hex;
+    int modifier = -1;
+  };
+  const Cell cells[] = {{16, "01"},
+                        {21, "8001"},
+                        {23, "80000001"},
+                        {67009, "8000000000000001"},
+                        {700, "80000000"},
+                        {701, "8000000000000000"},
+                        {1700, "0002000040000002000c0d48", (10 << 16) + 2 + 4},
+                        {1082, "00000000"},
+                        {1083, "0000000000000001"},
+                        {1114, "0000000000000001"},
+                        {1184, "0000000000000001"},
+                        {65113, "00000000000003e80000001e", 3},
+                        {64001, "00000001"},
+                        {65017, "00000000000003e8"},
+                        {75001, "782020", 7},
+                        {1043, "78c3a9", 7},
+                        {75002, "78c3a9"},
+                        {72112, "00ff00"},
+                        {72111, "7b226e223a317d", 16384000},
+                        {72113, "0101000000000000000000f03f000000000000f03f"},
+                        {72114, "0101000020e6100000000000000000f03f000000000000f03f"}};
+  for (const char* mode : {"arrow", "lossless"}) {
+    ASSERT_EQ(driver.StatementRelease(&statement, &error), ADBC_STATUS_OK);
+    ASSERT_EQ(driver.ConnectionRelease(&connection, &error), ADBC_STATUS_OK);
+    ASSERT_EQ(driver.ConnectionNew(&connection, &error), ADBC_STATUS_OK);
+    ASSERT_EQ(
+        driver.ConnectionSetOption(
+            &connection, ADBC_REDSHIFT_OPTION_TEMPORAL_REPRESENTATION, mode, &error),
+        ADBC_STATUS_OK)
+        << Message();
+    ASSERT_EQ(driver.ConnectionInit(&connection, &database, &error), ADBC_STATUS_OK)
+        << Message();
+    ASSERT_EQ(driver.StatementNew(&connection, &statement, &error), ADBC_STATUS_OK);
+    for (const auto& cell : cells) {
+      SCOPED_TRACE(std::to_string(cell.oid) + mode);
+      recording.mixed_neighbor_oid = cell.oid;
+      recording.mixed_neighbor_modifier = cell.modifier;
+      recording.mixed_neighbor = testing::NumericHex(cell.hex);
+      for (bool empty : {false, true}) {
+        ASSERT_EQ(driver.StatementSetSqlQuery(
+                      &statement,
+                      empty ? "SELECT owned_hll_mixed_empty" : "SELECT owned_hll_mixed",
+                      &error),
+                  ADBC_STATUS_OK);
+        recording.vendor_result_calls = 0;
+        nanoarrow::UniqueArrayStream output;
+        ASSERT_EQ(driver.StatementExecuteQuery(&statement, output.get(), nullptr, &error),
+                  ADBC_STATUS_OK)
+            << Message();
+        ASSERT_EQ(recording.vendor_result_calls, 1);
+        ASSERT_EQ(recording.format_requests.back(), (std::vector<int>{0, 1}));
+        nanoarrow::UniqueSchema schema;
+        ASSERT_EQ(output->get_schema(output.get(), schema.get()), 0);
+        ASSERT_EQ(schema->n_children, 2);
+        EXPECT_STREQ(schema->children[0]->format, "U");
+        nanoarrow::UniqueArray array;
+        ASSERT_EQ(output->get_next(output.get(), array.get()), 0)
+            << (output->get_last_error(output.get())
+                    ? output->get_last_error(output.get())
+                    : "");
+        if (empty) {
+          ASSERT_EQ(array->release, nullptr);
+          continue;
+        }
+        ASSERT_EQ(array->length, 2);
+        nanoarrow::UniqueArrayView view;
+        ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), nullptr), 0);
+        ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), nullptr), 0);
+        const auto hll = ArrowArrayViewGetStringUnsafe(view->children[0], 0);
+        EXPECT_EQ(std::string_view(hll.data, hll.size_bytes), kSparseHll);
+        EXPECT_TRUE(ArrowArrayViewIsNull(view->children[0], 1));
+        EXPECT_TRUE(ArrowArrayViewIsNull(view->children[1], 1));
+        EXPECT_FALSE(ArrowArrayViewIsNull(view->children[1], 0));
+        // Text conversion could silently lose signed zero or int64 precision.
+        if (cell.oid == 700) {
+          uint32_t bits;
+          std::memcpy(&bits, array->children[1]->buffers[1], sizeof(bits));
+          EXPECT_EQ(bits, UINT32_C(0x80000000));
+        } else if (cell.oid == 701) {
+          uint64_t bits;
+          std::memcpy(&bits, array->children[1]->buffers[1], sizeof(bits));
+          EXPECT_EQ(bits, UINT64_C(0x8000000000000000));
+        } else if (cell.oid == 67009) {
+          EXPECT_EQ(ArrowArrayViewGetIntUnsafe(view->children[1], 0), INT64_MIN + 1);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(IntervalPublicRecordingTest, MixedHllFormatsFollowEveryColumnOrdinal) {
+  recording.mixed_neighbor_oid = 701;
+  recording.mixed_neighbor = testing::NumericHex("8000000000000000");
+  for (int layout = 0; layout < 3; ++layout) {
+    recording.mixed_layout = layout;
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_mixed", &error),
+              ADBC_STATUS_OK);
+    nanoarrow::UniqueArrayStream out;
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    const std::vector<int> expected = layout == 0   ? std::vector<int>{0, 1}
+                                      : layout == 1 ? std::vector<int>{1, 0}
+                                                    : std::vector<int>{0, 1, 0};
+    EXPECT_EQ(recording.format_requests.back(), expected);
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(out->get_schema(out.get(), schema.get()), 0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(out->get_next(out.get(), array.get()), 0) << out->get_last_error(out.get());
+    ASSERT_EQ(array->length, 2);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), nullptr), 0);
+    ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), nullptr), 0);
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_TRUE(ArrowArrayViewIsNull(view->children[i], 1));
+      if (expected[i] == 0) {
+        const auto value = ArrowArrayViewGetStringUnsafe(view->children[i], 0);
+        EXPECT_EQ(std::string_view(value.data, value.size_bytes), kSparseHll);
+      } else {
+        uint64_t bits;
+        std::memcpy(&bits, array->children[i]->buffers[1], sizeof(bits));
+        EXPECT_EQ(bits, UINT64_C(0x8000000000000000));
+      }
+    }
+  }
+}
+
+TEST_F(IntervalPublicRecordingTest, MixedHllBoundRowsAndBatchesExecuteExactlyOnce) {
+  for (bool stream : {false, true}) {
+    nanoarrow::UniqueSchema schema;
+    EncodedSchema(schema.get(), {RedshiftEncodedKind::kHll});
+    auto batch = [&](ArrowArray* array, int n) {
+      ASSERT_EQ(ArrowArrayInitFromSchema(array, schema.get(), nullptr), 0);
+      ASSERT_EQ(ArrowArrayStartAppending(array), 0);
+      for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(ArrowArrayAppendString(array->children[0], ArrowCharView(kSparseHll)),
+                  0);
+        ASSERT_EQ(ArrowArrayFinishElement(array), 0);
+      }
+      ASSERT_EQ(ArrowArrayFinishBuildingDefault(array, nullptr), 0);
+    };
+    nanoarrow::UniqueArray a, b, empty;
+    batch(a.get(), stream ? 1 : 3);
+    batch(b.get(), 2);
+    batch(empty.get(), 0);
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_mixed", &error),
+              ADBC_STATUS_OK);
+    if (stream) {
+      nanoarrow::UniqueArrayStream input;
+      ASSERT_EQ(ArrowBasicArrayStreamInit(input.get(), schema.get(), 3), 0);
+      ArrowBasicArrayStreamSetArray(input.get(), 0, empty.get());
+      ArrowBasicArrayStreamSetArray(input.get(), 1, a.get());
+      ArrowBasicArrayStreamSetArray(input.get(), 2, b.get());
+      ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                ADBC_STATUS_OK);
+    } else {
+      ASSERT_EQ(driver.StatementBind(&statement, a.get(), schema.get(), &error),
+                ADBC_STATUS_OK);
+    }
+    recording.executions.clear();
+    recording.format_requests.clear();
+    nanoarrow::UniqueArrayStream out;
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+              ADBC_STATUS_OK)
+        << Message();
+    for (int row = 0; row < 3; ++row) {
+      nanoarrow::UniqueArray value;
+      ASSERT_EQ(out->get_next(out.get(), value.get()), 0)
+          << out->get_last_error(out.get());
+      ASSERT_NE(value->release, nullptr);
+      EXPECT_EQ(value->length, 2);
+    }
+    nanoarrow::UniqueArray eof;
+    ASSERT_EQ(out->get_next(out.get(), eof.get()), 0);
+    EXPECT_EQ(eof->release, nullptr);
+    ASSERT_EQ(recording.executions.size(), 3);
+    ASSERT_EQ(recording.format_requests.size(), 3);
+    for (const auto& formats : recording.format_requests)
+      EXPECT_EQ(formats, (std::vector<int>{0, 1}));
+  }
+}
+
+TEST_F(IntervalPublicRecordingTest, AllBinaryDescriptorGrowthRejectsStaleFormatPlan) {
+  recording.plain_count_drift = true;
+  ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_timetz", &error),
+            ADBC_STATUS_OK);
+  nanoarrow::UniqueArrayStream out;
+  EXPECT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+            ADBC_STATUS_INVALID_STATE);
+  EXPECT_EQ(out->release, nullptr);
+}
+
 TEST_F(IntervalPublicRecordingTest, HllMixedDescriptorDriftAndServerFailureNeverRetry) {
   ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_mixed", &error),
             ADBC_STATUS_OK);
   nanoarrow::UniqueArrayStream out;
-  EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
-            ADBC_STATUS_OK);
-  EXPECT_EQ(recording.vendor_result_calls, 0);
-  for (int fault = 1; fault <= 6; ++fault) {
-    recording.vendor_result_drift = fault < 6 ? fault : 0;
-    recording.vendor_result_error = fault == 6;
+  ASSERT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
+            ADBC_STATUS_OK)
+      << Message();
+  EXPECT_EQ(recording.vendor_result_calls, 1);
+  EXPECT_EQ(recording.format_requests.back(), (std::vector<int>{0, 1}));
+  out.reset();
+  for (int fault = 1; fault <= 9; ++fault) {
+    recording.vendor_result_drift = fault < 9 ? fault : 0;
+    recording.vendor_result_error = fault == 9;
     recording.vendor_result_calls = 0;
-    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_pair", &error),
+    ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT owned_hll_mixed", &error),
               ADBC_STATUS_OK);
     EXPECT_NE(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error),
               ADBC_STATUS_OK);

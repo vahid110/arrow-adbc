@@ -212,16 +212,12 @@ Status PqResultArrayReader::SelectDescribedResult() {
   PostgresType output;
   UNWRAP_STATUS(
       helper_.ResolveOutputTypes(*type_resolver_, &output, temporal_representation_));
-  UNWRAP_STATUS(SelectVendorResultFormat(output, &result_format_));
-  bool encoded = false;
-  for (int i = 0; i < output.n_children(); ++i)
-    encoded |= output.child(i).encoded_kind() != RedshiftEncodedKind::kNone ||
-               output.child(i).is_redshift_super();
-  if (encoded) {
-    described_.reset(helper_.CopyDescriptor());
-    if (!described_)
-      return Status::Internal("[Redshift] Could not retain described result attributes");
-  }
+  UNWRAP_STATUS(SelectVendorResultFormats(output, &result_formats_, &result_format_));
+  // The format vector is indexed by this exact descriptor. Retain it even for
+  // an all-binary result so a changed field count can never index a stale plan.
+  described_.reset(helper_.CopyDescriptor());
+  if (!described_)
+    return Status::Internal("[Redshift] Could not retain described result attributes");
   helper_.set_output_format(result_format_ == 0 ? PqResultHelper::Format::kText
                                                 : PqResultHelper::Format::kBinary);
   return Status::Ok();
@@ -262,6 +258,7 @@ Status PqResultArrayReader::PrepareDirectSuper() {
                              bind_stream_->param_types, bind_stream_->json_parse_fields,
                              temporal_representation_));
   result_format_ = direct_super_->result_format();
+  result_formats_ = direct_super_->result_formats();
   direct_plan_ready_ = true;
   return Status::Ok();
 }
@@ -351,13 +348,14 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
       UNWRAP_STATUS(helper_.DescribePrepared());
       UNWRAP_STATUS(SelectDescribedResult());
     }
-    if (result_format_ == 0 && described_) {
-      UNWRAP_STATUS(helper_.ExecutePreparedOutput());
+    if (described_ && std::find(result_formats_.begin(), result_formats_.end(), 0) !=
+                          result_formats_.end()) {
+      UNWRAP_STATUS(helper_.ExecutePreparedOutput(&result_formats_));
     } else {
       UNWRAP_STATUS(helper_.Execute());
     }
     if (described_)
-      UNWRAP_STATUS(helper_.CheckDescriptor(described_.get(), result_format_));
+      UNWRAP_STATUS(helper_.CheckDescriptor(described_.get(), result_formats_));
     if (rows_affected != nullptr) {
       *rows_affected = helper_.AffectedRows();
     }
@@ -386,8 +384,9 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
 
     std::unique_ptr<PostgresCopyFieldReader> child_reader;
     UNWRAP_NANOARROW(na_error_, Internal,
-                     MakeCopyFieldReader(child_type, schema_->children[i], &child_reader,
-                                         &na_error_, result_format_));
+                     MakeCopyFieldReader(
+                         child_type, schema_->children[i], &child_reader, &na_error_,
+                         result_formats_.empty() ? result_format_ : result_formats_[i]));
 
     child_reader->Init(child_type);
     UNWRAP_NANOARROW(na_error_, Internal, child_reader->InitSchema(schema_->children[i]));
@@ -461,7 +460,9 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       execute_status = bind_stream_->BindCurrentRow();
       if (execute_status.ok()) execute_status = PrepareDirectSuper();
       if (execute_status.ok()) {
-        execute_status = bind_stream_->ExecuteCurrentRow(conn_, &result, result_format_);
+        execute_status = bind_stream_->ExecuteCurrentRow(
+            conn_, &result, result_format_,
+            type_resolver_->is_redshift() ? &result_formats_ : nullptr);
         if (!execute_status.ok())
           execute_status = direct_super_->Decorate(std::move(execute_status));
       }
@@ -469,10 +470,13 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       execute_status = bind_stream_->BindCurrentRow();
       if (execute_status.ok()) execute_status = PrepareDirectSpatial();
       if (execute_status.ok())
-        execute_status = bind_stream_->ExecuteCurrentRow(conn_, &result, result_format_);
+        execute_status = bind_stream_->ExecuteCurrentRow(
+            conn_, &result, result_format_,
+            type_resolver_->is_redshift() ? &result_formats_ : nullptr);
     } else {
-      execute_status =
-          bind_stream_->BindAndExecuteCurrentRow(conn_, &result, result_format_);
+      execute_status = bind_stream_->BindAndExecuteCurrentRow(
+          conn_, &result, result_format_,
+          type_resolver_->is_redshift() ? &result_formats_ : nullptr);
     }
     if (!execute_status.ok()) {
       return fail_bind(std::move(execute_status));
@@ -483,7 +487,7 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
       if (!descriptor.ok()) return fail_bind(std::move(descriptor));
     }
     if (described_) {
-      Status descriptor = helper_.CheckDescriptor(described_.get(), result_format_);
+      Status descriptor = helper_.CheckDescriptor(described_.get(), result_formats_);
       if (!descriptor.ok()) return fail_bind(std::move(descriptor));
     }
     materialized_encoding_valid_ = true;
@@ -543,6 +547,10 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
         return prepare_status;
       }
 
+      if (type_resolver_->is_redshift()) {
+        UNWRAP_STATUS(helper_.DescribePrepared());
+        UNWRAP_STATUS(SelectDescribedResult());
+      }
       UNWRAP_STATUS(CheckEncodedParamDescriptor());
     }
     // Reset affected rows to zero before binding and executing any

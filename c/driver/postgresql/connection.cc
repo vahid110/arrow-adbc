@@ -38,7 +38,7 @@
 #include <arrow-adbc/adbc.h>
 #include <arrow-adbc/driver/redshift.h>
 #include <fmt/format.h>
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include "database.h"
 #include "driver/common/utils.h"

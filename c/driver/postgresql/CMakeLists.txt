@@ -74,50 +74,55 @@ foreach(LIB_TARGET ${ADBC_LIBRARIES})
   endif()
 endforeach()
 
-add_arrow_lib(adbc_driver_redshift
-              SOURCES
-              ${PGWIRE_DRIVER_SOURCES}
-              redshift_csv_writer.cc
-              redshift_staged_arrow_copy.cc
-              redshift_staged_arrow_stream_copy.cc
-              redshift_staged_copy.cc
-              redshift_staged_copy_coordinator.cc
-              OUTPUTS
-              ADBC_REDSHIFT_LIBRARIES
-              CMAKE_PACKAGE_NAME
-              AdbcDriverRedshift
-              PKG_CONFIG_NAME
-              adbc-driver-redshift
-              SHARED_LINK_FLAGS
-              ${ADBC_LINK_FLAGS}
-              SHARED_LINK_LIBS
-              adbc_driver_common
-              adbc_driver_framework
-              ${LIBPQ_LINK_LIBRARIES}
-              STATIC_LINK_LIBS
-              ${LIBPQ_LINK_LIBRARIES}
-              adbc_driver_common
-              adbc_driver_framework
-              ${LIBPQ_STATIC_LIBRARIES})
+if(ADBC_DRIVER_REDSHIFT)
+  find_package(AdbcRedshiftPrivatePQ CONFIG REQUIRED)
+  add_arrow_lib(adbc_driver_redshift
+                SOURCES
+                ${PGWIRE_DRIVER_SOURCES}
+                redshift_csv_writer.cc
+                redshift_staged_arrow_copy.cc
+                redshift_staged_arrow_stream_copy.cc
+                redshift_staged_copy.cc
+                redshift_staged_copy_coordinator.cc
+                OUTPUTS
+                ADBC_REDSHIFT_LIBRARIES
+                CMAKE_PACKAGE_NAME
+                AdbcDriverRedshift
+                PKG_CONFIG_NAME
+                adbc-driver-redshift
+                SHARED_LINK_FLAGS
+                ${ADBC_LINK_FLAGS}
+                SHARED_LINK_LIBS
+                adbc_driver_common
+                adbc_driver_framework
+                AdbcRedshiftPrivatePQ::pq
+                STATIC_INSTALL_INTERFACE_LIBS
+                AdbcRedshiftPrivatePQ::pq
+                STATIC_LINK_LIBS
+                AdbcRedshiftPrivatePQ::pq
+                adbc_driver_common
+                adbc_driver_framework)
 
-foreach(LIB_TARGET ${ADBC_REDSHIFT_LIBRARIES})
-  # Only the Redshift library reports its build version; the PostgreSQL library
-  # keeps upstream's "unknown", which downstream GLib tests check.
-  target_compile_definitions(${LIB_TARGET}
-                             PRIVATE ADBC_EXPORTING ADBC_PGWIRE_DEFAULT_REDSHIFT
-                                     ADBC_PGWIRE_DRIVER_VERSION="${ADBC_VERSION}")
-  target_include_directories(${LIB_TARGET} SYSTEM
-                             PRIVATE ${REPOSITORY_ROOT}/c/
-                                     ${REPOSITORY_ROOT}/c/include/
-                                     ${LIBPQ_INCLUDE_DIRS}
-                                     ${REPOSITORY_ROOT}/c/driver
-                                     ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
-  )
+  foreach(LIB_TARGET ${ADBC_REDSHIFT_LIBRARIES})
+    # Only the Redshift library reports its build version; the PostgreSQL library
+    # keeps upstream's "unknown", which downstream GLib tests check.
+    target_compile_definitions(${LIB_TARGET}
+                               PRIVATE ADBC_EXPORTING ADBC_PGWIRE_DEFAULT_REDSHIFT
+                                       ADBC_PGWIRE_PRIVATE_PQ
+                                       ADBC_PGWIRE_DRIVER_VERSION="${ADBC_VERSION}")
+    target_include_directories(${LIB_TARGET} SYSTEM
+                               PRIVATE ${REPOSITORY_ROOT}/c/
+                                       ${REPOSITORY_ROOT}/c/include/
+                                       ${REPOSITORY_ROOT}/c/driver
+                                       ${REPOSITORY_ROOT}/c/vendor/portable-snippets/include
+    )
 
-  if(NOT ADBC_DEFINE_COMMON_ENTRYPOINTS)
-    target_compile_definitions(${LIB_TARGET} PRIVATE ${ADBC_TARGET_COMPILE_DEFINITIONS})
-  endif()
-endforeach()
+    if(NOT ADBC_DEFINE_COMMON_ENTRYPOINTS)
+      target_compile_definitions(${LIB_TARGET} PRIVATE ${ADBC_TARGET_COMPILE_DEFINITIONS})
+    endif()
+  endforeach()
+
+endif()
 
 if(ADBC_TEST_LINKAGE STREQUAL "shared")
   set(TEST_LINK_LIBS adbc_driver_postgresql_shared)
@@ -213,38 +218,42 @@ if(ADBC_BUILD_TESTS)
                   COMPONENT redshift-interval-test
                   EXCLUDE_FROM_ALL)
 
-  add_test_case(driver_redshift_test
-                PREFIX
-                adbc
-                EXTRA_LABELS
-                driver-redshift
-                SOURCES
-                ../pgwire/redshift_driver_test.cc
-                ../pgwire/redshift_csv_writer_test.cc
-                ../pgwire/redshift_replace_preflight_test.cc
-                ../pgwire/redshift_staged_arrow_copy_test.cc
-                ../pgwire/redshift_staged_arrow_stream_copy_test.cc
-                ../pgwire/redshift_staged_copy_test.cc
-                ../pgwire/redshift_staged_copy_coordinator_test.cc
-                redshift_csv_writer.cc
-                redshift_replace_preflight.cc
-                redshift_staged_arrow_copy.cc
-                redshift_staged_arrow_stream_copy.cc
-                redshift_staged_copy.cc
-                redshift_staged_copy_coordinator.cc
-                EXTRA_LINK_LIBS
-                adbc_driver_common
-                adbc_driver_framework
-                ${REDSHIFT_TEST_LINK_LIBS})
-  # The independent fixture files intentionally reuse anonymous-namespace names.
-  # Build this test target as separate translation units even when the parent
-  # project enables CMAKE_UNITY_BUILD for production libraries.
-  set_target_properties(adbc-driver-redshift-test PROPERTIES UNITY_BUILD OFF)
-  target_compile_features(adbc-driver-redshift-test PRIVATE cxx_std_20)
-  target_include_directories(adbc-driver-redshift-test SYSTEM
-                             PRIVATE ${REPOSITORY_ROOT}/c/ ${REPOSITORY_ROOT}/c/include/
-                                     ${LIBPQ_INCLUDE_DIRS} ${REPOSITORY_ROOT}/c/driver)
-  adbc_configure_target(adbc-driver-redshift-test)
+  if(ADBC_DRIVER_REDSHIFT)
+    add_test_case(driver_redshift_test
+                  PREFIX
+                  adbc
+                  EXTRA_LABELS
+                  driver-redshift
+                  SOURCES
+                  ../pgwire/redshift_driver_test.cc
+                  ../pgwire/redshift_csv_writer_test.cc
+                  ../pgwire/redshift_replace_preflight_test.cc
+                  ../pgwire/redshift_staged_arrow_copy_test.cc
+                  ../pgwire/redshift_staged_arrow_stream_copy_test.cc
+                  ../pgwire/redshift_staged_copy_test.cc
+                  ../pgwire/redshift_staged_copy_coordinator_test.cc
+                  redshift_csv_writer.cc
+                  redshift_replace_preflight.cc
+                  redshift_staged_arrow_copy.cc
+                  redshift_staged_arrow_stream_copy.cc
+                  redshift_staged_copy.cc
+                  redshift_staged_copy_coordinator.cc
+                  EXTRA_LINK_LIBS
+                  adbc_driver_common
+                  adbc_driver_framework
+                  ${REDSHIFT_TEST_LINK_LIBS})
+    # The independent fixture files intentionally reuse anonymous-namespace names.
+    # Build this test target as separate translation units even when the parent
+    # project enables CMAKE_UNITY_BUILD for production libraries.
+    set_target_properties(adbc-driver-redshift-test PROPERTIES UNITY_BUILD OFF)
+    target_compile_features(adbc-driver-redshift-test PRIVATE cxx_std_20)
+    target_include_directories(adbc-driver-redshift-test SYSTEM
+                               PRIVATE ${REPOSITORY_ROOT}/c/
+                                       ${REPOSITORY_ROOT}/c/include/
+                                       ${LIBPQ_INCLUDE_DIRS} ${REPOSITORY_ROOT}/c/driver)
+    adbc_configure_target(adbc-driver-redshift-test)
+
+  endif()
 
   add_test_case(driver_postgresql_test
                 PREFIX
@@ -311,7 +320,7 @@ if(ADBC_BUILD_TESTS)
                 ${LIBPQ_LINK_LIBRARIES})
   target_compile_features(adbc-driver-redshift-interval-recording-test PRIVATE cxx_std_20)
   target_compile_definitions(adbc-driver-redshift-interval-recording-test
-                             PRIVATE ADBC_EXPORTING)
+                             PRIVATE ADBC_EXPORTING ADBC_PGWIRE_RESULT_FORMATS_TEST)
   set_target_properties(adbc-driver-redshift-interval-recording-test
                         PROPERTIES UNITY_BUILD OFF)
   target_include_directories(adbc-driver-redshift-interval-recording-test SYSTEM

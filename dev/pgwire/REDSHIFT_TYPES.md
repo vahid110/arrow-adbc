@@ -68,7 +68,7 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | C | C | C | C | C identity | bool |
-| HLLSKETCH | M-P,Q-P all-HLL; U mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
+| HLLSKETCH | M-P,Q-P all-HLL; C mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
 | SUPER | Q,V; historical C Arrow rerun open | V selected C/Python array/stream | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
 | GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
@@ -638,10 +638,14 @@ Format0 values own their NUL terminator (physical framed length n+1, logical
 Arrow length n), while NULL keeps the existing zero-placeholder/separate-nullptr
 framing. Generated ingest separately verifies actual relation targets.
 
-Result-returning queries describe first. All-HLL nonempty projections execute
-once in global text format and validate actual descriptor/format before reading.
-Mixed HLL/non-HLL projections reject before execution; normal scalar expressions
-remain normal scalars. No SQL rewrite, retry or unrelated text fallback occurs.
+Result-returning queries describe first. The private Redshift dependency executes
+HLL columns in text format while every other field keeps its binary codec. Mixed
+results validate the exact described names, OIDs, modifiers, sizes, origin and
+per-column formats before decoding. Array/stream binds, including direct SUPER
+and spatial inputs, use the same selection without a second execution. Local
+recorder tests are not installed/native qualification. The stock PostgreSQL
+artifact retains its uniform-format boundary. No HLL SQL rewrite, retry or
+unrelated text fallback occurs.
 The fixed installed subsets passed on the selected macOS arm64 artifacts; this
 does not close full native boundaries, lossless SUPER reads or all 21 acceptance.
 

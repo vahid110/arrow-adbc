@@ -19,13 +19,16 @@
 
 # Private libpq package foundation
 
-The Redshift mixed-result dependency is an opt-in package foundation. The driver
-still links its existing stock libpq; this change does not enable mixed HLL in
-installed drivers. A private macOS arm64 prototype passed all-symbol isolation,
-stock/private static and shared coexistence, and the loopback vector protocol
-proof. This repository recipe and its installed consumers require coordinator
-validation before adoption. Windows, cross builds, seven C distributions and
-five wheels remain mandatory later release work, not supported by this recipe.
+The Redshift artifact requires the pinned private dependency and uses its format
+vector for mixed HLL/non-HLL results. PostgreSQL implementation translation units
+continue to use stock libpq; the Redshift translation units uniformly include the
+private namespace wrapper. No PGconn or PGresult crosses this boundary. Local
+recorder evidence is not installed-driver/native qualification. Windows, cross
+builds, seven C distributions and five wheels remain mandatory release gates.
+
+Native package, relocation, stock/private coexistence and loopback vector proofs
+passed on macOS arm64. The mixed driver still needs coordinator full/installed
+validation and independent review before integration.
 
 ## Build and consume locally
 
@@ -100,8 +103,10 @@ bit-identical archives across different compiler/SDK/install paths.
 The uniquely named vcpkg overlay `adbc-redshift-private-pq` uses the same script
 for native Linux/macOS static-release triplets. It never replaces the ordinary
 `libpq` port, and script digests participate in its cache inputs. This adapter is
-prepared but unqualified until built on each intended runner. No release/wheel
-workflow or driver CMake/Meson dependency has been switched by this foundation.
+prepared but unqualified until built on each intended runner. No release/wheel workflow has been switched. Driver CMake/Meson configuration
+now requires this dependency and rejects a missing/wrong ABI/helper package.
+Explicit PostgreSQL-only builds can set `ADBC_DRIVER_REDSHIFT=OFF` or Meson
+`-Dredshift=false`; those builds retain stock libpq and do not build Redshift.
 
 Windows x64/arm64 C packages and the Windows x64 wheel must be added before B6
 can close: use PostgreSQL 17.11's Meson static frontend libpq/common/port variants,
@@ -117,7 +122,8 @@ Then validate all seven C distributions and five wheels: installed/relocated
 shared and static consumers, both drivers plus stock libpq in both load orders,
 whole-archive collision checks, repaired-wheel imports/exports and dependencies,
 private source/license provenance, and missing/incorrect helper/ABI rejection.
-Driver namespace linkage and per-column result dispatch are separate next tasks.
+Driver namespace linkage and per-column dispatch are implemented locally;
+portable and installed/native evidence remain required before release.
 
 Offline tests use small fake archives for positive and negative CMake/Meson link
 gates; they do not compile PostgreSQL:

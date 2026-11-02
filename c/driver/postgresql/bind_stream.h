@@ -630,21 +630,22 @@ struct BindStream {
 
   Status BindAndExecuteCurrentRow(PGconn* pg_conn,
                                   adbc::driver::pgwire::UniqueResult* result_out,
-                                  int result_format) {
+                                  int result_format,
+                                  const std::vector<int>* result_formats = nullptr) {
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     UNWRAP_STATUS(BindCurrentRow());
     if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
-    return ExecuteCurrentRow(pg_conn, result_out, result_format);
+    return ExecuteCurrentRow(pg_conn, result_out, result_format, result_formats);
   }
 
   Status ExecuteCurrentRow(PGconn* pg_conn,
                            adbc::driver::pgwire::UniqueResult* result_out,
-                           int result_format) {
+                           int result_format,
+                           const std::vector<int>* result_formats = nullptr) {
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
-    adbc::driver::pgwire::UniqueResult result(
-        PQexecPrepared(pg_conn, /*stmtName=*/"",
-                       /*nParams=*/bind_schema->n_children, param_values.data(),
-                       param_lengths.data(), param_formats.data(), result_format));
+    adbc::driver::pgwire::UniqueResult result(PqResultHelper::ExecutePrepared(
+        pg_conn, /*nParams=*/bind_schema->n_children, param_values.data(),
+        param_lengths.data(), param_formats.data(), result_format, result_formats));
 
     ExecStatusType pg_status = PQresultStatus(result.get());
     if (pg_status != PGRES_COMMAND_OK && pg_status != PGRES_TUPLES_OK) {

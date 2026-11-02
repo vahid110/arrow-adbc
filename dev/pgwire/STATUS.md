@@ -27,10 +27,11 @@ verified, preserving the original C-stream cleanup timeout and separate cleanup.
 [Its bounded evidence](#task010t-interval-edge-qualification) is complete;
 **the all-21-type first-release milestone remains open**.
 
-The [private libpq package foundation](private-libpq.md) supplies an opt-in,
-pinned native Unix recipe and checked CMake/Meson consumption seams. Driver
-linkage is unchanged; coordinator package validation, Windows/cross support and
-the seven-distribution/five-wheel completion remain open.
+The [private libpq dependency](private-libpq.md) now supplies the Redshift-only
+namespace and per-column result dispatch: HLL text, every other field binary,
+with exact described-result verification and no retry. Local recorder coverage
+is not installed/native qualification. Windows/cross packaging and the seven
+C-distribution/five-wheel gates remain open; stock PostgreSQL stays separate.
 
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 [finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
