@@ -24,13 +24,16 @@ C/C++ users, covering all 21 canonical SQL column types with accurate limits.**
 A finite supported contract and checked rejection can establish readiness;
 exhaustive mathematical-domain testing is not the goal. The human explicitly
 required mixed HLL results and direct SUPER/spatial
-parameters on 2026-10-28. These missing operations must be implemented before v1;
-documenting their rejection does not close acceptance. The local direct spatial
-candidate uses catalog-typed uppercase EWKB text and retains the existing raw
-input cap, now shared with reads at1,048,447 raw bytes. Local B3 code also
-raises SUPER JSON input to16MiB/depth1000 and removes the stored-object cap from
-native JSON serialization. Source review and exact installed-candidate
-qualification are still required.
+parameters on 2026-10-28. Documenting rejection does not close acceptance.
+The local candidate implements all three direct parameter families and B3 limits:
+SUPER JSON input at 16MiB/depth1000, spatial reads/writes at 1,048,447 raw bytes,
+and native JSON output bounded by received length rather than stored object size.
+Independent source review, 35 serial local validation steps and Meson targets
+passed at `aed6ced40fb058f56dc8b097937776c05cbe9496`. Selected installed
+qualification passed 15 cases each in standalone C and Python, with independently
+reviewed results and full teardown. Deliver this scoped PR, then pause. Mixed HLL
+results remain separate mandatory B1 work;
+selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
 
@@ -44,8 +47,9 @@ operation scopes; [STATUS](STATUS.md) records the results.
 The [21-type matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) separates
 native read, direct prepared bind, generated CREATE, APPEND and metadata.
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md) is the finite remaining-work checklist.
-Current generated vendor ingestion does not satisfy direct parameter workflows;
-all-HLL reads do not satisfy mixed HLL rows. Unknown interval public constraints
+The merged baseline's generated vendor ingestion does not establish direct
+parameter support in the candidate; all-HLL reads and scalar HLL cardinality
+outputs do not satisfy mixed HLL result rows. Unknown interval public constraints
 remain honestly unknown despite internal target qualification.
 
 ## Delivery order

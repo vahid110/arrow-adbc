@@ -19,9 +19,13 @@
 
 # First-release Redshift type contract
 
-Reconciled 2026-10-28 against merged PR29 source
+Reconciled 2026-11-02: retained evidence includes merged PR29 source
 `fca2eab2e05e1a63cfbd9adecc802c53334bdbd0` (tree
-`0fa498a6e88c30eb1758195c614755a9942c51af`). **All 21 canonical SQL column
+`0fa498a6e88c30eb1758195c614755a9942c51af`); current implementation includes
+local candidate `aed6ced40fb058f56dc8b097937776c05cbe9496`. Its independent
+source review, 35 serial local validation steps and Meson targets passed; direct
+vendor qualification passed 15 cases each in standalone C and Python, with
+independently reviewed results and full teardown. **All 21 canonical SQL column
 types remain first-release scope.** This inventory separates implementation from
 retained installed evidence; it does not declare release readiness. The finite
 remaining gates are in [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md).
@@ -35,11 +39,12 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
-`U` = explicitly unsupported operation. Mixed HLL rows and direct SUPER/spatial
-binds are mandatory v1 work under the human decision of 2026-10-28.
+`U` = explicitly unsupported operation. Mixed HLL results remain separate B1
+work. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
+workflows are mandatory v1 scope under the human decision of 2026-10-28.
 A direct bind is application-supplied prepared SQL, distinct from the driver's
 generated CREATE/APPEND SQL. Bind/BindStream ingest proof never fills a direct-bind
 gap. Metadata evidence below covers the indicated query/schema observations;
@@ -64,10 +69,10 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | C | C | C | C | C identity | bool |
 | HLLSKETCH | M-P,Q-P all-HLL; U mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
-| SUPER | Q; corrected C Arrow rerun open | C; installed direct qualification pending | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
+| SUPER | Q,V; historical C Arrow rerun open | V selected C/Python array/stream | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
-| GEOMETRY | M-P,Q-P bounded EWKB | C; installed direct qualification pending | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
-| GEOGRAPHY | M-P,Q-P bounded EWKB | C; installed direct qualification pending | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOGRAPHY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
 
 Evidence keys (precise retained paths/operations are indexed in
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md#retained-evidence-index)):
@@ -95,6 +100,14 @@ Evidence keys (precise retained paths/operations are indexed in
   cases: selected extrema/defaults/negative and late-failure behavior. All 234
   cases passed. Full resource closure is verified separately from the original C
   stream cleanup timeout. See [T details](STATUS.md#task010t-interval-edge-qualification).
+
+- **V:** macOS arm64 source `aed6ced40`, standalone C operation
+  `80a19cb77c384fa7b80eb48185e55d97` and Python operation
+  `f1b8ef97405848a3b86f757ae0207217`: 15 selected prepared vendor cases passed
+  per language, including array/stream effects and 18,000,151-byte native SUPER
+  output. Results and full teardown were independently reviewed. These cases do not rerun the
+  historical Q C Arrow fixture or qualify generated APPEND, mixed HLL results,
+  every size boundary or all metadata APIs. See [V details](STATUS.md#prepared-vendor-qualification).
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is
@@ -660,12 +673,16 @@ allocation-failure and byte-preservation tests. Native SUPER escaped output abov
 flush between rows; a single wider row is permitted subject to signed32-bit Bind
 message framing and allocation success. Deferred rows are retried once in order,
 including across Arrow batch boundaries. Generic PostgreSQL binding keeps its
-existing policy. This is code evidence, not large-value live qualification.
+existing policy. Independent exact-source review, all 35 serial local validation
+steps and Meson unit/recorder targets passed. This is local evidence, not large-value live
+qualification; selected larger/deeper cases do not establish every maximum.
 
 AWS documents [SUPER stored/depth/string limits](https://docs.aws.amazon.com/redshift/latest/dg/limitations-super.html)
 and the [spatial object limit](https://docs.aws.amazon.com/redshift/latest/dg/spatial-limitations.html).
 Stored object size, JSON serialization, raw EWKB and text parameter expansion are
 different budgets. The retained nine native feasibility probes establish only
-small direct transport controls. Installed large SUPER/spatial fixtures and the
-finite sparse-to-dense HLL transition remain pending; HLL's known-format1,000,000
-encoded-byte contract is unchanged.
+small direct transport controls. V adds selected installed C/Python large/deep SUPER
+and spatial fixtures; broader maximum-value coverage and the finite
+sparse-to-dense HLL transition remain pending. HLL's known-format1,000,000
+encoded-byte contract is unchanged. Scalar HLL_CARDINALITY results do not qualify
+mixed HLL output (B1), and query identity checks do not close metadata parity (B5).

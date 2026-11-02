@@ -29,16 +29,19 @@ verified, preserving the original C-stream cleanup timeout and separate cleanup.
 
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 [finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
-blockers are mandatory mixed HLL rows and direct SUPER/spatial binding, specific
-installed-operation and metadata gaps, and final candidate delivery. No exhaustive
-mathematical-domain proof is required. No release-ready claim is made.
+blockers are mandatory mixed HLL results, remaining operation and metadata
+gaps, and candidate delivery. Selected direct SUPER/spatial cases now pass in
+standalone C and Python; this does not close every acceptance gate.
+No exhaustive mathematical-domain proof is required. No release-ready claim is made.
 
-Local B3 candidate code aligns SUPER input with16MiB/depth1000 and spatial
-read/write raw EWKB with1,048,447 bytes, uses iterative validation and bounds
-aggregate ingest batches without skipping deferred rows. Native SUPER reads use
-received field length rather than a stored-object-size assumption. Boundary and
-ownership seams are local evidence; independent review, serial rebuilt validation
-and selected installed large-value/HLL-transition qualification remain pending.
+The local candidate at `aed6ced40fb058f56dc8b097937776c05cbe9496` implements
+direct prepared SUPER/GEOMETRY/GEOGRAPHY parameters. Independent source review,
+all 35 serial local validation steps and Meson unit/recorder targets passed.
+SUPER input permits 16MiB/depth1000; spatial read/write permits 1,048,447 raw EWKB
+bytes. Validation is iterative, native SUPER uses received wire length, and
+batches flush without skipping deferred rows. The selected installed
+prepared/large-value results are recorded below. Broader maximum-value coverage,
+HLL transitions and B5 metadata remain separate gates.
 
 Task010q/q1 implements native SUPER observable JSON-wire reads at
 `26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
@@ -67,19 +70,53 @@ Native SUPER preserves received numeric spellings and wire NULLs in a separate
 output-only schema. The retained protocol collapses SQL NULL and parsed JSON
 null; input-lexeme/native-subtype losslessness is not claimed. Those Task010q results do
 not claim positive interval ingestion, complete domains, every metadata API or
-cross-platform live qualification. Direct SUPER/spatial binds and mixed HLL
-output remain unsupported. Vendor REPLACE remains unsupported. Task010s adds bounded actual interval-target
-writes; unknown target constraints still fail closed. PR29 is merged; its exact reviewed tree and applicable CI are recorded in
+cross-platform live qualification. The merged PR29 baseline rejects direct
+SUPER/spatial binds and mixed HLL output; the local candidate implements the
+former, while mixed HLL results remain separate B1 work. Vendor REPLACE remains
+unsupported. Task010s adds bounded actual interval-target writes; unknown target
+constraints still fail closed. PR29 is merged; its exact reviewed tree and
+applicable CI are recorded in
 `task010t-interval-edges-20261026/goal-completion-v1/receipt.json`. This does not
 qualify later candidate changes.
 
+## Prepared vendor qualification
+
+Standalone C operation `80a19cb77c384fa7b80eb48185e55d97` and Python operation
+`f1b8ef97405848a3b86f757ae0207217` each passed all 15 selected cases against
+installed macOS arm64 artifacts from
+`aed6ced40fb058f56dc8b097937776c05cbe9496`. Array and stream routes covered
+SUPER/GEOMETRY/GEOGRAPHY ordinary, NULL and empty inputs, repeated SUPER
+placeholders, adjacent VARBYTE/integer parameters, combined parameters with
+scalar HLL cardinality, and exactly-once table effects with malformed-first
+rejection and retained rows.
+
+Selected larger values passed: a 1,310,858-byte SUPER JSON input, depths 129 and
+1,000, 800,013-byte spatial inputs, and an exact 18,000,151-byte native SUPER
+output. Both children exited successfully and were reaped. In each operation,
+independent database observation found no owned schema or runtime sessions, all
+seven owned resource classes were absent, and the controller verified teardown.
+Independent retained-result review approved both suites. These cases do not prove
+every maximum, mixed HLL results, all metadata APIs, or the remaining B4 operations.
+
+
+At source `aed6ced40fb058f56dc8b097937776c05cbe9496`, standalone C operation
+`8511d92d85714975ade07f078dbc7b48` passed 14 of 15 selected cases. The expanded
+native SUPER query failed during execution with SQLSTATE `57014` (query canceled);
+its 18,000,151-byte expected output was not observed. The connection used a
+10-second statement timeout. This is a failed suite, not a completed qualification.
+
+The original controller reported teardown failure. A separate cleanup subsequently
+verified all seven owned resource classes absent; that later verification does
+not change the original result. Fresh C/Python runs use a bounded 60-second
+statement timeout within the unchanged overall execution and cleanup budgets.
+Both fresh suites above passed with independently verified full teardown.
+
 ## Active
 
-- Task011 adds local direct prepared GEOMETRY/GEOGRAPHY array/stream parameters:
-  exact marked EWKB, dynamic catalog input OIDs, uppercase text with owned NUL,
-  and the existing 500,000-byte raw input cap. Generated ingestion retains raw
-  VARBYTE constructors. Independent review and installed candidate qualification
-  remain required; this does not claim a new live driver pass.
+- Deliver the scoped direct SUPER/spatial and B3 limits PR using the selected
+  C/Python results above, then pause. Keep mixed HLL output separate. Remaining
+  mismatched prepared-type qualification, other operation gaps, broader boundary
+  coverage and metadata parity stay visible in the acceptance checklist.
 
 - The stale public SUPER rejection assertion is repaired locally in coordinator
   commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and

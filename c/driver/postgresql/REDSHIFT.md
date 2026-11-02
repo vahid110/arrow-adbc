@@ -123,9 +123,15 @@ unqualified.
 
 Native SUPER uses an output-only JSON-wire extension on `large_utf8`, preserving
 received numeric lexemes and wire NULL without reconstructing server-lost subtype
-or original JSON-null distinctions. Generated JSON-subset input is a separate
-explicit contract. Spatial EWKB and HLL serialization also have bounded installed
-evidence; direct SUPER/spatial binding and mixed HLL results remain unsupported.
+or original JSON-null distinctions. JSON-subset input is a separate explicit
+contract. The reviewed local candidate adds direct SUPER/spatial parameters,
+SUPER input up to16MiB/depth1000 and spatial read/write up to1,048,447 raw bytes.
+Its 35 serial local validation steps and Meson targets passed. Selected installed
+macOS arm64 qualification passed 15 cases each in standalone C and Python,
+including native SUPER output beyond16MiB, with independently reviewed results
+and full teardown. The merged PR29 baseline rejects direct
+SUPER/spatial parameters. Mixed HLL results and metadata API parity remain
+separate acceptance gates; selected larger/deeper cases do not prove every maximum.
 See the [user guide](../../../docs/source/driver/redshift.rst) and
 [finite acceptance checklist](../../../dev/pgwire/V1_ACCEPTANCE.md) for limits and
 remaining release gates. No implicit user SQL casts or opaque-byte fallback count

@@ -310,12 +310,24 @@ passed in C lossless mode, with an Arrow-mode rerun still outstanding.
 See the `operation matrix <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/REDSHIFT_TYPES.md>`__
 for separate read, direct-bind, CREATE, APPEND and metadata evidence.
 
+The local candidate at ``aed6ced40`` adds direct SUPER/spatial parameters and the
+value limits below. Independent source review, all 35 serial local validation
+steps and Meson unit/recorder targets passed. Selected installed macOS arm64
+qualification passed 15 cases each in standalone C and Python, including
+array/stream parameters, retained-row failures, larger/deeper values and exact
+18,000,151-byte native SUPER output. Both results and full teardown were
+independently reviewed. The merged PR29 baseline rejects direct SUPER/spatial
+parameters. Mixed HLL results and full metadata parity remain
+separate release gates. Selected larger/deeper fixtures do not prove all maxima.
+
 * Queries, prepared/bound parameters, core metadata (``GetInfo``,
   ``GetTableTypes``, ``GetObjects``, ``GetTableSchema``), autocommit,
   commit/rollback and cancellation are implemented. Cancellation has bounded
   historical live evidence, not broad reliability qualification.
 * Ingest create/append/replace uses prepared multi-row ``INSERT`` (16-row
-  batches, at most 32,767 parameters per statement), not S3 ``COPY``.
+  batches, at most 32,767 parameters per statement), not S3 ``COPY``. Batches
+  target 16MiB of framed values and flush between rows; a single wider row is
+  allowed subject to signed 32-bit Bind message framing and allocation success.
   **Replace is non-atomic across DROP, CREATE and data transfer. Failure can
   leave the old table lost or the replacement incomplete, even inside an
   explicit transaction.** Validate inputs and protect important data before
@@ -335,27 +347,33 @@ Remaining qualification gates and release status are tracked in
 `STATUS.md <https://github.com/vahid110/arrow-adbc/blob/feature/pgwire-core-redshift/dev/pgwire/STATUS.md>`__.
 
 
-SUPER JSON-subset ingest
-~~~~~~~~~~~~~~~~~~~~~~~~
+SUPER JSON-subset parameters and ingest
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A field may explicitly request generated SUPER ingest using ``large_utf8`` storage,
+A field may explicitly request SUPER parameters or generated ingest using
+``large_utf8`` storage,
 ``ARROW:extension:name=adbc.redshift.super.json``, canonical
 ``ADBC:redshift:sql_type=SUPER`` and exact extension metadata::
 
    {"version":1,"encoding":"utf8-json","scope":"json-subset-write"}
 
 This write-only contract validates UTF-8 JSON without converting numeric tokens to
-host floats. Its local limits are 1,000,000 encoded bytes and 128 container levels.
+host floats. Its input limits are 16,777,216 encoded bytes and 1,000 container
+levels, with iterative UTF-8 and decoded-key duplicate validation. These transport
+limits do not guarantee that every document fits server object or string limits.
 Arrow validity selects SQL NULL; a valid nonnull ``null`` document selects JSON null.
-The driver generates ``JSON_PARSE`` with a binary VARBYTE parameter and requires
-strict parse settings, checked without changing the session. It never rewrites
-arbitrary application SQL or represents native SUPER results as this input type.
+Generated ingest uses ``JSON_PARSE`` with binary VARBYTE input. Direct prepared
+SQL uses verified ``pg_catalog.json_parse(VARBYTE)`` conversion of parameter
+tokens, preserving logical descriptors; ambiguous or unsupported lexical
+contexts reject. Both require strict parse settings, checked without changing
+the session. Native SUPER results use the separate output type below.
 Full numeric subtype/precision and native read losslessness are not promised.
 
 SUPER REPLACE is rejected before DROP. CREATE and missing CREATE_APPEND may leave
 a new empty table after a subsequent payload failure; APPEND retains existing data
-transaction ownership. Direct SUPER/spatial binding remains unsupported.
-The fixed installed JSON-subset writes passed; broader qualification remains open.
+transaction ownership. Earlier installed generated JSON-subset writes passed;
+selected direct prepared and larger-value cases now pass in C and Python.
+Broader operation and boundary coverage remains open.
 
 Native SUPER reads
 ~~~~~~~~~~~~~~~~~~
@@ -367,10 +385,11 @@ Native SELECT results use ``large_utf8`` with output-only extension
 
 The driver preserves received UTF-8 JSON bytes, including numeric spellings,
 without host floating conversion, SQL casts, query rewriting or reexecution.
-Ordinary mixed projections retain binary decoding. Local result limits are
-16,777,216 serialized bytes and 1,000 container levels. The byte limit does not
-qualify every stored 16 MB object: serialization can expand the representation.
-Malformed or oversized output returns an error, without truncation or substitution.
+Ordinary mixed projections retain binary decoding. Native JSON serialization
+can exceed the stored object limit. Validation uses the actual received signed
+32-bit field length and 1,000 container levels, with checked Arrow appends.
+Malformed output, unrepresentable lengths or allocation failure return errors
+without truncation or substitution.
 
 Wire NULL maps to Arrow NULL; a nonnull received JSON ``null`` token stays a
 nonnull string. The retained native protocol returned identical wire NULLs for
@@ -399,10 +418,12 @@ GEOMETRY/GEOGRAPHY use ``large_binary`` with exact extension names
 The bounded structural reader preserves bytes, Z/M axes and per-value SRID in
 both endian orders. Missing top-level GEOMETRY SRID means0; GEOGRAPHY requires
 an embedded SRID. It does not reproject, validate topology or infer a column CRS.
-The selected read payload cap is1,048,447 bytes. Generated writes accept at most
-500,000 EWKB bytes, passing owned raw EWKB VARBYTE to ``ST_GeomFromEWKB`` and an
-explicit ``::GEOGRAPHY`` cast where selected. Direct spatial parameter SQL is
-unsupported. Installed point controls accepted raw binary VARBYTE and rejected
+Reads and writes accept at most 1,048,447 raw EWKB bytes. Collection validation
+uses frames bounded by input bytes, without a separate 128-level nesting limit.
+Generated writes pass raw EWKB VARBYTE to ``ST_GeomFromEWKB`` and an explicit
+``::GEOGRAPHY`` cast where selected. Direct prepared parameters use catalog-typed
+uppercase EWKB text with owned NUL termination; hex expansion does not halve
+the raw-byte limit. Installed point controls accepted raw binary VARBYTE and rejected
 ASCIIhex VARBYTE. Installed evidence preserves spatial bytes and witnesses;
 the corrected GEOMETRY output metadata passed the fixed installed cases. Full
 native boundary qualification remains pending. Invalid vendor payloads report INVALID_ARGUMENT;
@@ -428,4 +449,6 @@ CREATE residue and APPEND transaction ownership follow the SUPER policy above.
 The fixed installed cases cover spatial CREATE/readback (array and stream),
 HLL CREATE/readback and typed text parameters, plus the documented mixed-output
 rejection. Spatial/HLL APPEND was not exercised. These bounded capabilities do
-not imply full mixed-HLL or all-type qualification.
+not imply full mixed-HLL or all-type qualification. HLL_CARDINALITY produces a
+scalar result; combining its input with other parameters does not qualify mixed
+HLL result columns.
