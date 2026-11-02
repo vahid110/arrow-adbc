@@ -64,10 +64,10 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | C | C | C | C | C identity | bool |
 | HLLSKETCH | M-P,Q-P all-HLL; U mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
-| SUPER | Q; corrected C Arrow rerun open | U semantic direct bind | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
+| SUPER | Q; corrected C Arrow rerun open | C; installed direct qualification pending | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
-| GEOMETRY | M-P,Q-P bounded EWKB | U | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
-| GEOGRAPHY | M-P,Q-P bounded EWKB | U | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOMETRY | M-P,Q-P bounded EWKB | C; installed direct qualification pending | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOGRAPHY | M-P,Q-P bounded EWKB | C; installed direct qualification pending | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
 
 Evidence keys (precise retained paths/operations are indexed in
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md#retained-evidence-index)):
@@ -565,8 +565,12 @@ paid operation is authorized by this document.
 
 The application may assert `adbc.redshift.super.json` on `large_utf8`, with exact
 extension metadata `{"version":1,"encoding":"utf8-json","scope":"json-subset-write"}`
-and `ADBC:redshift:sql_type=SUPER`. This opts into generated ingest only. It is not
-metadata that a native opaque result can acquire to become lossless JSON.
+and `ADBC:redshift:sql_type=SUPER`. Task010i1 initially supported generated
+ingestion only. Current reviewed local code also supports direct prepared
+parameters through verified `pg_catalog.json_parse(VARBYTE)` conversion, with
+logical descriptors preserved and conservative SQL token checks. Installed direct
+qualification remains pending. This marker cannot turn a native opaque result
+into lossless JSON.
 Arrow validity supplies SQL NULL; nonnull `null` supplies a JSON null document.
 The driver preserves validated UTF8 document bytes and numeric tokens up to the
 local 16,777,216-byte/1000-container-depth JSON subset. Validation is iterative,
@@ -580,8 +584,9 @@ Generated INSERT uses `JSON_PARSE($n)` with actual catalog VARBYTE OID/binary ra
 JSON bytes. Parse-null-on-error, attribute deduplication and string truncation must
 all be OFF, checked read-only before DDL and each actual batch; the driver never
 changes these settings. Semantic schemas/actual target identities are strict even
-for all-NULL/empty streams. Arbitrary SQL is not rewritten, and SUPER REPLACE is
-rejected before ownership/DROP. CREATE or missing CREATE_APPEND may leave a newly
+for all-NULL/empty streams. The direct prepared path rewrites only verified SUPER
+parameter tokens; unsupported lexical contexts reject. SUPER REPLACE is rejected
+before ownership/DROP. CREATE or missing CREATE_APPEND may leave a newly
 created empty table following a later payload failure. APPEND keeps the existing
 data transaction owner. The fixed installed JSON-subset cases passed; native output has the separate
 Task010q contract below. Lossless reconstruction of input subtypes is not promised. HLL's documented
