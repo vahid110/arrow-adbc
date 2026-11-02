@@ -105,6 +105,7 @@ postgres_tests = {
             'redshift_bytes_test.cc',
             'redshift_scalar_test.cc',
             'redshift_super_test.cc',
+            'redshift_super_parameter_test.cc',
             'redshift_encoded_test.cc',
             'result_helper.cc',
             'type_discovery_test.cc',
@@ -159,6 +160,7 @@ foreach symbol : [
     'PQdescribePrepared',
     'PQnparams',
     'PQparamtype',
+    'PQresultErrorField',
 ]
     interval_recording_args += '-D' + symbol + '=IntervalRecording_' + symbol
 endforeach
