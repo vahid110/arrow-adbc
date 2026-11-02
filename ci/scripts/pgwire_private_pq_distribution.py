@@ -69,10 +69,12 @@ def verified_metadata(prefix):
     ):
         raise ValueError("Private-pq package does not match this source recipe")
     recorded = receipt["installed_files"]
-    required = [
-        "lib/libadbc_rs_pq_17_11_v1" + suffix + ".a"
-        for suffix in ("", "_common", "_port")
-    ]
+    windows = receipt.get("system") == "Windows"
+    if windows and receipt.get("crt") != "md":
+        raise ValueError("Windows private-pq receipt must record /MD")
+    stem = "lib/adbc_rs_pq_17_11_v1" if windows else "lib/libadbc_rs_pq_17_11_v1"
+    extension = ".lib" if windows else ".a"
+    required = [stem + suffix + extension for suffix in ("", "_common", "_port")]
     required += [
         "share/" + PACKAGE + "/" + name
         for name in ("pins.json", "PostgreSQL-COPYRIGHT", "symbols.json", "namespace.h")

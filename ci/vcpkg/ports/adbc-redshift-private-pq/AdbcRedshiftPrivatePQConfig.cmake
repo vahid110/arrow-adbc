@@ -16,6 +16,9 @@
 # under the License.
 
 include(CMakeFindDependencyMacro)
+if(WIN32)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_dependency(OpenSSL
                 REQUIRED
                 COMPONENTS
@@ -32,17 +35,32 @@ foreach(_adbc_rs_component pq common port)
     else()
       set(_adbc_rs_suffix "_${_adbc_rs_component}")
     endif()
+    if(WIN32)
+      set(_adbc_rs_archive "adbc_rs_pq_17_11_v1${_adbc_rs_suffix}.lib")
+    else()
+      set(_adbc_rs_archive "libadbc_rs_pq_17_11_v1${_adbc_rs_suffix}.a")
+    endif()
     set_target_properties(AdbcRedshiftPrivatePQ::${_adbc_rs_component}
                           PROPERTIES IMPORTED_LOCATION
-                                     "${_adbc_rs_prefix}/lib/libadbc_rs_pq_17_11_v1${_adbc_rs_suffix}.a"
-    )
+                                     "${_adbc_rs_prefix}/lib/${_adbc_rs_archive}")
   endif()
 endforeach()
+if(WIN32)
+  set(_adbc_rs_platform_libs
+      ws2_32
+      secur32
+      advapi32
+      crypt32
+      bcrypt
+      user32)
+else()
+  set(_adbc_rs_platform_libs m)
+endif()
 set_target_properties(AdbcRedshiftPrivatePQ::pq
                       PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
                                  "${_adbc_rs_prefix}/include/adbc-redshift-private-pq"
                                  INTERFACE_LINK_LIBRARIES
-                                 "AdbcRedshiftPrivatePQ::common;AdbcRedshiftPrivatePQ::port;OpenSSL::SSL;OpenSSL::Crypto;Threads::Threads;m"
+                                 "AdbcRedshiftPrivatePQ::common;AdbcRedshiftPrivatePQ::port;OpenSSL::SSL;OpenSSL::Crypto;Threads::Threads;${_adbc_rs_platform_libs}"
 )
 
 # Use a function scope so cross-compilation settings remain unchanged for callers.
@@ -51,6 +69,9 @@ function(_adbc_rs_check_link)
   include(CMakePushCheckState)
   cmake_push_check_state(RESET)
   set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+  if(WIN32)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+  endif()
   set(CMAKE_REQUIRED_LIBRARIES AdbcRedshiftPrivatePQ::pq)
   file(READ "${_adbc_rs_prefix}/share/adbc-redshift-private-pq/link_check.c"
        _adbc_rs_link_source)

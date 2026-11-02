@@ -17,11 +17,19 @@
 
 #include <adbc_rs_pq.h>
 
+#if defined(_WIN32) && defined(ADBC_PRIVATE_CONSUMER_SHARED)
+#define CONSUMER_EXPORT __declspec(dllexport)
+#else
+#define CONSUMER_EXPORT
+#endif
+
 typedef int (*VersionFunction)(void);
 
-VersionFunction adbc_private_pq_version_function(void) { return PQlibVersion; }
+CONSUMER_EXPORT VersionFunction adbc_private_pq_version_function(void) {
+  return PQlibVersion;
+}
 
-int adbc_private_pq_probe(void) {
+CONSUMER_EXPORT int adbc_private_pq_probe(void) {
   PGresult* result = PQmakeEmptyPGresult(NULL, PGRES_TUPLES_OK);
   if (!result) return 1;
   int ok = PQresultStatus(result) == PGRES_TUPLES_OK;

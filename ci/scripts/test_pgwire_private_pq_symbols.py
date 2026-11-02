@@ -78,5 +78,109 @@ class SymbolAuditTest(unittest.TestCase):
             self.audit(f"_{p}PQf T 0 0\n_{p}data S 0 0\n_{p}missing U 0 0\n")
 
 
+class CoffSymbolAuditTest(unittest.TestCase):
+    literal = "__real@3ff0000000000000"
+
+    def test_readonly_numeric_constants_and_compiler_metadata(self):
+        output = (
+            "@feat.00 A 800 0\nPQlibVersion T 0 0\n"
+            + self.literal
+            + " R 0 0\n__imp_malloc U 0 0\n"
+        )
+        metadata = set()
+        with patch("subprocess.check_output", return_value=output) as command:
+            defined, undefined = symbols.inventory(
+                [Path("libpq.lib")], False, coff=True, nm="llvm-nm", metadata=metadata
+            )
+        self.assertEqual(defined, {"PQlibVersion", self.literal})
+        self.assertEqual(undefined, {"__imp_malloc"})
+        self.assertEqual(metadata, {("@feat.00", 0x800)})
+        self.assertEqual(command.call_args.args[0][0], "llvm-nm")
+
+    def test_unreviewed_special_symbols_and_writable_constants_fail(self):
+        for line in (
+            "??_C@string R 0 0",
+            "@unknown A 0 0",
+            self.literal + " D 0 0",
+            "__real@bad R 0 0",
+        ):
+            with (
+                self.subTest(line=line),
+                patch("subprocess.check_output", return_value=line),
+            ):
+                with self.assertRaises(ValueError):
+                    symbols.inventory([Path("libpq.lib")], False, coff=True)
+
+    def test_macro_and_object_maps_partition_all_definitions(self):
+        public = [
+            "PQlibVersion",
+            "ADBCPQprivatePackageAbi",
+            "ADBCPQexecPreparedFormats",
+            "ADBCPQsendQueryPreparedFormats",
+        ]
+        output = (
+            "@feat.00 A 800 0\n"
+            + "".join(name + " T 0 0\n" for name in public)
+            + self.literal
+            + " R 0 0\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            exports = root / "exports.txt"
+            exports.write_text("PQlibVersion 1\n")
+            argv = [
+                "symbols",
+                "generate",
+                "--coff",
+                "--exports",
+                str(exports),
+                "--directory",
+                str(root),
+                "libpq.lib",
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch("subprocess.check_output", return_value=output),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                symbols.main()
+            self.assertNotIn(self.literal, (root / "namespace.h").read_text())
+            self.assertEqual(
+                (root / "coff-redefine.syms").read_text(),
+                self.literal + " " + symbols.PREFIX + self.literal + "\n",
+            )
+            manifest = json.loads((root / "symbols.json").read_text())
+            self.assertEqual(set(manifest["defined"]), set(public) | {self.literal})
+            private = (
+                "@feat.00 A 800 0\n"
+                + "".join(symbols.PREFIX + name + " T 0 0\n" for name in public)
+                + symbols.PREFIX
+                + self.literal
+                + " R 0 0\n"
+            )
+            argv = ["symbols", "audit", "--coff", "--directory", str(root), "libpq.lib"]
+            for mutation in (None, "constant", "metadata", "reference"):
+                changed = private
+                if mutation == "constant":
+                    changed = changed.replace(
+                        symbols.PREFIX + self.literal, self.literal
+                    )
+                elif mutation == "metadata":
+                    changed = changed.replace("A 800", "A 1")
+                elif mutation == "reference":
+                    changed += "PQlibVersion U 0 0\n"
+                with (
+                    self.subTest(mutation=mutation),
+                    patch("sys.argv", argv),
+                    patch("subprocess.check_output", return_value=changed),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    if mutation:
+                        with self.assertRaises(ValueError):
+                            symbols.main()
+                    else:
+                        symbols.main()
+
+
 if __name__ == "__main__":
     unittest.main()

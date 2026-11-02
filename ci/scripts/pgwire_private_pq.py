@@ -57,11 +57,19 @@ def check_pin(path, expected):
     require(digest(path) == expected, f"Pin validation failed: {path}")
 
 
-def preflight(args, pins):
-    require(
-        platform.system() in ("Darwin", "Linux"), "Only native Unix builds supported"
-    )
-    require(platform.machine() in ("arm64", "aarch64", "x86_64"), "Unsupported CPU")
+def preflight(args, pins, *, windows=False):
+    if windows:
+        require(platform.system() == "Windows", "Windows adapter requires Windows")
+        require(
+            platform.machine().lower() in ("amd64", "arm64", "aarch64", "x86_64"),
+            "Unsupported CPU",
+        )
+    else:
+        require(
+            platform.system() in ("Darwin", "Linux"),
+            "Only native Unix builds supported",
+        )
+        require(platform.machine() in ("arm64", "aarch64", "x86_64"), "Unsupported CPU")
     if args.openssl_libdir is None:
         args.openssl_libdir = args.openssl_prefix / "lib"
     for path in (
@@ -102,6 +110,10 @@ def preflight(args, pins):
         Path(__file__).with_name("pgwire_private_pq_symbols.py"),
         pins["symbol_script_sha256"],
     )
+    check_pin(
+        Path(__file__).with_name("pgwire_private_pq_windows.py"),
+        pins["windows_build_script_sha256"],
+    )
     check_pin(REPOSITORY / "LICENSE.txt", pins["adbc_license_sha256"])
     check_pin(REPOSITORY / "NOTICE.txt", pins["adbc_notice_sha256"])
     require(
@@ -118,7 +130,9 @@ def preflight(args, pins):
     )
 
 
-def install_package(prefix, source, mapping, pins):
+def install_package(
+    prefix, source, mapping, pins, *, archives=None, config_header=None, windows=False
+):
     """Only install uniquely named files; never upstream's generic libpq package."""
     include = prefix / "include" / PACKAGE
     share = prefix / "share" / PACKAGE
@@ -130,8 +144,11 @@ def install_package(prefix, source, mapping, pins):
     ):
         directory.mkdir(parents=True)
     names = (LIBRARY, LIBRARY + "_common", LIBRARY + "_port")
-    for original, name in zip(ARCHIVES, names):
-        shutil.copyfile(source / original, prefix / "lib" / f"lib{name}.a")
+    archive_paths = archives if archives is not None else [source / a for a in ARCHIVES]
+    require(len(archive_paths) == 3, "Exactly three private archives are required")
+    for original, name in zip(archive_paths, names):
+        filename = f"{name}.lib" if windows else f"lib{name}.a"
+        shutil.copyfile(original, prefix / "lib" / filename)
     headers = {
         "src/interfaces/libpq/libpq-fe.h": (
             "adbc_rs_libpq_fe.h",
@@ -144,7 +161,10 @@ def install_package(prefix, source, mapping, pins):
         "src/include/pg_config_ext.h": ("adbc_rs_pg_config_ext.h", {}),
     }
     for original, (name, replacements) in headers.items():
-        contents = (source / original).read_text()
+        header = source / original
+        if original == "src/include/pg_config_ext.h" and config_header is not None:
+            header = config_header
+        contents = header.read_text()
         for old, new in replacements.items():
             require(contents.count(old) == 1, f"Unexpected include in {original}")
             contents = contents.replace(old, new)
@@ -161,6 +181,8 @@ def install_package(prefix, source, mapping, pins):
         shutil.copyfile(ASSETS / name, share / name)
     shutil.copyfile(mapping / "symbols.json", share / "symbols.json")
     shutil.copyfile(mapping / "namespace.h", share / "namespace.h")
+    if windows:
+        shutil.copyfile(mapping / "coff-redefine.syms", share / "coff-redefine.syms")
     shutil.copyfile(
         ASSETS / "AdbcRedshiftPrivatePQConfig.cmake",
         prefix / "lib/cmake/AdbcRedshiftPrivatePQ/AdbcRedshiftPrivatePQConfig.cmake",
@@ -172,13 +194,22 @@ def install_package(prefix, source, mapping, pins):
         f"Version: {pins['package_version']}\n"
         "Cflags: -I${includedir}\n"
         "Libs: -L${libdir} " + " ".join("-l" + n for n in names) + "\n"
-        "Requires.private: libssl libcrypto\nLibs.private: -lm -pthread\n"
+        "Requires.private: libssl libcrypto\nLibs.private: "
+        + (
+            "-lws2_32 -lsecur32 -ladvapi32 -lcrypt32 -lbcrypt -luser32\n"
+            if windows
+            else "-lm -pthread\n"
+        )
     )
     (prefix / "lib/pkgconfig" / f"{PACKAGE}.pc").write_text(pc)
     recipe = share / "recipe"
     scripts = recipe / "ci/scripts"
     scripts.mkdir(parents=True)
-    for name in ("pgwire_private_pq.py", "pgwire_private_pq_symbols.py"):
+    for name in (
+        "pgwire_private_pq.py",
+        "pgwire_private_pq_symbols.py",
+        "pgwire_private_pq_windows.py",
+    ):
         shutil.copyfile(Path(__file__).with_name(name), scripts / name)
     shutil.copytree(ASSETS, recipe / "ci/vcpkg/ports" / PACKAGE)
     for name in ("LICENSE.txt", "NOTICE.txt"):

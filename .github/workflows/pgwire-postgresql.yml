@@ -168,6 +168,7 @@ jobs:
         run: |
           python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_distribution.py -v
           python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_symbols.py -v
+          python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_windows.py -v
 
       - name: Build pinned private Redshift dependency
         run: |

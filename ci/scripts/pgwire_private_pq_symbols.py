@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Small macOS/ELF inventory generator and fail-closed archive audit."""
+"""Fail-closed Mach-O/ELF/COFF inventory and private archive audit."""
 
 import argparse
 import json
@@ -26,10 +26,21 @@ from pathlib import Path
 PREFIX = "adbc_rs_pq_17_11_v1_"
 
 
-def inventory(archives, macho):
+def coff_literal(name):
+    """MSVC content-addressed numeric constants; string pooling is disabled."""
+    if name.startswith(PREFIX):
+        name = name[len(PREFIX) :]
+    return bool(re.fullmatch(r"__(real|xmm|ymm)@[0-9A-Fa-f]+", name)) and (
+        (name.startswith("__real@") and len(name.split("@")[1]) in (8, 16))
+        or (name.startswith("__xmm@") and len(name.split("@")[1]) == 32)
+        or (name.startswith("__ymm@") and len(name.split("@")[1]) == 64)
+    )
+
+
+def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
     defined, undefined = set(), set()
     for archive in archives:
-        output = subprocess.check_output(["nm", "-g", "-P", str(archive)], text=True)
+        output = subprocess.check_output([nm, "-g", "-P", str(archive)], text=True)
         for line in output.splitlines():
             line = line.strip()
             if not line or line.endswith(":"):
@@ -42,10 +53,18 @@ def inventory(archives, macho):
                 if not name.startswith("_"):
                     raise ValueError(f"unexpected Mach-O global: {name}")
                 name = name[1:]
+            if coff and kind == "A" and name in ("@feat.00", "@comp.id"):
+                if len(fields) < 3 or not re.fullmatch(r"[0-9A-Fa-f]+", fields[2]):
+                    raise ValueError("Unparsed COFF compiler metadata")
+                if metadata is not None:
+                    metadata.add((name, int(fields[2], 16)))
+                continue
             if kind in {"U", "w", "v"}:
                 undefined.add(name)
             elif kind in {"T", "D", "B", "S", "R", "C", "G", "V", "W"}:
-                if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name):
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) and not (
+                    coff and kind == "R" and coff_literal(name)
+                ):
                     raise ValueError(f"defined global is not a C identifier: {name}")
                 defined.add(name)
             else:
@@ -58,12 +77,18 @@ def inventory(archives, macho):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["generate", "audit"])
-    parser.add_argument("--macho", action="store_true")
+    formats = parser.add_mutually_exclusive_group()
+    formats.add_argument("--macho", action="store_true")
+    formats.add_argument("--coff", action="store_true")
+    parser.add_argument("--nm", default="nm")
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--exports", type=Path)
     parser.add_argument("archives", type=Path, nargs="+")
     args = parser.parse_args()
-    defined, undefined = inventory(args.archives, args.macho)
+    metadata = set()
+    defined, undefined = inventory(
+        args.archives, args.macho, coff=args.coff, nm=args.nm, metadata=metadata
+    )
     if args.mode == "generate":
         if args.exports is None:
             parser.error("generate requires --exports")
@@ -89,7 +114,9 @@ def main():
                 "#pragma once\n"
             )
             content += "".join(
-                f"#define {name} {PREFIX}{name}\n" for name in sorted(names)
+                f"#define {name} {PREFIX}{name}\n"
+                for name in sorted(names)
+                if not (args.coff and coff_literal(name))
             )
             (args.directory / filename).write_text(content)
         manifest = {
@@ -97,6 +124,14 @@ def main():
             "defined": sorted(defined),
             "public": sorted(public),
         }
+
+        if args.coff:
+            manifest["coff_metadata"] = sorted(metadata)
+            literals = sorted(name for name in defined if coff_literal(name))
+            manifest["coff_object_symbols"] = literals
+            (args.directory / "coff-redefine.syms").write_text(
+                "".join(f"{name} {PREFIX}{name}\n" for name in literals)
+            )
         (args.directory / "symbols.json").write_text(
             json.dumps(manifest, indent=2) + "\n"
         )
@@ -121,6 +156,13 @@ def main():
                 name for name in undefined - defined if name.startswith(PREFIX)
             ),
         }
+        if args.coff and manifest.get("coff_metadata") != [
+            list(m) for m in sorted(metadata)
+        ]:
+            problems["changed_coff_compiler_metadata"] = sorted(metadata)
+            # A change to an empty set must fail too.
+            if not metadata:
+                problems["changed_coff_compiler_metadata"] = ["metadata removed"]
         if any(problems.values()):
             raise ValueError(json.dumps(problems, indent=2))
         print(

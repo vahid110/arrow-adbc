@@ -118,17 +118,22 @@ now requires this dependency and rejects a missing/wrong ABI/helper package.
 Explicit PostgreSQL-only builds can set `ADBC_DRIVER_REDSHIFT=OFF` or Meson
 `-Dredshift=false`; those builds retain stock libpq and do not build Redshift.
 
-Windows x64/arm64 C packages and the Windows x64 wheel must be added before B6
-can close: use PostgreSQL 17.11's Meson static frontend libpq/common/port variants,
-including their private encoding aliases; disable PCH/LTO for the initial proof;
-generate the namespace from that exact COFF trio and apply `/FI` during rebuild.
-Extend the inventory reader for reviewed COFF symbol kinds/compiler globals,
-preserve the existing static-library/dynamic-CRT (`/MD`) triplets, and require the same exact-definition
-and reference audits. Never reuse the Darwin map or mix Meson static frontend
-objects with Make's shlib variants. Windows/cross builds currently fail explicitly. The Windows jobs remain in both
-matrices and cannot pass until the native package route is implemented and
-qualified; no portable matrix success is claimed by this source-only wiring.
-There is no silent fallback to ordinary libpq.
+The Windows adapter now selects PostgreSQL 17.11's Meson static frontend
+libpq/common/port targets, including their private encoding aliases. It disables
+PCH/LTO and string pooling, uses the existing static-library/dynamic-CRT (`/MD`)
+triplets, and rejects cross builds. Tool paths, source pins, target machine and
+runtime directives are checked explicitly. The first pass inventories COFF;
+the second uses `/FI` for C identifiers and LLVM objcopy for only the exact
+inventoried numeric constants which cannot be C macro names. Unknown special
+symbols fail. The final audit requires every original definition to be prefixed,
+no original internal references, and unchanged compiler metadata.
+
+The Windows C jobs now include original/relocated static and shared consumers
+alongside stock libpq, plus a whole-archive collision probe. These jobs and the
+adapter have only source/mock validation locally: native x64/ARM64 compilation,
+COFF rewrites, link/runtime behavior and Windows wheel repair remain unverified.
+No Windows success or release readiness is claimed. Ordinary libpq remains a
+separate dependency; there is no private-dependency fallback.
 
 Then validate all seven C distributions and five wheels: installed/relocated
 shared and static consumers, both drivers plus stock libpq in both load orders,

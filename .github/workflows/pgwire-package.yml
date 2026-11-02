@@ -477,6 +477,27 @@ jobs:
             --overlay-ports "$pwd\..\ci\vcpkg\ports"
           if ($LASTEXITCODE -ne 0) { throw "failed to install libpq" }
 
+      - name: Prove original and relocated Windows private package consumers
+        run: |
+          $dependency = "$($env:VCPKG_ROOT)/installed/$($env:VCPKG_DEFAULT_TRIPLET)"
+          $relocated = Join-Path $env:RUNNER_TEMP "private-pq-relocated"
+          python ci/scripts/pgwire_private_pq_distribution.py bundle $dependency $relocated
+          if ($LASTEXITCODE -ne 0) { throw "private dependency relocation failed" }
+          $arch = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          foreach ($pair in @(@("original", $dependency), @("relocated", $relocated))) {
+            $build = Join-Path $env:RUNNER_TEMP "private-pq-consumer-$($pair[0])"
+            cmake -S ci/vcpkg/ports/adbc-redshift-private-pq/consumer -B $build -A $arch `
+              "-DCMAKE_TOOLCHAIN_FILE=$($env:VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake" `
+              "-DVCPKG_TARGET_TRIPLET=$($env:VCPKG_DEFAULT_TRIPLET)" `
+              "-DCMAKE_PREFIX_PATH=$($pair[1])" `
+              "-DAdbcRedshiftPrivatePQ_DIR=$($pair[1])/lib/cmake/AdbcRedshiftPrivatePQ"
+            if ($LASTEXITCODE -ne 0) { throw "private consumer configure failed" }
+            cmake --build $build --config Release --parallel 1
+            if ($LASTEXITCODE -ne 0) { throw "private consumer build failed" }
+            ctest --test-dir $build -C Release --output-on-failure --no-tests=error
+            if ($LASTEXITCODE -ne 0) { throw "private consumer execution failed" }
+          }
+
       - name: Resolve package version
         shell: bash
         run: |

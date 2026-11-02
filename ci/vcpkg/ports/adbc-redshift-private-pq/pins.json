@@ -8,8 +8,9 @@
   "prefix": "adbc_rs_pq_17_11_v1_",
   "package_version": "17.11.1",
   "abi": 1,
-  "build_script_sha256": "5fc03305eac50d7274b0086151f6d56604dd3af999d54cf4da2851a328a09e0b",
-  "symbol_script_sha256": "3f10661294413ac534313e349fadd6453d0f14621c8fca6a4d287d5b3623fa06",
+  "build_script_sha256": "b039687ade10ef11d6ffbde7a42231f25926bbc932e9a9ed0fc44dbc4db49ac8",
+  "symbol_script_sha256": "f20b0a9ff1c50b6b0201e3249e2cd5c7f42c0bb6566152ca3599ebc69147f04d",
   "adbc_license_sha256": "dbce1a629c53c225d5aa8cd537c0a2bd9c0ea45d843cac08fa0c67bc2bc022c3",
-  "adbc_notice_sha256": "59d7cc401deb7b8ca6c6463848a9d6a302b18d83c2a3f75136bfead3c5c5f9bb"
+  "adbc_notice_sha256": "59d7cc401deb7b8ca6c6463848a9d6a302b18d83c2a3f75136bfead3c5c5f9bb",
+  "windows_build_script_sha256": "b109f0c2c822e701bb475793b15d0d283722196e6941e085a24a1637756226de"
 }
