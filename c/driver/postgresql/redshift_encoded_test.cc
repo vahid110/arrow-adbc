@@ -189,10 +189,11 @@ TEST(RedshiftEncodedTest, SpatialAxesEndianEmptySridAndUnknownFlags) {
       "0107000020e6100000010000000101000020110f0000000000000000f03f000000000000f03f");
   EXPECT_NE(RedshiftSpatial::Validate(Bytes(conflict), true, true, &error), 0);
   std::string chain;
-  for (int i = 0; i < 127; ++i) chain += Unhex("010700000001000000");
+  for (int i = 0; i < 100000; ++i) chain += Unhex("010700000001000000");
   chain += Unhex("010700000000000000");
   EXPECT_EQ(RedshiftSpatial::Validate(Bytes(chain), false, false, &error), 0);
-  chain = Unhex("010700000001000000") + chain;
+  EXPECT_EQ(RedshiftSpatial::Validate(Bytes(chain), false, true, &error), 0);
+  chain.pop_back();
   EXPECT_NE(RedshiftSpatial::Validate(Bytes(chain), false, false, &error), 0);
 }
 TEST(RedshiftEncodedTest, RetainedHllAndLexicalCounterexamples) {
@@ -451,7 +452,7 @@ std::string SizedSpatial(int64_t size) {
   return out;
 }
 TEST(RedshiftEncodedTest, SpatialTextParameterRetainsRawWriteCap) {
-  for (int64_t size : {500000, 500001}) {
+  for (int64_t size : {500001, 1048447, 1048448}) {
     nanoarrow::UniqueSchema schema;
     ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_LARGE_BINARY), 0);
     nanoarrow::UniqueArray array;
@@ -467,8 +468,8 @@ TEST(RedshiftEncodedTest, SpatialTextParameterRetainsRawWriteCap) {
         view.get(), false);
     nanoarrow::UniqueBuffer output;
     const int code = writer->Write(output.get(), 0, nullptr);
-    EXPECT_EQ(code, size == 500000 ? 0 : EINVAL);
-    if (size == 500000) {
+    EXPECT_EQ(code, size <= 1048447 ? 0 : EINVAL);
+    if (size <= 1048447) {
       EXPECT_EQ(output->size_bytes, 4 + 2 * size + 1);
       EXPECT_EQ(output->data[output->size_bytes - 1], 0);
       EXPECT_EQ(std::strlen(reinterpret_cast<char*>(output->data + 4)), 2 * size);
@@ -479,13 +480,20 @@ TEST(RedshiftEncodedTest, SpatialTextParameterRetainsRawWriteCap) {
 }
 TEST(RedshiftEncodedTest, ExactLocalReadWriteAndLogicalHllByteBoundaries) {
   ArrowError error{};
-  for (int64_t n : {500000, 500001, 1048447, 1048448}) {
+  for (int64_t n : {500000, 500001, 1048446, 1048447, 1048448}) {
     const auto value = SizedSpatial(n);
     ASSERT_EQ(value.size(), n);
     EXPECT_EQ(RedshiftSpatial::Validate(Bytes(value), false, true, &error) == 0,
-              n <= 500000);
+              n <= 1048447);
     EXPECT_EQ(RedshiftSpatial::Validate(Bytes(value), false, false, &error) == 0,
               n <= 1048447);
+    auto geography = SizedSpatial(n - 4);
+    geography[4] = 0x20;
+    geography.insert(5, Unhex("e6100000"));
+    ASSERT_EQ(geography.size(), n);
+    for (bool write : {false, true})
+      EXPECT_EQ(RedshiftSpatial::Validate(Bytes(geography), true, write, &error) == 0,
+                n <= 1048447);
   }
   std::string hll(kRetainedHll[0]);
   hll.append(1000000 - hll.size(), ' ');

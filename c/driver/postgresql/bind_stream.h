@@ -18,6 +18,7 @@
 #pragma once
 
 #include <algorithm>
+#include <climits>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -599,6 +600,11 @@ struct BindStream {
         UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
       }
 
+      if (validate_redshift_bytes &&
+          !ParameterMessageFits(param_buffer->size_bytes, array_view->n_children))
+        return Status::InvalidArgument(
+            "[libpq] Parameter row exceeds Bind message limit");
+
       int64_t param_length = param_buffer->size_bytes - last_offset - sizeof(int32_t);
       if (param_length > (std::numeric_limits<int>::max)()) {
         return Status::Internal("Parameter ", col, "serialized to >2GB of binary");
@@ -774,6 +780,18 @@ struct BindStream {
     return execution_status;
   }
 
+  // Batching is a throughput choice, never a smaller per-row value contract.
+  // Keep ordinary batches near 16 MiB; one larger row may use the protocol
+  // envelope (signed 32-bit message length including Bind framing).
+  static constexpr int64_t kTargetBatchBytes = 16 * 1024 * 1024;
+  static bool ParameterMessageFits(int64_t bytes, int64_t parameters) {
+    // Unnamed portal/statement, count words, one format code per parameter and
+    // one result format. The buffer already includes each four-byte value length.
+    // Reserve 16 bytes for fixed framing (including the message tag).
+    return bytes >= 0 && parameters >= 0 && parameters <= INT_MAX / 2 &&
+           bytes <= static_cast<int64_t>(INT_MAX) - 16 - 2 * parameters;
+  }
+
   Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,
                                  const std::string& fields, size_t max_rows,
                                  int64_t* executed_rows) {
@@ -797,6 +815,8 @@ struct BindStream {
     for (size_t row = 0; row < max_rows; row++) {
       UNWRAP_STATUS(EnsureNextRow());
       if (current->release == nullptr) break;
+      const int64_t row_start = param_buffer->size_bytes;
+      bool deferred = false;
 
       for (size_t col = 0; col < columns; col++) {
         int64_t field_row;
@@ -813,6 +833,24 @@ struct BindStream {
         } else {
           UNWRAP_STATUS(WriteParameter(col, field_row));
         }
+        // A partially serialized next row may cross the throughput target.
+        // Rewind both its bytes and cursor: EnsureNextRow must revisit exactly
+        // this row, including when it was the first row of a new input batch.
+        if (row && param_buffer->size_bytes > kTargetBatchBytes) {
+          param_buffer->size_bytes = row_start;
+          batch_types.resize(row * columns);
+          batch_lengths.resize(row * columns);
+          batch_formats.resize(row * columns);
+          batch_offsets.resize(row * columns);
+          batch_nulls.resize(row * columns);
+          --current_row;
+          deferred = true;
+          break;
+        }
+        if (validate_redshift_bytes &&
+            !ParameterMessageFits(param_buffer->size_bytes, (row + 1) * columns))
+          return Status::InvalidArgument(
+              "[libpq] Parameter row exceeds Bind message limit");
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {
           return Status::Internal("Parameter ", row * columns + col + 1,
@@ -824,7 +862,9 @@ struct BindStream {
         batch_offsets.push_back(start + sizeof(int32_t));
         batch_nulls.push_back(is_null);
       }
+      if (deferred) break;
       ++*executed_rows;
+      if (param_buffer->size_bytes >= kTargetBatchBytes) break;
     }
 
     if (*executed_rows == 0) return Status::Ok();

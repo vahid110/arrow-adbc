@@ -27,8 +27,10 @@ required mixed HLL results and direct SUPER/spatial
 parameters on 2026-10-28. These missing operations must be implemented before v1;
 documenting their rejection does not close acceptance. The local direct spatial
 candidate uses catalog-typed uppercase EWKB text and retains the existing raw
-input cap; source review and exact installed-candidate qualification are still
-required.
+input cap, now shared with reads at1,048,447 raw bytes. Local B3 code also
+raises SUPER JSON input to16MiB/depth1000 and removes the stored-object cap from
+native JSON serialization. Source review and exact installed-candidate
+qualification are still required.
 
 ## Current baseline
 

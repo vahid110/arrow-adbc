@@ -33,6 +33,13 @@ blockers are mandatory mixed HLL rows and direct SUPER/spatial binding, specific
 installed-operation and metadata gaps, and final candidate delivery. No exhaustive
 mathematical-domain proof is required. No release-ready claim is made.
 
+Local B3 candidate code aligns SUPER input with16MiB/depth1000 and spatial
+read/write raw EWKB with1,048,447 bytes, uses iterative validation and bounds
+aggregate ingest batches without skipping deferred rows. Native SUPER reads use
+received field length rather than a stored-object-size assumption. Boundary and
+ownership seams are local evidence; independent review, serial rebuilt validation
+and selected installed large-value/HLL-transition qualification remain pending.
+
 Task010q/q1 implements native SUPER observable JSON-wire reads at
 `26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
 and rebuilt installed-artifact validation. Isolated live qualification on macOS

@@ -569,7 +569,10 @@ and `ADBC:redshift:sql_type=SUPER`. This opts into generated ingest only. It is 
 metadata that a native opaque result can acquire to become lossless JSON.
 Arrow validity supplies SQL NULL; nonnull `null` supplies a JSON null document.
 The driver preserves validated UTF8 document bytes and numeric tokens up to the
-local 1,000,000-byte/128-container-depth subset. Numeric storage interpretation is
+local 16,777,216-byte/1000-container-depth JSON subset. Validation is iterative,
+strict UTF8 and decoded-key duplicate aware; no VARCHAR width cap is applied.
+This is a transport budget, not a promise that every document fits the stored
+SUPER object or per-string limits. Numeric storage interpretation is
 JSON_PARSE's server contract, not a host float conversion or full SUPER subtype,
 precision/scale or lexical roundtrip guarantee.
 
@@ -594,10 +597,11 @@ PostGIS EWKB structural subset includes seven shapes/Z/M/both endian orders;
 ISO offset variants and conflicting nested SRIDs reject. A missing top-level
 GEOMETRY SRID means0; GEOGRAPHY requires an embedded SRID. Empty POINT requires
 all ordinates NaN, other coordinates finite. Structure validation is not topology
-or reprojection. The local read payload cap is1,048,447 bytes, not full native
-boundary proof. Generated writes cap raw bytes at 500,000, pass owned raw EWKB as
-VARBYTE through `ST_GeomFromEWKB`, and explicitly cast for GEOGRAPHY. Direct
-spatial binding stays unsupported. Installed POINT controls accepted raw binary
+or reprojection. Reads and writes share the 1,048,447-byte raw EWKB cap.
+Collection frames are bounded by input bytes, without a separate depth128 cap.
+Generated writes pass owned raw EWKB as VARBYTE through `ST_GeomFromEWKB`, and
+explicitly cast for GEOGRAPHY. The local direct path uses catalog-typed uppercase
+EWKB text; hex expansion does not halve the raw input contract. Installed POINT controls accepted raw binary
 VARBYTE and rejected ASCIIhex VARBYTE. Subsequent installed evidence preserved
 spatial bytes and witnesses but exposed a GEOMETRY result-identity metadata gap.
 Task010k resolves documented Redshift output 3999 through unique catalog GEOMETRY,
@@ -629,8 +633,10 @@ Scalar SUPER results use output-only `adbc.redshift.super.native_json` large_utf
 with version1 metadata `encoding=redshift-json-wire`, `scope=native-result`,
 `numbers=lexemes`, `nulls=wire-null`. Received bytes and numeric spellings are
 unchanged; ordinary mixed fields keep binary codecs. No casts, rewrites or
-reexecution are added. Local serialized output bounds are16,777,216 bytes and1000
-container levels; this is not full stored16MB object qualification. SQL wire NULL
+reexecution are added. Native JSON may expand beyond the stored16MB object
+limit. Validation uses the actual received signed32-bit field length and1000
+container levels; checked64-bit Arrow append preserves bytes without a stored-size
+cap on serialization. SQL wire NULL
 maps to Arrow NULL; retained SQL NULL and parsed JSON null inputs produced the
 same wire NULL, so the driver cannot reconstruct their original distinction.
 Received nonnull JSON `null` remains nonnull. Original input spelling, native
@@ -640,3 +646,21 @@ Bounded installed macOS arm64 live qualification verified native SUPER through
 Python in Arrow temporal mode and standalone C in lossless temporal mode. The
 original C Arrow-mode fixture failure remains recorded; its corrected case was
 not rerun. See [current qualification results](STATUS.md) for scope and limits.
+
+### Local vendor value limits (V1 B3)
+
+The limits above have local boundary/adjacent, deep nesting, malformed input,
+allocation-failure and byte-preservation tests. Native SUPER escaped output above
+16MiB is covered locally. Generated batches target16MiB of framed values and
+flush between rows; a single wider row is permitted subject to signed32-bit Bind
+message framing and allocation success. Deferred rows are retried once in order,
+including across Arrow batch boundaries. Generic PostgreSQL binding keeps its
+existing policy. This is code evidence, not large-value live qualification.
+
+AWS documents [SUPER stored/depth/string limits](https://docs.aws.amazon.com/redshift/latest/dg/limitations-super.html)
+and the [spatial object limit](https://docs.aws.amazon.com/redshift/latest/dg/spatial-limitations.html).
+Stored object size, JSON serialization, raw EWKB and text parameter expansion are
+different budgets. The retained nine native feasibility probes establish only
+small direct transport controls. Installed large SUPER/spatial fixtures and the
+finite sparse-to-dense HLL transition remain pending; HLL's known-format1,000,000
+encoded-byte contract is unchanged.

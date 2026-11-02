@@ -2390,12 +2390,13 @@ TEST_F(IntervalPublicRecordingTest,
       nanoarrow::UniqueArray array;
       ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
       ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
-      std::string value = testing::NumericHex("0102000020e610000088130000");
+      std::string value = testing::NumericHex("0102000020e610000050c30000");
       const auto zero = testing::NumericHex("00000000000000000000000000000000");
       const auto one = testing::NumericHex("000000000000f03f000000000000f03f");
-      for (int i = 0; i < 5000; ++i) value += i % 2 ? one : zero;
+      for (int i = 0; i < 50000; ++i) value += i % 2 ? one : zero;
       ASSERT_GT(value.size(), 65536);
-      ASSERT_LT(value.size(), 500000);
+      ASSERT_GT(value.size(), 500000);
+      ASSERT_LT(value.size(), 1048447);
       for (int row = 0; row < 3; ++row) {
         if (row != 1) {
           ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
@@ -2718,6 +2719,7 @@ TEST_F(IntervalPublicRecordingTest, VarbyteDomainBothParameterRoutesAndBindings)
 }
 #include "redshift_spatial_prepared_recording_test.inc"
 #include "redshift_super_prepared_recording_test.inc"
+#include "redshift_vendor_limits_recording_test.inc"
 
 }  // namespace
 }  // namespace adbcpq
