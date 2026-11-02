@@ -60,6 +60,7 @@ echo "=== Importing and loading the bundled driver ==="
 cd "${work}"
 library=$("${venv_python}" - "${expected_version}" <<'EOF'
 import importlib.metadata
+import json
 import pathlib
 import sys
 
@@ -78,6 +79,15 @@ path = pathlib.Path(adbc_driver_redshift._driver_path()).resolve()
 assert path.is_file(), path
 assert path.name == "libadbc_driver_redshift.so", path
 assert pathlib.Path(sys.prefix).resolve() in path.parents, (path, sys.prefix)
+
+provenance = path.parent / "_private_pq"
+receipt = json.loads((provenance / "provenance.json").read_text())
+pins = json.loads((provenance / "pins.json").read_text())
+assert receipt["pins"] == pins
+assert pins["abi"] == 1 and pins["package_version"] == "17.11.1"
+assert receipt["status"] == "built-audited-installed-socket-free-probe-passed"
+assert (provenance / "PostgreSQL-COPYRIGHT").is_file()
+assert (provenance / "recipe/ci/scripts/pgwire_private_pq.py").is_file()
 
 # The driver manager loads the bundled library and its entrypoint; the driver
 # (with its static libpq) then reports the bad URI.

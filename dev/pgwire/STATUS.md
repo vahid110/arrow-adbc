@@ -32,6 +32,8 @@ namespace and per-column result dispatch: HLL text, every other field binary,
 with exact described-result verification and no retry. Local recorder coverage
 is not installed/native qualification. Windows/cross packaging and the seven
 C-distribution/five-wheel gates remain open; stock PostgreSQL stays separate.
+Portable build inputs and provenance staging are wired locally, with source-only
+checks. Windows still fails closed pending its native package implementation.
 
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 [finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release

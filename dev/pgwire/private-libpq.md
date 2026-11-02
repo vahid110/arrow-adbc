@@ -103,7 +103,17 @@ bit-identical archives across different compiler/SDK/install paths.
 The uniquely named vcpkg overlay `adbc-redshift-private-pq` uses the same script
 for native Linux/macOS static-release triplets. It never replaces the ordinary
 `libpq` port, and script digests participate in its cache inputs. This adapter is
-prepared but unqualified until built on each intended runner. No release/wheel workflow has been switched. Driver CMake/Meson configuration
+prepared but unqualified until built on each intended runner. The seven C package
+and five wheel jobs now request the unique private dependency; Unix package and
+fast driver/Python CI build the pinned source directly, while wheels and Windows
+use the overlay. Ordinary PostgreSQL still uses its original libpq dependency.
+Source downloads require both pinned hashes. Packaging verifies the full private
+installation against its build receipt and carries licenses, patches, namespace
+inventory and the exact build recipe; wheels carry these under `_private_pq`.
+For a local wheel, first run `pgwire_private_pq_distribution.py stage <prefix>
+python/adbc_driver_redshift/adbc_driver_redshift/_private_pq` against the matching
+private dependency install; the wheel build rejects absent provenance.
+Driver CMake/Meson configuration
 now requires this dependency and rejects a missing/wrong ABI/helper package.
 Explicit PostgreSQL-only builds can set `ADBC_DRIVER_REDSHIFT=OFF` or Meson
 `-Dredshift=false`; those builds retain stock libpq and do not build Redshift.
@@ -113,9 +123,11 @@ can close: use PostgreSQL 17.11's Meson static frontend libpq/common/port varian
 including their private encoding aliases; disable PCH/LTO for the initial proof;
 generate the namespace from that exact COFF trio and apply `/FI` during rebuild.
 Extend the inventory reader for reviewed COFF symbol kinds/compiler globals,
-preserve the existing static CRT triplets, and require the same exact-definition
+preserve the existing static-library/dynamic-CRT (`/MD`) triplets, and require the same exact-definition
 and reference audits. Never reuse the Darwin map or mix Meson static frontend
-objects with Make's shlib variants. Windows/cross builds currently fail explicitly.
+objects with Make's shlib variants. Windows/cross builds currently fail explicitly. The Windows jobs remain in both
+matrices and cannot pass until the native package route is implemented and
+qualified; no portable matrix success is claimed by this source-only wiring.
 There is no silent fallback to ordinary libpq.
 
 Then validate all seven C distributions and five wheels: installed/relocated

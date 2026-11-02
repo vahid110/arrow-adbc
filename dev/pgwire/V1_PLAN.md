@@ -72,7 +72,8 @@ This roadmap grants no additional paid attempt or publication authority.
 
 The [private libpq dependency](private-libpq.md) supplies local B1 Redshift
 linkage and mixed HLL result dispatch. Installed/native qualification remains
-pending. Windows/cross and all seven C/five wheel validations remain B6 gates.
+pending. Portable dependency/provenance wiring is local and unqualified; Windows
+still fails closed. Windows/cross and all seven C/five wheel validations remain B6 gates.
 
 Queries, core metadata, transactions, cancellation and prepared INSERT ingestion
 are implemented. Packaging supports seven archive targets and five portable

@@ -45,6 +45,8 @@ on:
     paths:
       - ".github/workflows/pgwire-release.yml"
       - ".github/workflows/pgwire-package.yml"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/ports/adbc-redshift-private-pq/**"
       - "c/driver/pgwire/install_smoke/**"
       - "c/driver/pgwire/redshift_manifest_smoke.c"
 

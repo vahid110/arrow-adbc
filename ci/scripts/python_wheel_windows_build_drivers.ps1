@@ -53,7 +53,7 @@ if ($Architecture -eq "amd64") {
 $BuildType = "RelWithDebInfo"
 $FlightSql = if ($Components -contains "adbc_driver_flightsql") { "ON" } else { "OFF" }
 $Sqlite = if ($Components -contains "adbc_driver_sqlite") { "ON" } else { "OFF" }
-$VcpkgPackages = @("libpq")
+$VcpkgPackages = @("libpq", "adbc-redshift-private-pq")
 if ($Sqlite -eq "ON") {
     $VcpkgPackages += "sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]"
 }
@@ -67,8 +67,16 @@ Write-Host "=== Building ADBC drivers for $Architecture ==="
 & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
     "--triplet=$VcpkgTriplet" `
     @VcpkgPackages `
-    --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets")
+    --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets") `
+    --overlay-ports $(Join-Path $SourceDir "ci\vcpkg\ports")
 if (-not $?) { throw "Failed to install vcpkg dependencies" }
+
+if ($Components -contains "adbc_driver_redshift") {
+    python (Join-Path $SourceDir "ci/scripts/pgwire_private_pq_distribution.py") stage `
+        (Join-Path $env:VCPKG_ROOT "installed/$VcpkgTriplet") `
+        (Join-Path $SourceDir "python/adbc_driver_redshift/adbc_driver_redshift/_private_pq")
+    if (-not $?) { throw "Failed to verify private-pq provenance" }
+}
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 

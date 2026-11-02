@@ -51,6 +51,7 @@ function build_drivers {
     : ${ADBC_DRIVER_SQLITE:=ON}
     # Add our custom triplets
     export VCPKG_OVERLAY_TRIPLETS="${source_dir}/ci/vcpkg/triplets/"
+    export VCPKG_OVERLAY_PORTS="${source_dir}/ci/vcpkg/ports/"
 
     find_drivers "${2}"
 
@@ -72,13 +73,20 @@ function build_drivers {
     echo "=== Setup VCPKG ==="
 
     # Need to install sqlite3 to make CMake be able to find it below
-    local vcpkg_packages=(libpq)
+    local vcpkg_packages=(libpq adbc-redshift-private-pq)
     if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then
         vcpkg_packages+=('sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]')
     fi
     "${VCPKG_ROOT}/vcpkg" install "${vcpkg_packages[@]}" \
           --overlay-triplets "${VCPKG_OVERLAY_TRIPLETS}" \
+          --overlay-ports "${VCPKG_OVERLAY_PORTS}" \
           --triplet "${VCPKG_DEFAULT_TRIPLET}"
+
+    if [[ " ${COMPONENTS} " == *" adbc_driver_redshift "* ]]; then
+        python "${source_dir}/ci/scripts/pgwire_private_pq_distribution.py" stage \
+            "${VCPKG_ROOT}/installed/${VCPKG_DEFAULT_TRIPLET}" \
+            "${source_dir}/python/adbc_driver_redshift/adbc_driver_redshift/_private_pq"
+    fi
 
     echo "=== Building drivers ==="
     mkdir -p ${build_dir}
