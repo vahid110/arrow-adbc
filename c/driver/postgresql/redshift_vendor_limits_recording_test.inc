@@ -43,13 +43,14 @@ TEST(RedshiftVendorLimitsRecordingTest, ByteFlushRevisitsRowsAcrossInputBoundari
                          : batch == 1 ? 1
                                       : (invalid_tail ? 4 : 3);
           for (int row = begin; row < end; ++row) {
-            if (wide_row && row == 0)
+            if (wide_row && row == 0) {
               ASSERT_EQ(ArrowArrayAppendString(array->children[0],
                                                {large.data(),
                                                 static_cast<int64_t>(large.size())}),
                         0);
-            else
+            } else {
               ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
+            }
             large[1] = static_cast<char>('a' + row);
             const std::string_view value = row == 3 ? std::string_view(R"({"a":1,"\u0061":2})")
                                                    : std::string_view(large);

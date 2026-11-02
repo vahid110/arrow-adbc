@@ -104,13 +104,16 @@ TEST_F(SpatialPreparedRecordingTest, ArrayStreamPointNullEmptyMixedNeighborsNoRe
           EXPECT_EQ(params[0].null, row == 1);
           EXPECT_EQ(params[0].physical_length,
                     row == 1 ? 0 : 1 + std::strlen(row == 0 ? kPoint : kEmpty));
-          if (row != 1) EXPECT_EQ(params[0].bytes, row == 0 ? kPoint : kEmpty);
+          if (row != 1) {
+            EXPECT_EQ(params[0].bytes, row == 0 ? kPoint : kEmpty);
+          }
           for (int col = 1; col < 3; ++col) {
             EXPECT_EQ(params[col].oid, col == 1 ? 72112 : 23);
             EXPECT_EQ(params[col].format, 1);
             EXPECT_EQ(params[col].null, col == null_at);
-            if (col != null_at)
+            if (col != null_at) {
               EXPECT_EQ(params[col].bytes, Raw(col == 1 ? "0080ff" : "ffffffb9"));
+            }
           }
         }
         for (const auto& query : recording.queries)
@@ -266,8 +269,9 @@ TEST_F(SpatialPreparedRecordingTest,
     EXPECT_EQ(status, fail_at < 0 ? ADBC_STATUS_OK : ADBC_STATUS_IO) << Message();
     EXPECT_EQ(recording.executions.size(), fail_at < 0 ? 3 : 1);
     EXPECT_EQ(releases, 1);
-    if (fail_at >= 0)
+    if (fail_at >= 0) {
       EXPECT_NE(std::string(Message()).find("spatial input failure"), std::string::npos);
+    }
   }
 }
 
@@ -346,9 +350,15 @@ TEST_F(SpatialPreparedRecordingTest, CombinedSuperAndHllKeepSpatialNativeTextPar
           EXPECT_EQ(values[col].null, col == null_at);
         }
         EXPECT_EQ(values[0].bytes, super ? "true" : kSparseHll);
-        if (null_at != 1) EXPECT_EQ(values[1].bytes, kPoint);
-        if (null_at != 2) EXPECT_EQ(values[2].bytes, kEmpty);
-        if (null_at != 3) EXPECT_EQ(values[3].bytes, kSparseHll);
+        if (null_at != 1) {
+          EXPECT_EQ(values[1].bytes, kPoint);
+        }
+        if (null_at != 2) {
+          EXPECT_EQ(values[2].bytes, kEmpty);
+        }
+        if (null_at != 3) {
+          EXPECT_EQ(values[3].bytes, kSparseHll);
+        }
         EXPECT_EQ(values[4].bytes, Raw("0080ff"));
         EXPECT_EQ(values[5].bytes, Raw("ffffffb9"));
         EXPECT_EQ(recording.prepared_query,

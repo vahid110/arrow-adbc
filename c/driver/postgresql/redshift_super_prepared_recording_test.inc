@@ -89,7 +89,9 @@ TEST_F(SuperPreparedRecordingTest, ArrayAndStreamKeepLogicalLabelsAndPhysicalByt
       EXPECT_EQ(value.oid, 72112U);
       EXPECT_EQ(value.format, 1);
       EXPECT_EQ(value.null, !values[i].has_value());
-      if (values[i]) EXPECT_EQ(value.bytes, *values[i]);
+      if (values[i]) {
+        EXPECT_EQ(value.bytes, *values[i]);
+      }
     }
     ExpectDispatchOrder(values.size());
   }
