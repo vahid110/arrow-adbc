@@ -90,10 +90,23 @@ TEST(RedshiftSuperTest, ExactJsonGrammarAndDecodedDuplicateKeys) {
   EXPECT_NE(Json(std::string("null\0", 5)), 0);
 }
 TEST(RedshiftSuperTest, InclusiveDepthAndEncodedByteLimits) {
-  EXPECT_EQ(Json(std::string(128, '[') + "0" + std::string(128, ']')), 0);
-  EXPECT_NE(Json(std::string(129, '[') + "0" + std::string(129, ']')), 0);
-  EXPECT_EQ(Json("\"" + std::string(999998, 'a') + "\""), 0);
-  EXPECT_NE(Json("\"" + std::string(999999, 'a') + "\""), 0);
+  EXPECT_EQ(Json(std::string(1000, '[') + "0" + std::string(1000, ']')), 0);
+  EXPECT_NE(Json(std::string(1001, '[') + "0" + std::string(1001, ']')), 0);
+  // Array whitespace reaches the encoded limit without exceeding the separate
+  // server string-value limit. Validation must not apply a VARCHAR byte cap.
+  std::string value = "[0" + std::string(RedshiftSuperSchema::kMaxBytes - 3, ' ') + "]";
+  EXPECT_EQ(Json(value), 0);
+  value.insert(value.size() - 1, " ");
+  EXPECT_NE(Json(value), 0);
+  std::string prefix, suffix;
+  for (int i = 0; i < 999; ++i) {
+    prefix += "{\"a\":";
+    suffix += "}";
+  }
+  EXPECT_EQ(Json(prefix + R"({"a":1})" + suffix), 0);
+  EXPECT_NE(Json(prefix + R"({"a":1,"\u0061":2})" + suffix), 0);
+  EXPECT_EQ(Json(R"([{"a":1},{"a":2}])"), 0);
+  EXPECT_NE(Json(R"({"a":{"b":1},"\u0061":2})"), 0);
 }
 TEST(RedshiftSuperTest, ExactStorageBackendAndRoutePreflight) {
   nanoarrow::UniqueSchema schema;
@@ -108,7 +121,7 @@ TEST(RedshiftSuperTest, ExactStorageBackendAndRoutePreflight) {
       RedshiftSuperSchema::ValidateRoute(schema.get(), true, true, false, &has, &error),
       0);
   EXPECT_TRUE(has);
-  EXPECT_NE(
+  EXPECT_EQ(
       RedshiftSuperSchema::ValidateRoute(schema.get(), true, false, false, &has, &error),
       0);
   EXPECT_NE(
@@ -297,6 +310,18 @@ TEST(RedshiftSuperTest, ScannerKeyNodeAndBucketFailuresReturnEnomem) {
   EXPECT_TRUE(succeeded);
   EXPECT_GE(failed, 3);  // Decoded key storage, node and bucket allocations.
 }
+TEST(RedshiftSuperTest, SpatialFrameAllocationFailureIsEnomemAndRetrySucceeds) {
+  const char ewkb[] = {1, 7, 0, 0, 0, 0, 0, 0, 0};
+  ArrowBufferView bytes{};
+  bytes.data.as_char = ewkb;
+  bytes.size_bytes = sizeof(ewkb);
+  ArrowError error{};
+  testing::super_allocation_fail_after = 0;
+  const int result = RedshiftSpatial::Validate(bytes, false, true, &error);
+  testing::super_allocation_fail_after = -1;
+  EXPECT_EQ(result, ENOMEM);
+  EXPECT_EQ(RedshiftSpatial::Validate(bytes, false, true, &error), 0);
+}
 TEST(RedshiftSuperTest, ReplacementAllocatorMatchesAllDeleteFormsAndResetsFailure) {
   auto* scalar = static_cast<char*>(::operator new(17));
   scalar[16] = 'x';
@@ -365,7 +390,7 @@ TEST(RedshiftSuperTest, NativeGrammarPreservesDistinctWritePolicyAndFullDepth) {
   EXPECT_EQ(NativeJson(prefix + R"("\ud83d\ude00")" + suffix), 0);
   EXPECT_NE(NativeJson(prefix + "[0]" + suffix), 0);
   EXPECT_NE(NativeJson(prefix + "[0,]" + suffix), 0);
-  EXPECT_NE(Json(std::string(129, '[') + "0" + std::string(129, ']')), 0);
+  EXPECT_NE(Json(std::string(1001, '[') + "0" + std::string(1001, ']')), 0);
   for (const char* json : {"",      " ",        "null false",  "nullx",       "[",
                            "{",     "[1,]",     "{\"a\":1,}",  "{\"a\" 1}",   "[1 2]",
                            "[1}",   "01",       "-",           "1.",          "1e+",
@@ -378,12 +403,34 @@ TEST(RedshiftSuperTest, NativeGrammarPreservesDistinctWritePolicyAndFullDepth) {
   EXPECT_NE(NativeJson(std::string("null\0", 5)), 0);
 }
 TEST(RedshiftSuperTest, NativeReceivedByteLimitIsSeparateFromVarcharAndInput) {
-  const auto limit = RedshiftSuperResultSchema::kMaxBytes;
-  std::string text = "\"" + std::string(limit - 2, 'a') + "\"";
+  // Escaped serialized output can exceed the stored object budget.
+  std::string text = "\"";
+  for (int i = 0; i < 3000000; ++i) text += "\\u0000";
+  text += "\"";
+  ASSERT_GT(text.size(), RedshiftSuperSchema::kMaxBytes);
   EXPECT_EQ(NativeJson(text), 0);
   EXPECT_NE(Json(text), 0);
-  text.insert(text.size() - 1, "a");
-  EXPECT_NE(NativeJson(text), 0);
+  ArrowError error{};
+  auto over = NativeBytes("0");
+  over.size_bytes = static_cast<int64_t>(INT32_MAX) + 1;
+  EXPECT_EQ(RedshiftSuperResultSchema::Validate(over, &error), EINVAL);
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  ASSERT_EQ(RedshiftSuperResultSchema::SetSchema(schema.get()), 0);
+  nanoarrow::UniqueArray array;
+  ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), &error), 0);
+  ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+  RedshiftSuperFieldReader reader;
+  ASSERT_EQ(reader.InitSchema(schema.get()), 0);
+  ASSERT_EQ(reader.InitArray(array.get()), 0);
+  auto bytes = NativeBytes(text);
+  ASSERT_EQ(reader.Read(&bytes, text.size(), array.get(), &error), 0);
+  EXPECT_EQ(bytes.size_bytes, 0);
+  EXPECT_EQ(array->length, 1);
+  EXPECT_EQ(ArrowArrayBuffer(array.get(), 2)->size_bytes, text.size());
+  EXPECT_EQ(std::memcmp(ArrowArrayBuffer(array.get(), 2)->data, text.data(), text.size()),
+            0);
 }
 TEST(RedshiftSuperTest, NativeSchemaIsBackendCatalogScopedAndNotWriteInput) {
   ArrowError error{};

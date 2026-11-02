@@ -36,14 +36,24 @@ publication is claimed here.
 
 ## Example
 
-The URI is a libpq connection URI. Redshift listens on port 5439 by
-default, and `sslmode=require` is recommended. The driver rejects servers
-that are not Redshift.
+The URI is a libpq connection URI. Redshift listens on port 5439 by default.
+Use `sslmode=verify-full` with a trusted CA bundle to verify the server certificate
+and hostname. The driver rejects servers that are not Redshift. Supply connection
+values privately and do not log the URI.
 
 ```python
+import os
 import adbc_driver_redshift.dbapi
+from adbc_driver_redshift.iam import build_uri
 
-uri = "postgresql://user:password@host:5439/dev?sslmode=require"
+uri = build_uri(
+    host=os.environ["REDSHIFT_HOST"],
+    database=os.environ["REDSHIFT_DATABASE"],
+    db_user=os.environ["REDSHIFT_USER"],
+    db_password=os.environ["REDSHIFT_PASSWORD"],
+    sslmode="verify-full",
+    extra_params={"sslrootcert": os.environ["REDSHIFT_CA_FILE"]},
+)
 with adbc_driver_redshift.dbapi.connect(uri) as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT 1")
@@ -65,6 +75,7 @@ The helper has no hard ``boto3`` dependency; it accepts an already-created
 client so tests can inject a fake.
 
 ```python
+import os
 import boto3
 from adbc_driver_redshift.iam import (
     build_uri,
@@ -82,7 +93,8 @@ uri = build_uri(
     database="dev",
     db_user=creds["dbUser"],
     db_password=creds["dbPassword"],
-    sslmode="require",
+    sslmode="verify-full",
+    extra_params={"sslrootcert": os.environ["REDSHIFT_CA_FILE"]},
 )
 
 # Provisioned (redshift:GetClusterCredentials)
@@ -94,7 +106,8 @@ uri2 = build_uri(host="my-cluster.xxx.eu-north-1.redshift.amazonaws.com",
                  database="dev",
                  db_user=creds2["DbUser"],
                  db_password=creds2["DbPassword"],
-                 sslmode="require")
+                 sslmode="verify-full",
+                 extra_params={"sslrootcert": os.environ["REDSHIFT_CA_FILE"]})
 
 # With IAM identity mapping (redshift:GetClusterCredentialsWithIAM)
 from adbc_driver_redshift.iam import fetch_cluster_credentials_with_iam
@@ -107,8 +120,8 @@ with adbc_driver_redshift.dbapi.connect(uri) as conn:
 ```
 
 Credentials expire (900-3600 s, typically 900 s).  Fetch fresh credentials
-before each new connection; existing connections stay valid until closed but
-new ones need a new password.  Do not log the URI or password.
+before opening or reconnecting a database. Expiry limits new logins; it does not
+itself close an established session.  Do not log the URI or password.
 
 See [Use IAM authentication to generate database user credentials][iam-creds]
 and [GetCredentials][get-creds] / [GetClusterCredentials][get-ccreds] for IAM

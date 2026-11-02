@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +38,7 @@
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
 #include "redshift_super_allocation_test.h"
+#include "redshift_super_prepared.h"
 #include "redshift_super_test_fixture.h"
 #include "redshift_timetz_test_fixture.h"
 
@@ -51,6 +54,15 @@ struct RecordedParameter {
 struct Recording {
   std::vector<std::string> queries;
   std::vector<Oid> prepared;
+  bool direct_super = false, prepared_valid = false;
+  bool direct_spatial = false, spatial_projection = false, spatial_execute_error = false;
+  int spatial_mismatch = 0, spatial_prepare_calls = 0, spatial_output_drift = 0;
+  int converter_drift = 0, direct_descriptor_drift = 0, direct_columns = 1;
+  bool direct_integer_projection = false;
+  std::string direct_failure;
+  std::vector<std::string> events;
+  std::map<const PGresult*, std::vector<Oid>> parameter_descriptions;
+  std::map<const PGresult*, std::map<int, std::string>> diagnostics;
   std::string prepared_query;
   std::vector<std::vector<RecordedParameter>> executions;
   PGTransactionStatusType transaction = PQTRANS_IDLE;
@@ -175,9 +187,69 @@ PGresult* VendorResult(std::string_view query, int format,
   }
   return out;
 }
+PGresult* DirectSuperError() {
+  auto* result = PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
+  recording.diagnostics[result] = {
+      {PG_DIAG_SQLSTATE, "XX000"},
+      {PG_DIAG_STATEMENT_POSITION, "15"},
+      {PG_DIAG_INTERNAL_POSITION, "9"},
+      {PG_DIAG_MESSAGE_PRIMARY, "preserved producer failure"}};
+  return result;
+}
+PGresult* DirectSuperResult(bool describe, int format) {
+  const bool physical =
+      recording.prepared_query.find("\"pg_catalog\".\"json_parse\"") != std::string::npos;
+  const bool select = recording.prepared_query.starts_with("SELECT") ||
+                      recording.prepared_query.starts_with("WITH");
+  if (!select) return Command();
+  auto* out = PQmakeEmptyPGresult(nullptr, describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
+  PGresAttDesc attr{};
+  const bool alias = recording.prepared_query.ends_with(" AS value");
+  attr.name = const_cast<char*>(alias ? "value" : physical ? "json_parse" : "?column?");
+  attr.typid = recording.direct_integer_projection ? 67009 : 72111;
+  attr.atttypmod = -1;
+  attr.format = format;
+  if (physical && recording.direct_descriptor_drift) {
+    if (recording.direct_descriptor_drift == 1 && !describe)
+      attr.name = const_cast<char*>("drift");
+    if (recording.direct_descriptor_drift == 2) attr.typid = 72112;
+    if (recording.direct_descriptor_drift == 3) attr.atttypmod = 42;
+    if (recording.direct_descriptor_drift == 4) attr.tableid = 7;
+    if (recording.direct_descriptor_drift == 5) attr.columnid = 2;
+    if (recording.direct_descriptor_drift == 6 && !describe) attr.format = 1 - format;
+  }
+  std::vector<PGresAttDesc> attrs(recording.direct_columns, attr);
+  if (!PQsetResultAttrs(out, recording.direct_columns, attrs.data())) std::abort();
+  if (!describe) {
+    const auto& param = recording.executions.back()[0];
+    const std::string integer("\0\0\0\0\0\0\0\1", 8);
+    const auto& bytes = recording.direct_integer_projection ? integer : param.bytes;
+    for (int col = 0; col < recording.direct_columns; ++col)
+      if (!PQsetvalue(out, 0, col, param.null ? nullptr : const_cast<char*>(bytes.data()),
+                      param.null ? -1 : static_cast<int>(bytes.size())))
+        std::abort();
+  }
+  return out;
+}
 PGresult* Query(const char* query) {
   std::string q(query);
   recording.queries.push_back(q);
+  if (recording.direct_super) {
+    recording.prepared_valid = false;
+    recording.events.push_back("query");
+    if (q == adbcpq::RedshiftSuperPrepared::kCatalog) {
+      if (recording.converter_drift == 5) return Rows(8, {});
+      std::vector<const char*> row = {"pg_catalog", "json_parse", "78001", "1",
+                                      "72112",      "72111",      "1",     "12"};
+      if (recording.converter_drift == 1) row[0] = "public";
+      if (recording.converter_drift == 2) row[4] = "72111";
+      if (recording.converter_drift == 3) row[5] = "72112";
+      if (recording.converter_drift == 6) row[6] = nullptr;
+      return Rows(8, recording.converter_drift == 4
+                         ? std::vector<std::vector<const char*>>{row, row}
+                         : std::vector<std::vector<const char*>>{row});
+    }
+  }
   if (q == "SELECT owned_geometry" || q.starts_with("SELECT owned_super")) {
     ++recording.vendor_result_calls;
     return VendorResult(q, 1);
@@ -204,6 +276,7 @@ PGresult* Query(const char* query) {
     return Rows(5, {{"64001", "intervaly2m", "unqualified_fixture_receive", "0", "0"},
                     {"65017", "intervald2s", "unqualified_fixture_receive", "0", "0"},
                     {"67009", "int8", "int8recv", "0", "0"},
+                    {"23", "int4", "int4recv", "0", "0"},
                     {"65113", "timetz", "timetz_recv", "0", "0"},
                     {"75001", "bpchar", "bpcharrecv", "0", "0"},
                     {"75002", "text", "textrecv", "0", "0"},
@@ -284,11 +357,35 @@ PGresult* Query(const char* query) {
   ADD_FAILURE() << "Unexpected recording query: " << q;
   return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
 }
+PGresult* SpatialParameterResult(bool describe) {
+  if (!recording.spatial_projection) return Command();
+  auto* out = PQmakeEmptyPGresult(nullptr, describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
+  PGresAttDesc attr{};
+  attr.name = const_cast<char*>("marker");
+  attr.typid =
+      recording.spatial_output_drift && (recording.spatial_prepare_calls > 1 || !describe)
+          ? 20
+          : 23;
+  attr.format = describe ? 0 : 1;
+  attr.atttypmod = -1;
+  if (!PQsetResultAttrs(out, 1, &attr)) std::abort();
+  if (!describe) {
+    const auto bytes = adbcpq::testing::NumericHex("ffffffb9");
+    if (!PQsetvalue(out, 0, 0, const_cast<char*>(bytes.data()), bytes.size()))
+      std::abort();
+  }
+  return out;
+}
 PGresult* Parameters(int n, const Oid* types, const char* const* values,
                      const int* lengths, const int* formats) {
   std::vector<RecordedParameter> row;
   for (int col = 0; col < n; ++col) {
-    EXPECT_EQ(formats[col], types[col] == 72115 ? 0 : 1);
+    EXPECT_EQ(formats[col],
+              types[col] == 72115 || types[col] == 72113 || types[col] == 72114 ? 0 : 1);
+    if (values[col] && formats[col] == 0) {
+      EXPECT_GT(lengths[col], 0);
+      EXPECT_EQ(values[col][lengths[col] - 1], 0);
+    }
     row.push_back({types[col], values[col] == nullptr,
                    values[col] ? std::string(values[col], formats[col] == 0
                                                               ? std::strlen(values[col])
@@ -349,12 +446,35 @@ PGresult* PQexecParams(PGconn*, const char* query, int n, const Oid* types,
 PGresult* PQprepare(PGconn*, const char*, const char* query, int n, const Oid* types) {
   recording.queries.emplace_back(query);
   recording.prepared_query = query;
+  recording.prepared_valid = true;
+  if (recording.direct_spatial) ++recording.spatial_prepare_calls;
+  if (recording.direct_super) {
+    const bool physical = recording.prepared_query.find(
+                              "\"pg_catalog\".\"json_parse\"") != std::string::npos;
+    recording.events.push_back(physical ? "physical-prepare" : "logical-prepare");
+    if (recording.direct_failure == recording.events.back()) return DirectSuperError();
+  }
   recording.prepared.clear();
   if (n) recording.prepared.assign(types, types + n);
   return Command();
 }
 PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
                          const int* lengths, const int* formats, int result_format) {
+  if (recording.direct_spatial) {
+    if (!recording.prepared_valid) return DirectSuperError();
+    auto* captured = Parameters(n, recording.prepared.data(), values, lengths, formats);
+    PQclear(captured);
+    if (recording.spatial_execute_error) return DirectSuperError();
+    return SpatialParameterResult(false);
+  }
+  if (recording.direct_super) {
+    recording.events.push_back("execute");
+    if (!recording.prepared_valid) return DirectSuperError();
+    auto* captured = Parameters(n, recording.prepared.data(), values, lengths, formats);
+    PQclear(captured);
+    if (recording.direct_failure == "execute") return DirectSuperError();
+    return DirectSuperResult(false, result_format);
+  }
   EXPECT_EQ(recording.prepared.size(), static_cast<size_t>(n));
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       recording.prepared_query.starts_with("SELECT owned_super")) {
@@ -375,6 +495,16 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
 PGresult* PQdescribePrepared(PGconn*, const char*) {
+  if (recording.direct_spatial) return SpatialParameterResult(true);
+  if (recording.direct_super) {
+    recording.events.push_back("describe");
+    if (!recording.prepared_valid) return DirectSuperError();
+    auto* result = DirectSuperResult(true, 0);
+    recording.parameter_descriptions[result] = recording.prepared;
+    if (recording.direct_descriptor_drift == 7 && !recording.prepared.empty())
+      recording.parameter_descriptions[result][0] = 99999;
+    return result;
+  }
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       recording.prepared_query == "SELECT owned_geometry")
     return VendorResult(recording.prepared_query, 0, PGRES_COMMAND_OK);
@@ -384,7 +514,11 @@ PGresult* PQdescribePrepared(PGconn*, const char*) {
              ? TimetzResult(true, PGRES_COMMAND_OK)
              : Command();
 }
-int PQnparams(const PGresult*) {
+int PQnparams(const PGresult* result) {
+  if (recording.direct_spatial)
+    return recording.prepared.size() + (recording.spatial_mismatch == 1 ? 1 : 0);
+  if (recording.direct_super)
+    return static_cast<int>(recording.parameter_descriptions[result].size());
   if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 1;
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
@@ -392,13 +526,28 @@ int PQnparams(const PGresult*) {
     return recording.prepared.size();
   return recording.prepared_query == "SELECT owned_timetz_param" ? 1 : 0;
 }
-Oid PQparamtype(const PGresult*, int index) {
+Oid PQparamtype(const PGresult* result, int index) {
+  if (recording.direct_spatial) {
+    if (recording.spatial_mismatch == 2 && index == 0) return 3999;
+    if (recording.spatial_mismatch == 3 && index == 0)
+      return recording.prepared[index] == 72113 ? 72114 : 72113;
+    if (recording.spatial_mismatch == 4 && index == 1) return 23;
+    return recording.prepared[index];
+  }
+  if (recording.direct_super)
+    return recording.parameter_descriptions.at(result).at(index);
   if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 72112;
   if (recording.prepared_query.starts_with("SELECT owned_hll") ||
       std::find(recording.prepared.begin(), recording.prepared.end(), 72115) !=
           recording.prepared.end())
     return recording.hll_param_mismatch ? 72111 : recording.prepared[index];
   return 65113;
+}
+char* PQresultErrorField(const PGresult* result, int field) {
+  auto found = recording.diagnostics.find(result);
+  if (found == recording.diagnostics.end()) return nullptr;
+  auto value = found->second.find(field);
+  return value == found->second.end() ? nullptr : value->second.data();
 }
 }
 
@@ -1495,6 +1644,9 @@ TEST_F(IntervalPublicRecordingTest,
     nanoarrow::UniqueArray array;
     ASSERT_EQ(testing::SuperSchema(schema.get()), 0);
     ASSERT_EQ(testing::SuperBatch(schema.get(), array.get(), {std::nullopt}), 0);
+    ASSERT_EQ(testing::IntervalSetMetadata(schema->children[0], "ARROW:extension:name",
+                                           "foreign"),
+              0);
     ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "SELECT $1::super", &error),
               ADBC_STATUS_OK);
     if (stream) {
@@ -2238,12 +2390,13 @@ TEST_F(IntervalPublicRecordingTest,
       nanoarrow::UniqueArray array;
       ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
       ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
-      std::string value = testing::NumericHex("0102000020e610000088130000");
+      std::string value = testing::NumericHex("0102000020e610000050c30000");
       const auto zero = testing::NumericHex("00000000000000000000000000000000");
       const auto one = testing::NumericHex("000000000000f03f000000000000f03f");
-      for (int i = 0; i < 5000; ++i) value += i % 2 ? one : zero;
+      for (int i = 0; i < 50000; ++i) value += i % 2 ? one : zero;
       ASSERT_GT(value.size(), 65536);
-      ASSERT_LT(value.size(), 500000);
+      ASSERT_GT(value.size(), 500000);
+      ASSERT_LT(value.size(), 1048447);
       for (int row = 0; row < 3; ++row) {
         if (row != 1) {
           ASSERT_EQ(ArrowArrayAppendNull(array->children[0], 1), 0);
@@ -2564,5 +2717,9 @@ TEST_F(IntervalPublicRecordingTest, VarbyteDomainBothParameterRoutesAndBindings)
     }
   }
 }
+#include "redshift_spatial_prepared_recording_test.inc"
+#include "redshift_super_prepared_recording_test.inc"
+#include "redshift_vendor_limits_recording_test.inc"
+
 }  // namespace
 }  // namespace adbcpq

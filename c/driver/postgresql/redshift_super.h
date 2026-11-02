@@ -24,6 +24,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "redshift_bytes.h"
 #include "redshift_vendor_schema.h"
@@ -36,8 +37,8 @@ struct RedshiftSuperSchema {
   static constexpr std::string_view kExtension = "adbc.redshift.super.json";
   static constexpr std::string_view kMetadata =
       R"({"version":1,"encoding":"utf8-json","scope":"json-subset-write"})";
-  static constexpr int64_t kMaxBytes = 1000000;
-  static constexpr int kMaxDepth = 128;
+  static constexpr int64_t kMaxBytes = 16777216;
+  static constexpr int kMaxDepth = 1000;
 
   static ArrowErrorCode Invalid(ArrowError* error, const char* reason) {
     ArrowErrorSet(error, "[Redshift] Invalid SUPER JSON input: %s", reason);
@@ -106,14 +107,12 @@ struct RedshiftSuperSchema {
       RedshiftEncodedSchema encoded;
       NANOARROW_RETURN_NOT_OK(
           RedshiftEncodedSchema::Parse(node, redshift, &encoded, error));
-      if (encoded.enabled() && (!direct || dictionary || (generated_ingest && replace) ||
-                                (encoded.spatial() && !generated_ingest)))
+      if (encoded.enabled() && (!direct || dictionary || (generated_ingest && replace)))
         return Invalid(error, "unsupported spatial/HLL route, nested source or REPLACE");
       if (field.enabled) {
         if (!direct || dictionary) return Invalid(error, "nested semantic field");
-        if (!generated_ingest || replace)
-          return Invalid(error,
-                         "requires generated ingest; SUPER REPLACE is unsupported");
+        if (generated_ingest && replace)
+          return Invalid(error, "SUPER REPLACE is unsupported");
         *has_super = true;
       }
       for (int64_t i = 0; i < node->n_children; ++i)
@@ -130,11 +129,15 @@ struct RedshiftSuperSchema {
   class Scanner {
    public:
     explicit Scanner(std::string_view text) : text_(text) {}
-    bool Run() { return Value(0) && (Space(), pos_ == text_.size()); }
+    bool Run() { return RunImpl<true>(); }
 
     // Native output keeps lexical bytes and allows duplicate keys. Unlike the
-    // stricter input scanner it needs no key allocations or recursive descent.
-    bool RunNative() {
+    // stricter input scanner it needs no key allocations. Both are iterative.
+    bool RunNative() { return RunImpl<false>(); }
+
+   private:
+    template <bool Strict>
+    bool RunImpl() {
       enum State : uint8_t {
         kRoot,
         kDone,
@@ -147,7 +150,10 @@ struct RedshiftSuperSchema {
         kObjectValue,
         kObjectAfter
       };
-      std::array<State, 1001> states{};
+      std::array<State, kMaxDepth + 1> states{};
+      // Only writable input needs decoded keys. Frames are indexed by container
+      // depth, preserving ancestor keys while nested objects are processed.
+      std::vector<std::unordered_set<std::string>> keys;
       size_t depth = 0;
       states[0] = kRoot;
       while (true) {
@@ -167,6 +173,12 @@ struct RedshiftSuperSchema {
               if (depth == states.size() - 1) return false;
               const bool object = text_[pos_++] == '{';
               states[++depth] = object ? kObjectFirst : kArrayFirst;
+              if constexpr (Strict) {
+                if (object) {
+                  if (keys.size() <= depth) keys.resize(depth + 1);
+                  keys[depth].clear();
+                }
+              }
             } else if (!Scalar()) {
               return false;
             }
@@ -193,7 +205,13 @@ struct RedshiftSuperSchema {
               states[depth] = kObjectKey;
             break;
           case kObjectKey:
-            if (!String()) return false;
+            if constexpr (Strict) {
+              std::string key;
+              if (!String(&key) || !keys[depth].insert(std::move(key)).second)
+                return false;
+            } else if (!String()) {
+              return false;
+            }
             states[depth] = kObjectColon;
             break;
           case kObjectColon:
@@ -315,33 +333,6 @@ struct RedshiftSuperSchema {
       }
       return false;
     }
-    bool Value(int depth) {
-      Space();
-      if (pos_ == text_.size()) return false;
-      if (text_[pos_] == '{' || text_[pos_] == '[') {
-        if (depth >= kMaxDepth) return false;
-        const bool object = Take('{');
-        if (!object) ++pos_;
-        const char end = object ? '}' : ']';
-        Space();
-        if (Take(end)) return true;
-        std::unordered_set<std::string> keys;
-        do {
-          Space();
-          if (object) {
-            std::string key;
-            if (!String(&key) || !keys.insert(std::move(key)).second) return false;
-            Space();
-            if (!Take(':')) return false;
-          }
-          if (!Value(depth + 1)) return false;
-          Space();
-          if (Take(end)) return true;
-        } while (Take(','));
-        return false;
-      }
-      return Scalar();
-    }
     bool Scalar() {
       if (pos_ == text_.size()) return false;
       if (text_[pos_] == '"') return String();
@@ -355,8 +346,7 @@ struct RedshiftSuperSchema {
   static ArrowErrorCode Validate(ArrowBufferView bytes, ArrowError* error) {
     if (bytes.size_bytes <= 0 || bytes.size_bytes > kMaxBytes || !bytes.data.data)
       return Invalid(error, "document byte limit");
-    NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::Validate(
-        bytes, RedshiftBytesKind::kVarchar, std::nullopt, false, error));
+    NANOARROW_RETURN_NOT_OK(RedshiftBytesSchema::ValidateUtf8(bytes, false, error));
     try {
       if (!Scanner(std::string_view(bytes.data.as_char, bytes.size_bytes)).Run())
         return Invalid(error, "JSON grammar, duplicate key or depth");
@@ -374,7 +364,9 @@ struct RedshiftSuperResultSchema {
   static constexpr std::string_view kExtension = "adbc.redshift.super.native_json";
   static constexpr std::string_view kMetadata =
       R"({"version":1,"encoding":"redshift-json-wire","scope":"native-result","numbers":"lexemes","nulls":"wire-null"})";
-  static constexpr int64_t kMaxBytes = 16777216;
+  // Received JSON may expand beyond the stored SUPER object size. The reader
+  // supplies a checked signed protocol field length, not a storage-size guess.
+  static constexpr int64_t kMaxBytes = INT32_MAX;
 
   static ArrowErrorCode Invalid(ArrowError* error, const char* reason) {
     ArrowErrorSet(error, "[Redshift] Invalid native SUPER result: %s", reason);

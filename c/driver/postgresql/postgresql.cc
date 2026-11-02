@@ -740,6 +740,7 @@ AdbcStatusCode PostgresStatementRelease(struct AdbcStatement* statement,
   auto* ptr =
       reinterpret_cast<std::shared_ptr<PostgresStatement>*>(statement->private_data);
   auto status = (*ptr)->Release(error);
+  if (status != ADBC_STATUS_OK) return status;
   delete ptr;
   statement->private_data = nullptr;
   return status;

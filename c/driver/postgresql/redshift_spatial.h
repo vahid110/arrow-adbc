@@ -18,18 +18,36 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
+#include <vector>
 #include "redshift_vendor_schema.h"
 namespace adbcpq {
 struct RedshiftSpatial {
   static constexpr int64_t kMaxReadBytes = 1048447;
-  static constexpr int64_t kMaxWriteBytes = 500000;
+  static constexpr int64_t kMaxWriteBytes = kMaxReadBytes;
   class Parser {
    public:
     Parser(const uint8_t* data, size_t size, bool geography)
         : data_(data), size_(size), geography_(geography) {}
-    bool Run() { return Geometry(0, 0, 0, 0, true) && pos_ == size_; }
+    bool Run() {
+      std::vector<Frame> frames{{1, 0, 0, 0, true}};
+      while (!frames.empty()) {
+        if (!frames.back().remaining) {
+          frames.pop_back();
+          continue;
+        }
+        const auto frame = frames.back();
+        --frames.back().remaining;
+        if (!Geometry(frame, &frames)) return false;
+      }
+      return pos_ == size_;
+    }
 
    private:
+    struct Frame {
+      uint32_t remaining, expected, inherited, axes_flags;
+      bool root;
+    };
     const uint8_t* data_;
     size_t size_, pos_ = 0;
     bool geography_;
@@ -57,9 +75,10 @@ struct RedshiftSpatial {
       }
       return true;
     }
-    bool Geometry(int depth, uint32_t expected, uint32_t inherited, uint32_t axes_flags,
-                  bool root) {
-      if (depth >= 128 || size_ - pos_ < 5) return false;
+    bool Geometry(const Frame& frame, std::vector<Frame>* frames) {
+      if (size_ - pos_ < 5) return false;
+      const auto [remaining, expected, inherited, axes_flags, root] = frame;
+      (void)remaining;
       uint8_t endian = data_[pos_++];
       if (endian > 1) return false;
       uint64_t raw;
@@ -94,9 +113,13 @@ struct RedshiftSpatial {
         return true;
       }
       if (count > (size_ - pos_) / 5) return false;
-      for (uint64_t i = 0; i < count; ++i)
-        if (!Geometry(depth + 1, type == 7 ? 0 : type - 3, srid, flags, false))
-          return false;
+      // Each outstanding collection consumed at least nine input bytes. Bound
+      // auxiliary memory by the payload, without a smaller arbitrary depth cap.
+      if (count) {
+        if (frames->size() > size_ / 9) return false;
+        frames->push_back(
+            {static_cast<uint32_t>(count), type == 7 ? 0 : type - 3, srid, flags, false});
+      }
       return true;
     }
   };
@@ -104,11 +127,19 @@ struct RedshiftSpatial {
                                  ArrowError* error) {
     if (bytes.size_bytes <= 0 ||
         bytes.size_bytes > (writing ? kMaxWriteBytes : kMaxReadBytes) ||
-        !bytes.data.data ||
-        !Parser(bytes.data.as_uint8, static_cast<size_t>(bytes.size_bytes), geography)
-             .Run()) {
+        !bytes.data.data) {
       ArrowErrorSet(error, "[Redshift] Invalid or unsupported bounded EWKB payload");
       return EINVAL;
+    }
+    try {
+      if (!Parser(bytes.data.as_uint8, static_cast<size_t>(bytes.size_bytes), geography)
+               .Run()) {
+        ArrowErrorSet(error, "[Redshift] Invalid or unsupported EWKB structure");
+        return EINVAL;
+      }
+    } catch (const std::bad_alloc&) {
+      ArrowErrorSet(error, "[Redshift] EWKB validation allocation failed");
+      return ENOMEM;
     }
     return NANOARROW_OK;
   }

@@ -169,6 +169,14 @@ class PqResultHelper {
   Status Prepare() const;
   Status Prepare(const std::vector<Oid>& param_oids) const;
   Status DescribePrepared();
+  Status CheckParameters(const std::vector<Oid>& expected) const {
+    if (!result_ || PQnparams(result_.get()) != static_cast<int>(expected.size()))
+      return Status::InvalidState("[Redshift] Prepared parameter count changed");
+    for (size_t i = 0; i < expected.size(); ++i)
+      if (!expected[i] || PQparamtype(result_.get(), static_cast<int>(i)) != expected[i])
+        return Status::InvalidState("[Redshift] Prepared parameter identity changed");
+    return Status::Ok();
+  }
   Status Execute(const std::vector<std::string>& params = {},
                  PostgresType* param_types = nullptr);
   Status ExecuteCopy();

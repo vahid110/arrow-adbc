@@ -18,6 +18,7 @@
 #pragma once
 
 #include <algorithm>
+#include <climits>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -79,6 +80,7 @@ struct BindStream {
 
   // OIDs for parameter types
   std::vector<uint32_t> param_types;
+  std::vector<Oid> logical_param_types;
   std::vector<char*> param_values;
   std::vector<int> param_formats;
   std::vector<int> param_lengths;
@@ -202,7 +204,13 @@ struct BindStream {
     if (ingest_targets && ingest_targets->n_children() != bind_schema->n_children) {
       return Status::InvalidArgument("Ingest target/source column count mismatch");
     }
+    bool route_super = false;
+    UNWRAP_NANOARROW(na_error, InvalidArgument,
+                     RedshiftSuperSchema::ValidateRoute(
+                         &bind_schema.value, type_resolver.is_redshift(),
+                         generated_super_ingest, false, &route_super, &na_error));
     param_types.resize(bind_schema->n_children);
+    logical_param_types.resize(bind_schema->n_children);
     param_values.resize(bind_schema->n_children);
     param_lengths.resize(bind_schema->n_children);
     param_formats.resize(bind_schema->n_children, kPgBinaryFormat);
@@ -247,11 +255,6 @@ struct BindStream {
                                                   &type, &na_error));
       }
 
-      if (!generated_super_ingest &&
-          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
-          type.encoded_kind() != RedshiftEncodedKind::kHll)
-        return Status::NotImplemented(
-            "[Redshift] Direct vendor parameter binding is unsupported");
       // Delay the session change until all parameter types and writers are valid.
       // Otherwise a later unsupported field can leave an open transaction and UTC.
       needs_utc_timezone |= type.type_id() == PostgresTypeId::kTimestamptz;
@@ -266,6 +269,12 @@ struct BindStream {
           na_error, InvalidArgument,
           RedshiftEncodedSchema::Parse(bind_schema->children[i],
                                        type_resolver.is_redshift(), &encoded, &na_error));
+      if (!generated_super_ingest &&
+          type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
+          type.encoded_kind() == RedshiftEncodedKind::kNone && !super.enabled)
+        return Status::NotImplemented(
+            "[Redshift] Direct vendor parameter binding is unsupported");
+
       encoded_fields[i] = encoded.kind;
       has_encoded_fields |= encoded.enabled();
       if (type.encoded_kind() != RedshiftEncodedKind::kNone &&
@@ -330,8 +339,7 @@ struct BindStream {
              ingest_targets->child(i).scalar_kind() != RedshiftScalarKind::kNone)))) {
         writer_target = &ingest_targets->child(i);
       }
-      if (!ingest_targets && encoded.kind == RedshiftEncodedKind::kHll)
-        writer_target = &type;
+      if (!ingest_targets && (encoded.enabled() || super.enabled)) writer_target = &type;
       bytes_fields[i] =
           bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
                               writer_target->bytes_kind() != RedshiftBytesKind::kNone);
@@ -348,7 +356,8 @@ struct BindStream {
       // Byte-family compatibility is checked before a writer can be constructed.
       if (writer_code == ENOTSUP && interval_fields[i])
         return Status::NotImplemented(na_error.message);
-      if (writer_code == EINVAL && (bytes_fields[i] || interval_fields[i]))
+      if (writer_code == EINVAL &&
+          (bytes_fields[i] || interval_fields[i] || encoded.enabled()))
         return Status::InvalidArgument(na_error.message);
       UNWRAP_NANOARROW(na_error, Internal, writer_code);
 
@@ -362,12 +371,16 @@ struct BindStream {
                    writer_target->temporal_kind() != RedshiftTemporalKind::kNone)
               ? writer_target->oid()
               : type.oid();
-      if (super.enabled || encoded.spatial()) {
+      logical_param_types[i] = param_types[i];
+      if (super.enabled || (encoded.spatial() && generated_super_ingest)) {
         param_types[i] = type_resolver.GetBytesOID(RedshiftBytesKind::kVarbyte);
         if (!param_types[i])
           return Status::InvalidState("[Redshift] VARBYTE OID unavailable");
       }
-      param_formats[i] = encoded.kind == RedshiftEncodedKind::kHll ? 0 : kPgBinaryFormat;
+      param_formats[i] = encoded.kind == RedshiftEncodedKind::kHll ||
+                                 (encoded.spatial() && !generated_super_ingest)
+                             ? 0
+                             : kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
     }
 
@@ -380,19 +393,35 @@ struct BindStream {
     return Status::Ok();
   }
 
-  bool HasHllParameters() const {
-    return std::find(encoded_fields.begin(), encoded_fields.end(),
+  bool DirectSuperParameters() const {
+    return has_super_fields && !generated_super_ingest;
+  }
+
+  bool DirectSpatialParameters() const {
+    return !generated_super_ingest &&
+           (std::find(encoded_fields.begin(), encoded_fields.end(),
+                      RedshiftEncodedKind::kGeometry) != encoded_fields.end() ||
+            std::find(encoded_fields.begin(), encoded_fields.end(),
+                      RedshiftEncodedKind::kGeography) != encoded_fields.end());
+  }
+  bool NativeEncodedParameter(size_t i) const {
+    return encoded_fields[i] == RedshiftEncodedKind::kHll ||
+           (!generated_super_ingest && encoded_fields[i] != RedshiftEncodedKind::kNone);
+  }
+  bool HasNativeEncodedParameters() const {
+    return DirectSpatialParameters() ||
+           std::find(encoded_fields.begin(), encoded_fields.end(),
                      RedshiftEncodedKind::kHll) != encoded_fields.end();
   }
-  Status ValidateHllParameters(const PostgresType& described) const {
+  Status ValidateEncodedParameters(const PostgresType& described) const {
     if (described.n_children() != static_cast<int>(param_types.size()))
       return Status::InvalidArgument("[Redshift] Parameter descriptor count changed");
     for (size_t i = 0; i < encoded_fields.size(); ++i)
-      if (encoded_fields[i] == RedshiftEncodedKind::kHll &&
-          (described.child(i).encoded_kind() != RedshiftEncodedKind::kHll ||
+      if (NativeEncodedParameter(i) &&
+          (described.child(i).encoded_kind() != encoded_fields[i] ||
            !described.child(i).oid() || described.child(i).oid() != param_types[i]))
         return Status::InvalidArgument(
-            "[Redshift] HLL parameter Describe consistency mismatch");
+            "[Redshift] Encoded parameter Describe consistency mismatch");
     return Status::Ok();
   }
 
@@ -430,21 +459,23 @@ struct BindStream {
   Status Prepare(PGconn* pg_conn, const std::string& query) {
     PqResultHelper helper(pg_conn, query);
     UNWRAP_STATUS(helper.Prepare(param_types));
-    return CheckHllPrepared(pg_conn, param_types);
+    return CheckEncodedPrepared(pg_conn, param_types);
   }
 
-  Status CheckHllPrepared(PGconn* conn, const std::vector<Oid>& types) const {
-    if (!HasHllParameters()) return Status::Ok();
+  Status CheckEncodedPrepared(PGconn* conn, const std::vector<Oid>& types) const {
+    if (!HasNativeEncodedParameters()) return Status::Ok();
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(conn));
     adbc::driver::pgwire::UniqueResult result(PQdescribePrepared(conn, ""));
     if (PQresultStatus(result.get()) != PGRES_COMMAND_OK)
-      return MakeStatus(result.get(), "[Redshift] HLL parameter Describe failed");
+      return MakeStatus(result.get(), "[Redshift] Encoded parameter Describe failed");
     if (PQnparams(result.get()) != static_cast<int>(types.size()))
-      return Status::InvalidArgument("[Redshift] HLL parameter Describe count mismatch");
+      return Status::InvalidArgument(
+          "[Redshift] Encoded parameter Describe count mismatch");
     for (size_t i = 0; i < types.size(); ++i)
-      if (encoded_fields[i % encoded_fields.size()] == RedshiftEncodedKind::kHll &&
+      if (NativeEncodedParameter(i % encoded_fields.size()) &&
           PQparamtype(result.get(), i) != types[i])
-        return Status::InvalidArgument("[Redshift] HLL parameter Describe OID mismatch");
+        return Status::InvalidArgument(
+            "[Redshift] Encoded parameter Describe OID mismatch");
     return require_utf8 ? CheckUtf8Encoding(conn) : Status::Ok();
   }
 
@@ -482,6 +513,12 @@ struct BindStream {
       }
     }
 
+    if (current->release && (DirectSuperParameters() || DirectSpatialParameters())) {
+      const auto saved = current_row;
+      for (current_row = 0; current_row < current->length; ++current_row)
+        UNWRAP_STATUS(BindCurrentRow());
+      current_row = saved;
+    }
     return Status::Ok();
   }
 
@@ -538,10 +575,7 @@ struct BindStream {
     return Status::Ok();
   }
 
-  Status BindAndExecuteCurrentRow(PGconn* pg_conn,
-                                  adbc::driver::pgwire::UniqueResult* result_out,
-                                  int result_format) {
-    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+  Status BindCurrentRow() {
     param_buffer->size_bytes = 0;
     int64_t last_offset = 0;
     std::vector<bool> is_null_param(array_view->n_children);
@@ -566,6 +600,11 @@ struct BindStream {
         UNWRAP_ERRNO(Internal, ArrowBufferAppendInt32(&param_buffer.value, 0));
       }
 
+      if (validate_redshift_bytes &&
+          !ParameterMessageFits(param_buffer->size_bytes, array_view->n_children))
+        return Status::InvalidArgument(
+            "[libpq] Parameter row exceeds Bind message limit");
+
       int64_t param_length = param_buffer->size_bytes - last_offset - sizeof(int32_t);
       if (param_length > (std::numeric_limits<int>::max)()) {
         return Status::Internal("Parameter ", col, "serialized to >2GB of binary");
@@ -586,8 +625,22 @@ struct BindStream {
       last_offset += param_lengths[col];
     }
 
+    return Status::Ok();
+  }
+
+  Status BindAndExecuteCurrentRow(PGconn* pg_conn,
+                                  adbc::driver::pgwire::UniqueResult* result_out,
+                                  int result_format) {
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
+    UNWRAP_STATUS(BindCurrentRow());
     if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
+    return ExecuteCurrentRow(pg_conn, result_out, result_format);
+  }
+
+  Status ExecuteCurrentRow(PGconn* pg_conn,
+                           adbc::driver::pgwire::UniqueResult* result_out,
+                           int result_format) {
+    if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
     adbc::driver::pgwire::UniqueResult result(
         PQexecPrepared(pg_conn, /*stmtName=*/"",
                        /*nParams=*/bind_schema->n_children, param_values.data(),
@@ -727,6 +780,18 @@ struct BindStream {
     return execution_status;
   }
 
+  // Batching is a throughput choice, never a smaller per-row value contract.
+  // Keep ordinary batches near 16 MiB; one larger row may use the protocol
+  // envelope (signed 32-bit message length including Bind framing).
+  static constexpr int64_t kTargetBatchBytes = 16 * 1024 * 1024;
+  static bool ParameterMessageFits(int64_t bytes, int64_t parameters) {
+    // Unnamed portal/statement, count words, one format code per parameter and
+    // one result format. The buffer already includes each four-byte value length.
+    // Reserve 16 bytes for fixed framing (including the message tag).
+    return bytes >= 0 && parameters >= 0 && parameters <= INT_MAX / 2 &&
+           bytes <= static_cast<int64_t>(INT_MAX) - 16 - 2 * parameters;
+  }
+
   Status BindAndExecuteNextBatch(PGconn* pg_conn, const std::string& table,
                                  const std::string& fields, size_t max_rows,
                                  int64_t* executed_rows) {
@@ -750,6 +815,8 @@ struct BindStream {
     for (size_t row = 0; row < max_rows; row++) {
       UNWRAP_STATUS(EnsureNextRow());
       if (current->release == nullptr) break;
+      const int64_t row_start = param_buffer->size_bytes;
+      bool deferred = false;
 
       for (size_t col = 0; col < columns; col++) {
         int64_t field_row;
@@ -766,6 +833,24 @@ struct BindStream {
         } else {
           UNWRAP_STATUS(WriteParameter(col, field_row));
         }
+        // A partially serialized next row may cross the throughput target.
+        // Rewind both its bytes and cursor: EnsureNextRow must revisit exactly
+        // this row, including when it was the first row of a new input batch.
+        if (row && param_buffer->size_bytes > kTargetBatchBytes) {
+          param_buffer->size_bytes = row_start;
+          batch_types.resize(row * columns);
+          batch_lengths.resize(row * columns);
+          batch_formats.resize(row * columns);
+          batch_offsets.resize(row * columns);
+          batch_nulls.resize(row * columns);
+          --current_row;
+          deferred = true;
+          break;
+        }
+        if (validate_redshift_bytes &&
+            !ParameterMessageFits(param_buffer->size_bytes, (row + 1) * columns))
+          return Status::InvalidArgument(
+              "[libpq] Parameter row exceeds Bind message limit");
         const int64_t length = param_buffer->size_bytes - start - sizeof(int32_t);
         if (length > (std::numeric_limits<int>::max)()) {
           return Status::Internal("Parameter ", row * columns + col + 1,
@@ -777,7 +862,9 @@ struct BindStream {
         batch_offsets.push_back(start + sizeof(int32_t));
         batch_nulls.push_back(is_null);
       }
+      if (deferred) break;
       ++*executed_rows;
+      if (param_buffer->size_bytes >= kTargetBatchBytes) break;
     }
 
     if (*executed_rows == 0) return Status::Ok();
@@ -793,10 +880,10 @@ struct BindStream {
         table, fields, columns, static_cast<size_t>(*executed_rows), json_parse_fields,
         encoded_fields);
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
-    if (HasHllParameters()) {
+    if (HasNativeEncodedParameters()) {
       PqResultHelper prepared(pg_conn, query, require_utf8);
       UNWRAP_STATUS(prepared.Prepare(batch_types));
-      UNWRAP_STATUS(CheckHllPrepared(pg_conn, batch_types));
+      UNWRAP_STATUS(CheckEncodedPrepared(pg_conn, batch_types));
     }
     if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(

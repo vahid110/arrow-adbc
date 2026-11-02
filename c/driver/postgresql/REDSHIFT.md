@@ -113,28 +113,34 @@ unqualified.
 | Area | MVP behavior |
 | --- | --- |
 | Authentication | Standard libpq URI, TLS, username/password; no built-in IAM or Identity Center credential generation |
-| Queries | Text-result Arrow conversion; prepared statements and binary-bound parameters |
+| Queries | Native Arrow conversion with backend-specific codecs; prepared parameters; mixed HLL/non-HLL results remain unsupported |
 | Cancellation | A bounded analytic query was canceled successfully in two opt-in live runs, with a server-side timeout as a backstop and a post-cancel connection check; it remains outside default CI for cost control, and broader reliability qualification remains pending |
-| Types | Tested scalar integers, floats, booleans, strings, decimal-as-string, date/time/timestamp, and `VARBYTE`; `SUPER` and spatial types are not qualified |
+| Types | All 21 canonical families have implementations; native SUPER JSON-wire, spatial EWKB, HLL serialization, intervals and scalar/temporal evidence are bounded by operation. See the [type matrix](../../../dev/pgwire/REDSHIFT_TYPES.md); implemented does not mean fully qualified |
 | Metadata | `GetInfo`, `GetTableTypes`, `GetObjects`, `GetTableSchema`; constraint/statistics discovery is unsupported |
 | Transactions | Autocommit and explicit commit/rollback; per-session isolation overrides are unsupported |
 | Ingest | Create/append/replace via parameterized inserts in bounded 16-row batches; **replace is non-atomic across DROP, CREATE and data transfer** and failure can lose the old table; no Redshift S3 `COPY` or `UNLOAD` path |
-| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and checked Release development archive client connections to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 checked development ZIPs pass extracted-client PostgreSQL 18 connection and Redshift-driver rejection checks; checked short-retention development archives are available for all seven CI targets, but production release artifacts and other platforms' live Redshift installed-client qualification remain pending |
+| Platforms | Ubuntu x86-64 has source-build, PostgreSQL 18, and checked Release development archive client connections to live Redshift; Ubuntu ARM64, Debian x86-64, and macOS Intel/Apple Silicon have source-build, PostgreSQL 18, and clean-prefix rejection checks; Windows x64/ARM64 checked development ZIPs pass extracted-client PostgreSQL 18 connection and Redshift-driver rejection checks; checked short-retention development archives are available for all seven CI targets, while bounded installed macOS arm64 evidence is recorded in the type matrix; production release artifacts and other platform live qualification remain open |
 
-`SUPER` is not mapped natively to Arrow. A live test verified that a small
-`SUPER` array explicitly passed through `JSON_SERIALIZE(...)` is read as an
-Arrow string. For values that fit Redshift's `VARCHAR` limit, a query can
-select `JSON_SERIALIZE(super_column)` to request JSON text. This is not a
-general, lossless `SUPER` strategy:
-[AWS documents](https://docs.aws.amazon.com/redshift/latest/dg/JSON_SERIALIZE.html)
-that serialization errors when the JSON exceeds the system's `VARCHAR` limit,
-which is smaller than the maximum `SUPER` value. Do not use this expression as
-an implicit driver conversion for arbitrary-sized values.
+Native SUPER uses an output-only JSON-wire extension on `large_utf8`, preserving
+received numeric lexemes and wire NULL without reconstructing server-lost subtype
+or original JSON-null distinctions. JSON-subset input is a separate explicit
+contract. The reviewed local candidate adds direct SUPER/spatial parameters,
+SUPER input up to16MiB/depth1000 and spatial read/write up to1,048,447 raw bytes.
+Its 35 serial local validation steps and Meson targets passed. Selected installed
+macOS arm64 qualification passed 15 cases each in standalone C and Python,
+including native SUPER output beyond16MiB, with independently reviewed results
+and full teardown. The merged PR29 baseline rejects direct
+SUPER/spatial parameters. Mixed HLL results and metadata API parity remain
+separate acceptance gates; selected larger/deeper cases do not prove every maximum.
+See the [user guide](../../../docs/source/driver/redshift.rst) and
+[finite acceptance checklist](../../../dev/pgwire/V1_ACCEPTANCE.md) for limits and
+remaining release gates. No implicit user SQL casts or opaque-byte fallback count
+as semantic support.
 
-PostgreSQL 18 integration tests and focused live Redshift tests are CI gates on
-the development branch. The developer guide records what each gate proves and
-what it does not. Report unsupported behavior as an issue rather than assuming
-a PostgreSQL-compatible operation is safe on Redshift.
+PostgreSQL integration and applicable packaging checks are PR gates. Installed
+live Redshift campaigns are separately admitted, source-specific evidence; green
+offline CI alone does not qualify every type or platform. Report unsupported
+behavior rather than assuming PostgreSQL compatibility.
 
 ## IAM temporary-credentials recipe
 

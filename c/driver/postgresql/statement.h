@@ -160,6 +160,19 @@ class PostgresStatement {
   bool use_copy() const { return use_copy_; }
 
  private:
+  // Arrow callbacks are arbitrary application code. Prevent them from replacing
+  // or releasing this statement while its API call still owns mutable state.
+  bool operation_active_ = false;
+  adbc::driver::Status CheckIdle() const {
+    return operation_active_ ? adbc::driver::Status::InvalidState(
+                                   "[libpq] Reentrant statement operation")
+                             : adbc::driver::Status::Ok();
+  }
+  struct OperationGuard {
+    explicit OperationGuard(bool& active) : active(active) { active = true; }
+    ~OperationGuard() { active = false; }
+    bool& active;
+  };
   std::shared_ptr<PostgresTypeResolver> type_resolver_;
   std::shared_ptr<PostgresConnection> connection_;
 
