@@ -271,6 +271,7 @@ if(ADBC_BUILD_TESTS)
                 redshift_super_test.cc
                 redshift_super_parameter_test.cc
                 redshift_encoded_test.cc
+                redshift_spatial_parameter_test.cc
                 postgresql_test.cc
                 redshift_test.cc
                 result_helper.cc

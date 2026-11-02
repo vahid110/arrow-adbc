@@ -68,6 +68,12 @@ qualify later candidate changes.
 
 ## Active
 
+- Task011 adds local direct prepared GEOMETRY/GEOGRAPHY array/stream parameters:
+  exact marked EWKB, dynamic catalog input OIDs, uppercase text with owned NUL,
+  and the existing 500,000-byte raw input cap. Generated ingestion retains raw
+  VARBYTE constructors. Independent review and installed candidate qualification
+  remain required; this does not claim a new live driver pass.
+
 - The stale public SUPER rejection assertion is repaired locally in coordinator
   commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and
   independent review. B4 still requires its native installed execution and the

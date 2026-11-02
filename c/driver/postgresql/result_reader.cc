@@ -226,14 +226,34 @@ Status PqResultArrayReader::SelectDescribedResult() {
                                                 : PqResultHelper::Format::kBinary);
   return Status::Ok();
 }
-Status PqResultArrayReader::CheckHllParamDescriptor() {
-  if (!bind_stream_ || !bind_stream_->HasHllParameters()) return Status::Ok();
+Status PqResultArrayReader::CheckEncodedParamDescriptor() {
+  if (!bind_stream_ || !bind_stream_->HasNativeEncodedParameters()) return Status::Ok();
   // Typed Prepare can impose an OID: consistency only, not relation provenance.
   UNWRAP_STATUS(helper_.DescribePrepared());
   PostgresType params;
   UNWRAP_STATUS(
       helper_.ResolveParamTypes(*type_resolver_, &params, temporal_representation_));
-  return bind_stream_->ValidateHllParameters(params);
+  return bind_stream_->ValidateEncodedParameters(params);
+}
+
+Status PqResultArrayReader::PrepareDirectSpatial() {
+  // Re-prepare unchanged SQL after callbacks and serialization, retaining the
+  // catalog parameter types and original output identity across rows/batches.
+  UNWRAP_STATUS(helper_.Prepare(bind_stream_->param_types));
+  UNWRAP_STATUS(helper_.DescribePrepared());
+  UNWRAP_STATUS(helper_.CheckParameters(bind_stream_->param_types));
+  PostgresType params;
+  UNWRAP_STATUS(
+      helper_.ResolveParamTypes(*type_resolver_, &params, temporal_representation_));
+  UNWRAP_STATUS(bind_stream_->ValidateEncodedParameters(params));
+  if (described_) UNWRAP_STATUS(helper_.CheckDescriptor(described_.get(), 0));
+  UNWRAP_STATUS(SelectDescribedResult());
+  if (!described_) {
+    described_.reset(helper_.CopyDescriptor());
+    if (!described_)
+      return Status::Internal("[Redshift] Could not retain spatial result description");
+  }
+  return Status::Ok();
 }
 
 Status PqResultArrayReader::PrepareDirectSuper() {
@@ -293,6 +313,8 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
 
     if (bind_stream_->DirectSuperParameters()) {
       direct_super_ = std::make_unique<RedshiftSuperPrepared>(original_query_);
+    } else if (bind_stream_->DirectSpatialParameters()) {
+      UNWRAP_STATUS(PrepareDirectSpatial());
     } else {
       // Re-prepare with the actual parameter types
       Status prepare_status = helper_.Prepare(bind_stream_->param_types);
@@ -306,7 +328,7 @@ Status PqResultArrayReader::Initialize(int64_t* rows_affected) {
         UNWRAP_STATUS(helper_.DescribePrepared());
         UNWRAP_STATUS(SelectDescribedResult());
       }
-      UNWRAP_STATUS(CheckHllParamDescriptor());
+      UNWRAP_STATUS(CheckEncodedParamDescriptor());
     }
     UNWRAP_STATUS(BindNextAndExecute(nullptr));
 
@@ -443,6 +465,11 @@ Status PqResultArrayReader::BindNextAndExecute(int64_t* affected_rows) {
         if (!execute_status.ok())
           execute_status = direct_super_->Decorate(std::move(execute_status));
       }
+    } else if (bind_stream_->DirectSpatialParameters()) {
+      execute_status = bind_stream_->BindCurrentRow();
+      if (execute_status.ok()) execute_status = PrepareDirectSpatial();
+      if (execute_status.ok())
+        execute_status = bind_stream_->ExecuteCurrentRow(conn_, &result, result_format_);
     } else {
       execute_status =
           bind_stream_->BindAndExecuteCurrentRow(conn_, &result, result_format_);
@@ -506,6 +533,8 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
     helper_.set_require_utf8(helper_.require_utf8() || bind_stream_->require_utf8);
     if (bind_stream_->DirectSuperParameters()) {
       direct_super_ = std::make_unique<RedshiftSuperPrepared>(original_query_);
+    } else if (bind_stream_->DirectSpatialParameters()) {
+      UNWRAP_STATUS(PrepareDirectSpatial());
     } else {
       Status prepare_status = helper_.Prepare(bind_stream_->param_types);
       if (!prepare_status.ok()) {
@@ -514,7 +543,7 @@ Status PqResultArrayReader::ExecuteAll(int64_t* affected_rows) {
         return prepare_status;
       }
 
-      UNWRAP_STATUS(CheckHllParamDescriptor());
+      UNWRAP_STATUS(CheckEncodedParamDescriptor());
     }
     // Reset affected rows to zero before binding and executing any
     if (affected_rows) {

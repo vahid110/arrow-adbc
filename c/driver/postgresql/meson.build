@@ -107,6 +107,7 @@ postgres_tests = {
             'redshift_super_test.cc',
             'redshift_super_parameter_test.cc',
             'redshift_encoded_test.cc',
+            'redshift_spatial_parameter_test.cc',
             'result_helper.cc',
             'type_discovery_test.cc',
         ],

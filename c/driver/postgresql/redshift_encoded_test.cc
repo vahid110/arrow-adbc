@@ -239,8 +239,8 @@ TEST(RedshiftEncodedTest, StorageRoutesBackendAndDynamicIdentity) {
         RedshiftSuperSchema::ValidateRoute(schema.get(), true, true, true, &has, &error),
         0);
     EXPECT_EQ(RedshiftSuperSchema::ValidateRoute(schema.get(), true, false, false, &has,
-                                                 &error) == 0,
-              kind == RedshiftEncodedKind::kHll);
+                                                 &error),
+              0);
     ASSERT_EQ(ArrowSchemaSetType(schema.get(), NANOARROW_TYPE_BINARY), 0);
     EXPECT_NE(RedshiftEncodedSchema::Parse(schema.get(), true, &parsed, &error), 0);
   }
@@ -449,6 +449,33 @@ std::string SizedSpatial(int64_t size) {
     u32(&out, 0);
   }
   return out;
+}
+TEST(RedshiftEncodedTest, SpatialTextParameterRetainsRawWriteCap) {
+  for (int64_t size : {500000, 500001}) {
+    nanoarrow::UniqueSchema schema;
+    ASSERT_EQ(ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_LARGE_BINARY), 0);
+    nanoarrow::UniqueArray array;
+    ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+    ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+    const auto value = SizedSpatial(size);
+    ASSERT_EQ(ArrowArrayAppendBytes(array.get(), Bytes(value)), 0);
+    ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+    nanoarrow::UniqueArrayView view;
+    ASSERT_EQ(ArrowArrayViewInitFromSchema(view.get(), schema.get(), nullptr), 0);
+    ASSERT_EQ(ArrowArrayViewSetArray(view.get(), array.get(), nullptr), 0);
+    auto writer = PostgresCopyFieldWriter::Create<RedshiftSpatialParameterFieldWriter>(
+        view.get(), false);
+    nanoarrow::UniqueBuffer output;
+    const int code = writer->Write(output.get(), 0, nullptr);
+    EXPECT_EQ(code, size == 500000 ? 0 : EINVAL);
+    if (size == 500000) {
+      EXPECT_EQ(output->size_bytes, 4 + 2 * size + 1);
+      EXPECT_EQ(output->data[output->size_bytes - 1], 0);
+      EXPECT_EQ(std::strlen(reinterpret_cast<char*>(output->data + 4)), 2 * size);
+    } else {
+      EXPECT_EQ(output->size_bytes, 0);
+    }
+  }
 }
 TEST(RedshiftEncodedTest, ExactLocalReadWriteAndLogicalHllByteBoundaries) {
   ArrowError error{};

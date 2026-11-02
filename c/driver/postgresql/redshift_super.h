@@ -106,8 +106,7 @@ struct RedshiftSuperSchema {
       RedshiftEncodedSchema encoded;
       NANOARROW_RETURN_NOT_OK(
           RedshiftEncodedSchema::Parse(node, redshift, &encoded, error));
-      if (encoded.enabled() && (!direct || dictionary || (generated_ingest && replace) ||
-                                (encoded.spatial() && !generated_ingest)))
+      if (encoded.enabled() && (!direct || dictionary || (generated_ingest && replace)))
         return Invalid(error, "unsupported spatial/HLL route, nested source or REPLACE");
       if (field.enabled) {
         if (!direct || dictionary) return Invalid(error, "nested semantic field");

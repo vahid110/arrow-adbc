@@ -103,7 +103,8 @@ class PqResultArrayReader {
   int result_format_ = kPgBinaryFormat;
   adbc::driver::pgwire::UniqueResult described_;
   Status SelectDescribedResult();
-  Status CheckHllParamDescriptor();
+  Status CheckEncodedParamDescriptor();
+  Status PrepareDirectSpatial();
   adbc::driver::pgwire::TemporalRepresentation temporal_representation_;
   std::string vendor_name_;
   struct AdbcError error_;

@@ -25,7 +25,10 @@ A finite supported contract and checked rejection can establish readiness;
 exhaustive mathematical-domain testing is not the goal. The human explicitly
 required mixed HLL results and direct SUPER/spatial
 parameters on 2026-10-28. These missing operations must be implemented before v1;
-documenting their rejection does not close acceptance.
+documenting their rejection does not close acceptance. The local direct spatial
+candidate uses catalog-typed uppercase EWKB text and retains the existing raw
+input cap; source review and exact installed-candidate qualification are still
+required.
 
 ## Current baseline
 

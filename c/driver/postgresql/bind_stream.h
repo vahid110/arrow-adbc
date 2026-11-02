@@ -270,7 +270,7 @@ struct BindStream {
                                        type_resolver.is_redshift(), &encoded, &na_error));
       if (!generated_super_ingest &&
           type.vendor_family() != adbc::driver::pgwire::CatalogVendorFamily::kNone &&
-          type.encoded_kind() != RedshiftEncodedKind::kHll && !super.enabled)
+          type.encoded_kind() == RedshiftEncodedKind::kNone && !super.enabled)
         return Status::NotImplemented(
             "[Redshift] Direct vendor parameter binding is unsupported");
 
@@ -338,8 +338,7 @@ struct BindStream {
              ingest_targets->child(i).scalar_kind() != RedshiftScalarKind::kNone)))) {
         writer_target = &ingest_targets->child(i);
       }
-      if (!ingest_targets && (encoded.kind == RedshiftEncodedKind::kHll || super.enabled))
-        writer_target = &type;
+      if (!ingest_targets && (encoded.enabled() || super.enabled)) writer_target = &type;
       bytes_fields[i] =
           bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
                               writer_target->bytes_kind() != RedshiftBytesKind::kNone);
@@ -356,7 +355,8 @@ struct BindStream {
       // Byte-family compatibility is checked before a writer can be constructed.
       if (writer_code == ENOTSUP && interval_fields[i])
         return Status::NotImplemented(na_error.message);
-      if (writer_code == EINVAL && (bytes_fields[i] || interval_fields[i]))
+      if (writer_code == EINVAL &&
+          (bytes_fields[i] || interval_fields[i] || encoded.enabled()))
         return Status::InvalidArgument(na_error.message);
       UNWRAP_NANOARROW(na_error, Internal, writer_code);
 
@@ -371,12 +371,15 @@ struct BindStream {
               ? writer_target->oid()
               : type.oid();
       logical_param_types[i] = param_types[i];
-      if (super.enabled || encoded.spatial()) {
+      if (super.enabled || (encoded.spatial() && generated_super_ingest)) {
         param_types[i] = type_resolver.GetBytesOID(RedshiftBytesKind::kVarbyte);
         if (!param_types[i])
           return Status::InvalidState("[Redshift] VARBYTE OID unavailable");
       }
-      param_formats[i] = encoded.kind == RedshiftEncodedKind::kHll ? 0 : kPgBinaryFormat;
+      param_formats[i] = encoded.kind == RedshiftEncodedKind::kHll ||
+                                 (encoded.spatial() && !generated_super_ingest)
+                             ? 0
+                             : kPgBinaryFormat;
       bind_field_writers[i] = std::move(writer);
     }
 
@@ -393,19 +396,31 @@ struct BindStream {
     return has_super_fields && !generated_super_ingest;
   }
 
-  bool HasHllParameters() const {
-    return std::find(encoded_fields.begin(), encoded_fields.end(),
+  bool DirectSpatialParameters() const {
+    return !generated_super_ingest &&
+           (std::find(encoded_fields.begin(), encoded_fields.end(),
+                      RedshiftEncodedKind::kGeometry) != encoded_fields.end() ||
+            std::find(encoded_fields.begin(), encoded_fields.end(),
+                      RedshiftEncodedKind::kGeography) != encoded_fields.end());
+  }
+  bool NativeEncodedParameter(size_t i) const {
+    return encoded_fields[i] == RedshiftEncodedKind::kHll ||
+           (!generated_super_ingest && encoded_fields[i] != RedshiftEncodedKind::kNone);
+  }
+  bool HasNativeEncodedParameters() const {
+    return DirectSpatialParameters() ||
+           std::find(encoded_fields.begin(), encoded_fields.end(),
                      RedshiftEncodedKind::kHll) != encoded_fields.end();
   }
-  Status ValidateHllParameters(const PostgresType& described) const {
+  Status ValidateEncodedParameters(const PostgresType& described) const {
     if (described.n_children() != static_cast<int>(param_types.size()))
       return Status::InvalidArgument("[Redshift] Parameter descriptor count changed");
     for (size_t i = 0; i < encoded_fields.size(); ++i)
-      if (encoded_fields[i] == RedshiftEncodedKind::kHll &&
-          (described.child(i).encoded_kind() != RedshiftEncodedKind::kHll ||
+      if (NativeEncodedParameter(i) &&
+          (described.child(i).encoded_kind() != encoded_fields[i] ||
            !described.child(i).oid() || described.child(i).oid() != param_types[i]))
         return Status::InvalidArgument(
-            "[Redshift] HLL parameter Describe consistency mismatch");
+            "[Redshift] Encoded parameter Describe consistency mismatch");
     return Status::Ok();
   }
 
@@ -443,21 +458,23 @@ struct BindStream {
   Status Prepare(PGconn* pg_conn, const std::string& query) {
     PqResultHelper helper(pg_conn, query);
     UNWRAP_STATUS(helper.Prepare(param_types));
-    return CheckHllPrepared(pg_conn, param_types);
+    return CheckEncodedPrepared(pg_conn, param_types);
   }
 
-  Status CheckHllPrepared(PGconn* conn, const std::vector<Oid>& types) const {
-    if (!HasHllParameters()) return Status::Ok();
+  Status CheckEncodedPrepared(PGconn* conn, const std::vector<Oid>& types) const {
+    if (!HasNativeEncodedParameters()) return Status::Ok();
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(conn));
     adbc::driver::pgwire::UniqueResult result(PQdescribePrepared(conn, ""));
     if (PQresultStatus(result.get()) != PGRES_COMMAND_OK)
-      return MakeStatus(result.get(), "[Redshift] HLL parameter Describe failed");
+      return MakeStatus(result.get(), "[Redshift] Encoded parameter Describe failed");
     if (PQnparams(result.get()) != static_cast<int>(types.size()))
-      return Status::InvalidArgument("[Redshift] HLL parameter Describe count mismatch");
+      return Status::InvalidArgument(
+          "[Redshift] Encoded parameter Describe count mismatch");
     for (size_t i = 0; i < types.size(); ++i)
-      if (encoded_fields[i % encoded_fields.size()] == RedshiftEncodedKind::kHll &&
+      if (NativeEncodedParameter(i % encoded_fields.size()) &&
           PQparamtype(result.get(), i) != types[i])
-        return Status::InvalidArgument("[Redshift] HLL parameter Describe OID mismatch");
+        return Status::InvalidArgument(
+            "[Redshift] Encoded parameter Describe OID mismatch");
     return require_utf8 ? CheckUtf8Encoding(conn) : Status::Ok();
   }
 
@@ -495,7 +512,7 @@ struct BindStream {
       }
     }
 
-    if (current->release && DirectSuperParameters()) {
+    if (current->release && (DirectSuperParameters() || DirectSpatialParameters())) {
       const auto saved = current_row;
       for (current_row = 0; current_row < current->length; ++current_row)
         UNWRAP_STATUS(BindCurrentRow());
@@ -823,10 +840,10 @@ struct BindStream {
         table, fields, columns, static_cast<size_t>(*executed_rows), json_parse_fields,
         encoded_fields);
     if (require_utf8) UNWRAP_STATUS(CheckUtf8Encoding(pg_conn));
-    if (HasHllParameters()) {
+    if (HasNativeEncodedParameters()) {
       PqResultHelper prepared(pg_conn, query, require_utf8);
       UNWRAP_STATUS(prepared.Prepare(batch_types));
-      UNWRAP_STATUS(CheckHllPrepared(pg_conn, batch_types));
+      UNWRAP_STATUS(CheckEncodedPrepared(pg_conn, batch_types));
     }
     if (has_super_fields) UNWRAP_STATUS(CheckSuperParseContext(pg_conn));
     adbc::driver::pgwire::UniqueResult result(

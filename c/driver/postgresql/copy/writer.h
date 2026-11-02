@@ -1047,6 +1047,39 @@ class RedshiftEncodedFieldWriter : public PostgresCopyFieldWriter {
   ArrowBufferAllocator allocation_;
 };
 
+// Direct spatial parameters use the catalog type's text input. Generated
+// ingestion keeps the raw EWKB/VARBYTE constructor writer above.
+class RedshiftSpatialParameterFieldWriter : public PostgresCopyFieldWriter {
+ public:
+  explicit RedshiftSpatialParameterFieldWriter(
+      bool geography, ArrowBufferAllocator allocation = ArrowBufferAllocatorDefault())
+      : geography_(geography), allocation_(allocation) {}
+  ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
+    ArrowBufferView bytes{};
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftBytesSchema::GetBytes(array_view_, index, &bytes, error));
+    NANOARROW_RETURN_NOT_OK(RedshiftSpatial::Validate(bytes, geography_, true, error));
+    // The bounded raw payload makes doubled length + NUL safe in int32_t.
+    const int32_t physical = static_cast<int32_t>(2 * bytes.size_bytes + 1);
+    NANOARROW_RETURN_NOT_OK(
+        RedshiftTimetzSchema::Reserve(buffer, physical + 4, error, allocation_));
+    WriteUnsafe<int32_t>(buffer, physical);
+    constexpr char hex[] = "0123456789ABCDEF";
+    for (int64_t i = 0; i < bytes.size_bytes; ++i) {
+      const uint8_t value = bytes.data.as_uint8[i];
+      const char pair[] = {hex[value >> 4], hex[value & 15]};
+      ArrowBufferAppendUnsafe(buffer, pair, 2);
+    }
+    const char zero = 0;
+    ArrowBufferAppendUnsafe(buffer, &zero, 1);
+    return NANOARROW_OK;
+  }
+
+ private:
+  bool geography_;
+  ArrowBufferAllocator allocation_;
+};
+
 class RedshiftSuperFieldWriter : public PostgresCopyFieldWriter {
  public:
   explicit RedshiftSuperFieldWriter(
@@ -1312,12 +1345,17 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
     PostgresType source;
     NANOARROW_RETURN_NOT_OK(
         PostgresType::FromSchema(type_resolver, schema, &source, error));
-    if ((encoded.spatial() && !generated_super_ingest) || !target_type ||
-        target_type->encoded_kind() != encoded.kind || !target_type->oid() ||
-        target_type->oid() != source.oid())
+    if ((encoded.spatial() && !generated_super_ingest && !redshift_parameters) ||
+        !target_type || target_type->encoded_kind() != encoded.kind ||
+        !target_type->oid() || target_type->oid() != source.oid())
       return RedshiftEncodedSchema::Invalid(error);
-    *out = PostgresCopyFieldWriter::Create<RedshiftEncodedFieldWriter>(array_view,
-                                                                       encoded.kind);
+    if (encoded.spatial() && !generated_super_ingest) {
+      *out = PostgresCopyFieldWriter::Create<RedshiftSpatialParameterFieldWriter>(
+          array_view, encoded.kind == RedshiftEncodedKind::kGeography);
+    } else {
+      *out = PostgresCopyFieldWriter::Create<RedshiftEncodedFieldWriter>(array_view,
+                                                                         encoded.kind);
+    }
     return NANOARROW_OK;
   }
   if (super.enabled ||

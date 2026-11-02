@@ -55,6 +55,8 @@ struct Recording {
   std::vector<std::string> queries;
   std::vector<Oid> prepared;
   bool direct_super = false, prepared_valid = false;
+  bool direct_spatial = false, spatial_projection = false, spatial_execute_error = false;
+  int spatial_mismatch = 0, spatial_prepare_calls = 0, spatial_output_drift = 0;
   int converter_drift = 0, direct_descriptor_drift = 0, direct_columns = 1;
   bool direct_integer_projection = false;
   std::string direct_failure;
@@ -274,6 +276,7 @@ PGresult* Query(const char* query) {
     return Rows(5, {{"64001", "intervaly2m", "unqualified_fixture_receive", "0", "0"},
                     {"65017", "intervald2s", "unqualified_fixture_receive", "0", "0"},
                     {"67009", "int8", "int8recv", "0", "0"},
+                    {"23", "int4", "int4recv", "0", "0"},
                     {"65113", "timetz", "timetz_recv", "0", "0"},
                     {"75001", "bpchar", "bpcharrecv", "0", "0"},
                     {"75002", "text", "textrecv", "0", "0"},
@@ -354,11 +357,38 @@ PGresult* Query(const char* query) {
   ADD_FAILURE() << "Unexpected recording query: " << q;
   return PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
 }
+PGresult* SpatialParameterResult(bool describe) {
+  if (!recording.spatial_projection) return Command();
+  auto* out = PQmakeEmptyPGresult(nullptr, describe ? PGRES_COMMAND_OK : PGRES_TUPLES_OK);
+  PGresAttDesc attr{};
+  attr.name = const_cast<char*>("marker");
+  attr.typid =
+      recording.spatial_output_drift && (recording.spatial_prepare_calls > 1 || !describe)
+          ? 20
+          : 23;
+  attr.format = describe ? 0 : 1;
+  attr.atttypmod = -1;
+  if (!PQsetResultAttrs(out, 1, &attr)) std::abort();
+  if (!describe) {
+    const auto bytes = adbcpq::testing::NumericHex("ffffffb9");
+    if (!PQsetvalue(out, 0, 0, const_cast<char*>(bytes.data()), bytes.size()))
+      std::abort();
+  }
+  return out;
+}
 PGresult* Parameters(int n, const Oid* types, const char* const* values,
                      const int* lengths, const int* formats) {
   std::vector<RecordedParameter> row;
   for (int col = 0; col < n; ++col) {
-    EXPECT_EQ(formats[col], types[col] == 72115 ? 0 : 1);
+    EXPECT_EQ(formats[col],
+              types[col] == 72115 || (recording.direct_spatial &&
+                                      (types[col] == 72113 || types[col] == 72114))
+                  ? 0
+                  : 1);
+    if (values[col] && formats[col] == 0) {
+      EXPECT_GT(lengths[col], 0);
+      EXPECT_EQ(values[col][lengths[col] - 1], 0);
+    }
     row.push_back({types[col], values[col] == nullptr,
                    values[col] ? std::string(values[col], formats[col] == 0
                                                               ? std::strlen(values[col])
@@ -420,6 +450,7 @@ PGresult* PQprepare(PGconn*, const char*, const char* query, int n, const Oid* t
   recording.queries.emplace_back(query);
   recording.prepared_query = query;
   recording.prepared_valid = true;
+  if (recording.direct_spatial) ++recording.spatial_prepare_calls;
   if (recording.direct_super) {
     const bool physical = recording.prepared_query.find(
                               "\"pg_catalog\".\"json_parse\"") != std::string::npos;
@@ -432,6 +463,13 @@ PGresult* PQprepare(PGconn*, const char*, const char* query, int n, const Oid* t
 }
 PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
                          const int* lengths, const int* formats, int result_format) {
+  if (recording.direct_spatial) {
+    if (!recording.prepared_valid) return DirectSuperError();
+    auto* captured = Parameters(n, recording.prepared.data(), values, lengths, formats);
+    PQclear(captured);
+    if (recording.spatial_execute_error) return DirectSuperError();
+    return SpatialParameterResult(false);
+  }
   if (recording.direct_super) {
     recording.events.push_back("execute");
     if (!recording.prepared_valid) return DirectSuperError();
@@ -460,6 +498,7 @@ PGresult* PQexecPrepared(PGconn*, const char*, int n, const char* const* values,
   return Parameters(n, recording.prepared.data(), values, lengths, formats);
 }
 PGresult* PQdescribePrepared(PGconn*, const char*) {
+  if (recording.direct_spatial) return SpatialParameterResult(true);
   if (recording.direct_super) {
     recording.events.push_back("describe");
     if (!recording.prepared_valid) return DirectSuperError();
@@ -479,6 +518,8 @@ PGresult* PQdescribePrepared(PGconn*, const char*) {
              : Command();
 }
 int PQnparams(const PGresult* result) {
+  if (recording.direct_spatial)
+    return recording.prepared.size() + (recording.spatial_mismatch == 1 ? 1 : 0);
   if (recording.direct_super)
     return static_cast<int>(recording.parameter_descriptions[result].size());
   if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 1;
@@ -489,6 +530,13 @@ int PQnparams(const PGresult* result) {
   return recording.prepared_query == "SELECT owned_timetz_param" ? 1 : 0;
 }
 Oid PQparamtype(const PGresult* result, int index) {
+  if (recording.direct_spatial) {
+    if (recording.spatial_mismatch == 2 && index == 0) return 3999;
+    if (recording.spatial_mismatch == 3 && index == 0)
+      return recording.prepared[index] == 72113 ? 72114 : 72113;
+    if (recording.spatial_mismatch == 4 && index == 1) return 23;
+    return recording.prepared[index];
+  }
   if (recording.direct_super)
     return recording.parameter_descriptions.at(result).at(index);
   if (recording.prepared_query.starts_with("INSERT INTO owned_varbyte")) return 72112;
@@ -2671,6 +2719,7 @@ TEST_F(IntervalPublicRecordingTest, VarbyteDomainBothParameterRoutesAndBindings)
     }
   }
 }
+#include "redshift_spatial_prepared_recording_test.inc"
 #include "redshift_super_prepared_recording_test.inc"
 
 }  // namespace
