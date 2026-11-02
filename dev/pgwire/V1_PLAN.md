@@ -70,6 +70,10 @@ This roadmap grants no additional paid attempt or publication authority.
 
 ## Delivered foundations
 
+The [private libpq foundation](private-libpq.md) prepares reproducible native Unix
+dependency packaging for B1. It does not yet switch driver linkage or result
+dispatch; Windows/cross and all seven C/five wheel validations remain B6 gates.
+
 Queries, core metadata, transactions, cancellation and prepared INSERT ingestion
 are implemented. Packaging supports seven archive targets and five portable
 wheels, with clean install/import and PostgreSQL-rejection checks. Those checks

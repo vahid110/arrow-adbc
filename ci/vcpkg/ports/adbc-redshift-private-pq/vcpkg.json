@@ -1,0 +1,8 @@
+{
+  "name": "adbc-redshift-private-pq",
+  "version": "17.11.1",
+  "description": "Private namespaced libpq for the ADBC Redshift result-format extension",
+  "license": "PostgreSQL AND Apache-2.0",
+  "supports": "(linux | osx) & !uwp",
+  "dependencies": ["openssl"]
+}

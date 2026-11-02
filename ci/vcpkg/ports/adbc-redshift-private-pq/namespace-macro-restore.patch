@@ -1,0 +1,60 @@
+--- a/src/interfaces/libpq/fe-exec.c
++++ b/src/interfaces/libpq/fe-exec.c
+@@ -4141,6 +4141,7 @@
+  */
+ 
+ #undef PQfreeNotify
++#define PQfreeNotify adbc_rs_pq_17_11_v1_PQfreeNotify
+ void		PQfreeNotify(PGnotify *notify);
+ 
+ void
+--- a/src/interfaces/libpq/legacy-pqsignal.c
++++ b/src/interfaces/libpq/legacy-pqsignal.c
+@@ -36,6 +36,7 @@
+  * is to ensure that no in-tree code accidentally calls this version.)
+  */
+ #undef pqsignal
++#define pqsignal adbc_rs_pq_17_11_v1_pqsignal
+ extern pqsigfunc pqsignal(int signo, pqsigfunc func);
+ 
+ pqsigfunc
+--- a/src/interfaces/libpq/libpq-fe.h
++++ b/src/interfaces/libpq/libpq-fe.h
+@@ -609,7 +609,9 @@
+ extern void PQfreemem(void *ptr);
+ 
+ /* Exists for backward compatibility.  bjm 2003-03-24 */
++#ifndef PQfreeNotify
+ #define PQfreeNotify(ptr) PQfreemem(ptr)
++#endif
+ 
+ /* Error when no password was given. */
+ /* Note: depending on this is deprecated; use PQconnectionNeedsPassword(). */
+--- a/src/include/port.h
++++ b/src/include/port.h
+@@ -522,6 +522,7 @@
+ 
+ /* port/pqsignal.c (see also interfaces/libpq/legacy-pqsignal.c) */
+ #ifdef FRONTEND
++#undef pqsignal
+ #define pqsignal pqsignal_fe
+ #endif
+ typedef void (*pqsigfunc) (SIGNAL_ARGS);
+--- a/src/include/mb/pg_wchar.h
++++ b/src/include/mb/pg_wchar.h
+@@ -642,10 +642,15 @@
+  * libpgcommon.a and libpgcommon_srv.a end in "_private".
+  */
+ #if defined(USE_PRIVATE_ENCODING_FUNCS) || !defined(FRONTEND)
++#undef pg_char_to_encoding
+ #define pg_char_to_encoding			pg_char_to_encoding_private
++#undef pg_encoding_to_char
+ #define pg_encoding_to_char			pg_encoding_to_char_private
++#undef pg_valid_server_encoding
+ #define pg_valid_server_encoding	pg_valid_server_encoding_private
++#undef pg_valid_server_encoding_id
+ #define pg_valid_server_encoding_id	pg_valid_server_encoding_id_private
++#undef pg_utf_mblen
+ #define pg_utf_mblen				pg_utf_mblen_private
+ #endif
+ 

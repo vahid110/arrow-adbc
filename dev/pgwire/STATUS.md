@@ -27,6 +27,11 @@ verified, preserving the original C-stream cleanup timeout and separate cleanup.
 [Its bounded evidence](#task010t-interval-edge-qualification) is complete;
 **the all-21-type first-release milestone remains open**.
 
+The [private libpq package foundation](private-libpq.md) supplies an opt-in,
+pinned native Unix recipe and checked CMake/Meson consumption seams. Driver
+linkage is unchanged; coordinator package validation, Windows/cross support and
+the seven-distribution/five-wheel completion remain open.
+
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 [finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
 blockers are mandatory mixed HLL results, remaining operation and metadata

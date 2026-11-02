@@ -1,0 +1,15 @@
+{
+  "source_url": "https://ftp.postgresql.org/pub/source/v17.11/postgresql-17.11.tar.bz2",
+  "source_sha256": "dd27f2b3c59e73ed14aa3324901242bf69a032a6347805f274e6260322d42979",
+  "source_sha512": "caf6acf22d21856d95899cf6f2b7bd2ad8018e6d32d59fe28b3010edb1faf259124fee4a163f8d0a9e5307e12b98287266e040ff6cfc0b1f60e65b96e10458b2",
+  "patch_sha256": "c0f455b8ada218cecccd05458a7b248bffd6bfc609521726b0c147517c32174f",
+  "namespace_patch_sha256": "fd0ea9b90f2c5515c2bf5643cbffa68268e490904e9a19d7e689862910fdc48e",
+  "license_sha256": "3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd",
+  "prefix": "adbc_rs_pq_17_11_v1_",
+  "package_version": "17.11.1",
+  "abi": 1,
+  "build_script_sha256": "5fc03305eac50d7274b0086151f6d56604dd3af999d54cf4da2851a328a09e0b",
+  "symbol_script_sha256": "3f10661294413ac534313e349fadd6453d0f14621c8fca6a4d287d5b3623fa06",
+  "adbc_license_sha256": "dbce1a629c53c225d5aa8cd537c0a2bd9c0ea45d843cac08fa0c67bc2bc022c3",
+  "adbc_notice_sha256": "59d7cc401deb7b8ca6c6463848a9d6a302b18d83c2a3f75136bfead3c5c5f9bb"
+}
