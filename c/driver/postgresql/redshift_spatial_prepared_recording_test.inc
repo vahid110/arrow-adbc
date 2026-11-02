@@ -270,3 +270,90 @@ TEST_F(SpatialPreparedRecordingTest,
       EXPECT_NE(std::string(Message()).find("spatial input failure"), std::string::npos);
   }
 }
+
+TEST_F(SpatialPreparedRecordingTest, CombinedSuperAndHllKeepSpatialNativeTextParameters) {
+  for (bool super : {false, true})
+    for (bool stream : {false, true})
+      for (int null_at : {-1, 1, 2, 3}) {
+        recording.direct_super = super;
+        recording.direct_spatial = !super;
+        recording.executions.clear();
+        nanoarrow::UniqueSchema schema;
+        EncodedSchema(schema.get(),
+                      {RedshiftEncodedKind::kHll, RedshiftEncodedKind::kGeometry,
+                       RedshiftEncodedKind::kGeography, RedshiftEncodedKind::kHll,
+                       RedshiftEncodedKind::kNone, RedshiftEncodedKind::kNone});
+        if (super) {
+          nanoarrow::UniqueSchema source;
+          ASSERT_EQ(testing::SuperSchema(source.get()), 0);
+          schema->children[0]->release(schema->children[0]);
+          ASSERT_EQ(ArrowSchemaDeepCopy(source->children[0], schema->children[0]), 0);
+        }
+        ASSERT_EQ(ArrowSchemaSetType(schema->children[4], NANOARROW_TYPE_BINARY), 0);
+        ASSERT_EQ(testing::DecimalMetadata(schema->children[4], "ADBC:redshift:sql_type",
+                                           "VARBYTE"),
+                  0);
+        ASSERT_EQ(ArrowSchemaSetType(schema->children[5], NANOARROW_TYPE_INT32), 0);
+        nanoarrow::UniqueArray array;
+        ASSERT_EQ(ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr), 0);
+        ASSERT_EQ(ArrowArrayStartAppending(array.get()), 0);
+        for (int col = 0; col < 6; ++col) {
+          if (col == null_at) {
+            ASSERT_EQ(ArrowArrayAppendNull(array->children[col], 1), 0);
+          } else if (col == 0 || col == 3) {
+            ASSERT_EQ(ArrowArrayAppendString(
+                          array->children[col],
+                          ArrowCharView(col == 0 && super ? "true" : kSparseHll)),
+                      0);
+          } else if (col == 5) {
+            ASSERT_EQ(ArrowArrayAppendInt(array->children[col], -71), 0);
+          } else {
+            const auto bytes = Raw(col == 1 ? kPoint : col == 2 ? kEmpty : "0080ff");
+            ArrowBufferView value{};
+            value.data.as_char = bytes.data();
+            value.size_bytes = bytes.size();
+            ASSERT_EQ(ArrowArrayAppendBytes(array->children[col], value), 0);
+          }
+        }
+        ASSERT_EQ(ArrowArrayFinishElement(array.get()), 0);
+        ASSERT_EQ(ArrowArrayFinishBuildingDefault(array.get(), nullptr), 0);
+        ASSERT_EQ(driver.StatementSetSqlQuery(
+                      &statement, "INSERT INTO mixed_vendor VALUES ($1,$2,$3,$4,$5,$6)",
+                      &error),
+                  ADBC_STATUS_OK);
+        ASSERT_EQ(driver.StatementPrepare(&statement, &error), ADBC_STATUS_OK);
+        if (stream) {
+          nanoarrow::UniqueArrayStream input;
+          adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+          ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                    ADBC_STATUS_OK);
+        } else {
+          ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                    ADBC_STATUS_OK);
+        }
+        ASSERT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                  ADBC_STATUS_OK)
+            << Message();
+        ASSERT_EQ(recording.executions.size(), 1);
+        const auto& values = recording.executions[0];
+        ASSERT_EQ(values.size(), 6);
+        const std::vector<Oid> expected = {
+            super ? 72112U : 72115U, 72113, 72114, 72115, 72112, 23};
+        const std::vector<int> formats = {super ? 1 : 0, 0, 0, 0, 1, 1};
+        for (int col = 0; col < 6; ++col) {
+          EXPECT_EQ(values[col].oid, expected[col]);
+          EXPECT_EQ(values[col].format, formats[col]);
+          EXPECT_EQ(values[col].null, col == null_at);
+        }
+        EXPECT_EQ(values[0].bytes, super ? "true" : kSparseHll);
+        if (null_at != 1) EXPECT_EQ(values[1].bytes, kPoint);
+        if (null_at != 2) EXPECT_EQ(values[2].bytes, kEmpty);
+        if (null_at != 3) EXPECT_EQ(values[3].bytes, kSparseHll);
+        EXPECT_EQ(values[4].bytes, Raw("0080ff"));
+        EXPECT_EQ(values[5].bytes, Raw("ffffffb9"));
+        EXPECT_EQ(recording.prepared_query,
+                  super ? "INSERT INTO mixed_vendor VALUES "
+                          "((\"pg_catalog\".\"json_parse\"($1)),$2,$3,$4,$5,$6)"
+                        : "INSERT INTO mixed_vendor VALUES ($1,$2,$3,$4,$5,$6)");
+      }
+}

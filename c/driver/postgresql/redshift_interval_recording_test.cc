@@ -381,10 +381,7 @@ PGresult* Parameters(int n, const Oid* types, const char* const* values,
   std::vector<RecordedParameter> row;
   for (int col = 0; col < n; ++col) {
     EXPECT_EQ(formats[col],
-              types[col] == 72115 || (recording.direct_spatial &&
-                                      (types[col] == 72113 || types[col] == 72114))
-                  ? 0
-                  : 1);
+              types[col] == 72115 || types[col] == 72113 || types[col] == 72114 ? 0 : 1);
     if (values[col] && formats[col] == 0) {
       EXPECT_GT(lengths[col], 0);
       EXPECT_EQ(values[col][lengths[col] - 1], 0);
