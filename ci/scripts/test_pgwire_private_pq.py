@@ -172,6 +172,9 @@ def fake_installed_package(root, variant):
     mapping.mkdir()
     names = [
         "PQlibVersion",
+        "pg_char_to_encoding",
+        "pg_encoding_to_char",
+        "pg_valid_server_encoding_id",
         "ADBCPQprivatePackageAbi",
         "ADBCPQexecPreparedFormats",
         "ADBCPQsendQueryPreparedFormats",
@@ -190,11 +193,20 @@ def fake_installed_package(root, variant):
         '#include "postgres_ext.h"\n#include <stddef.h>\n'
         "typedef struct pg_conn PGconn;\ntypedef struct pg_result PGresult;\n"
         "int PQlibVersion(void);\n"
+        "int pg_char_to_encoding(const char *);\n"
+        "const char *pg_encoding_to_char(int);\n"
+        "int pg_valid_server_encoding_id(int);\n"
     )
     (inc / "postgres_ext.h").write_text('#include "pg_config_ext.h"\n')
     (inc / "pg_config_ext.h").write_text("/* empty */\n")
     cfile = root / "fake.c"
     body = "int " + prefix + "PQlibVersion(void) { return 170011; }\n"
+    body += f"int {prefix}pg_char_to_encoding(const char *name) {{ return 6; }}\n"
+    body += f"int {prefix}pg_valid_server_encoding_id(int id) {{ return id == 6; }}\n"
+    if variant != "missing-encoding":
+        body += (
+            f'const char *{prefix}pg_encoding_to_char(int id) {{ return "UTF8"; }}\n'
+        )
     body += "int " + prefix + "ADBCPQprivatePackageAbi(void) { return 1; }\n"
     if variant != "missing-helper":
         body += "int " + prefix + "ADBCPQsendQueryPreparedFormats(void) { return 0; }\n"
@@ -274,7 +286,13 @@ class RecipeInstallTest(unittest.TestCase):
 )
 class ConfigureTest(unittest.TestCase):
     def test_real_link_gates_with_tiny_offline_archives(self):
-        for variant in ("good", "missing-helper", "wrong-abi", "missing-archive"):
+        for variant in (
+            "good",
+            "missing-helper",
+            "missing-encoding",
+            "wrong-abi",
+            "missing-archive",
+        ):
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 installed = fake_installed_package(root, variant)

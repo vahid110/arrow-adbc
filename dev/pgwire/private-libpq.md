@@ -123,7 +123,8 @@ in CMake or `-Dpostgresql=enabled -Dredshift=true` in Meson. That build
 requires the private package and rejects a missing or incompatible ABI/helper.
 
 The Windows adapter now selects PostgreSQL 17.11's Meson static frontend
-libpq/common/port targets, including their private encoding aliases. It disables
+libpq target and the static libpgcommon_shlib and libpgport_shlib support
+archives. These expose the public encoding symbols required by libpq. It disables
 PCH/LTO and string pooling, uses the existing static-library/dynamic-CRT (`/MD`)
 triplets, and rejects cross builds. Tool paths, source pins, target machine and
 runtime directives are checked explicitly. The first pass inventories COFF;

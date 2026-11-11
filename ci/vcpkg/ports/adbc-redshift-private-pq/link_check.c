@@ -16,13 +16,17 @@
 // under the License.
 
 #include <adbc_rs_pq.h>
+#include <string.h>
 
 #if ADBC_REDSHIFT_PRIVATE_PQ_ABI != 1 || ADBC_REDSHIFT_PRIVATE_PQ_VERSION != 170011
 #error "Wrong private libpq package ABI/version"
 #endif
 
 int main(void) {
-  return ADBCPQprivatePackageAbi() != 1 || PQlibVersion() != 170011 ||
+  const int encoding = pg_char_to_encoding("UTF8");
+  return encoding < 0 || !pg_valid_server_encoding_id(encoding) ||
+         strcmp(pg_encoding_to_char(encoding), "UTF8") != 0 ||
+         ADBCPQprivatePackageAbi() != 1 || PQlibVersion() != 170011 ||
          ADBCPQsendQueryPreparedFormats(NULL, "", 0, NULL, NULL, NULL, 0, NULL) != 0 ||
          ADBCPQexecPreparedFormats(NULL, "", 0, NULL, NULL, NULL, 0, NULL) != NULL;
 }

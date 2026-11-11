@@ -146,7 +146,7 @@ class WindowsRecipeTest(unittest.TestCase):
                     process.assert_not_called()
                 self.assertFalse(args.work_dir.exists())
 
-    def test_exact_frontend_target_selection_rejects_shlib_ambiguity_and_escape(self):
+    def test_frontend_static_archives_provide_public_libpq_encoding_abi(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             rows = [
@@ -155,7 +155,15 @@ class WindowsRecipeTest(unittest.TestCase):
                     "type": "static library",
                     "filename": [str(root / (name + ".lib"))],
                 }
-                for name in windows.TARGETS
+                for name in (
+                    "libpq",
+                    "libpgcommon",
+                    "libpgcommon_srv",
+                    "libpgcommon_shlib",
+                    "libpgport",
+                    "libpgport_srv",
+                    "libpgport_shlib",
+                )
             ]
             rows.append(
                 {
@@ -166,12 +174,20 @@ class WindowsRecipeTest(unittest.TestCase):
             )
             self.assertEqual(
                 [p.name for p in windows.static_targets(rows, root)],
-                [name + ".lib" for name in windows.TARGETS],
+                ["libpq.lib", "libpgcommon_shlib.lib", "libpgport_shlib.lib"],
             )
             with self.assertRaisesRegex(RuntimeError, "ambiguous"):
                 windows.static_targets(rows + [rows[0]], root)
             with self.assertRaisesRegex(RuntimeError, "ambiguous"):
                 windows.static_targets(rows[1:], root)
+            for required in ("libpgcommon_shlib", "libpgport_shlib"):
+                with (
+                    self.subTest(required=required),
+                    self.assertRaisesRegex(RuntimeError, required),
+                ):
+                    windows.static_targets(
+                        [row for row in rows if row["name"] != required], root
+                    )
             rows[0]["filename"] = [str(root / "../outside.lib")]
             with self.assertRaisesRegex(RuntimeError, "escapes"):
                 windows.static_targets(rows, root)

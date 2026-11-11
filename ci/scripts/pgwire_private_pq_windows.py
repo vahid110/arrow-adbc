@@ -32,7 +32,9 @@ import pgwire_private_pq as package
 
 SYSTEM_LIBS = ("ws2_32", "secur32", "advapi32", "crypt32", "bcrypt", "user32")
 ARCHITECTURES = {"x64": "IMAGE_FILE_MACHINE_AMD64", "arm64": "IMAGE_FILE_MACHINE_ARM64"}
-TARGETS = ("libpq", "libpgcommon", "libpgport")
+# These static _shlib variants provide the public frontend encoding ABI.
+# Plain libpgcommon compiles those definitions with USE_PRIVATE_ENCODING_FUNCS.
+TARGETS = ("libpq", "libpgcommon_shlib", "libpgport_shlib")
 
 
 def native_architecture():
