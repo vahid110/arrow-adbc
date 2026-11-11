@@ -65,6 +65,31 @@ class MixedOracleTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 self.case.check_projection(bad, self.ordinary, self.hll)
 
+    def test_same_cardinality_wrong_member_fails_rebound_union(self):
+        # Both projection paths deliver the same substituted singleton. The
+        # ordinary comparison succeeds, but its union with the stored one is two.
+        self.case.check_projection(self.mixed, self.ordinary, self.hll)
+        result = pa.table({"rebound": [1], "combined": [2]})
+        reader = result.to_reader()
+        self.case.connection = object()
+        with patch.object(vendor.adm, "AdbcStatement") as factory:
+            stmt = factory.return_value.__enter__.return_value
+            handle = vendor.adm.ArrowArrayStreamHandle()
+            reader._export_to_c(handle.address)
+            stmt.execute_query.return_value = (handle, 1)
+            with self.assertRaises(AssertionError):
+                self.case.check_mixed_sketch_member('"fixture"', self.mixed)
+            batch = stmt.bind.call_args.args[0]
+            self.assertEqual(batch.column(0).to_pylist(), ["a stored sketch"])
+            self.assertEqual(
+                batch.schema.field(0).metadata,
+                vendor.encoded_field("HLLSKETCH").metadata,
+            )
+            sql = stmt.set_sql_query.call_args.args[0]
+            self.assertIn("HLL_COMBINE(value)", sql)
+            self.assertIn('FROM "fixture" WHERE id = 1', sql)
+            self.assertIn("UNION ALL SELECT $1::HLLSKETCH", sql)
+
     def test_history_observation_never_replays_volatile_statement(self):
         result = pa.table({"sample": [0.3], "h": ["sketch"]})
         with patch.object(self.case, "query_table", return_value=result) as execute:

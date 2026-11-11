@@ -360,6 +360,7 @@ class VendorPublicTest(unittest.TestCase):
         mixed_columns = "h AS first_h, id, " + ", ".join(names) + ", h AS last_h"
         mixed = self.query_table("SELECT " + mixed_columns + tail)
         self.check_projection(mixed, ordinary, hll)
+        self.check_mixed_sketch_member(name, mixed)
         with adm.AdbcStatement(self.connection) as stmt:
             stmt.set_sql_query(f"SELECT {mixed_columns} FROM {name}")
             handle = stmt.execute_schema()
@@ -443,6 +444,25 @@ class VendorPublicTest(unittest.TestCase):
             )
         else:
             self.assertEqual(mixed.schema.field("ts").type, pa.timestamp("us"))
+
+    def check_mixed_sketch_member(self, name, mixed):
+        # Rebind the mixed result itself. Two different one-member sketches
+        # both have cardinality one, but their union can reveal substitution.
+        value = mixed.column("first_h")[0].as_py()
+        batch = encoded_batch("HLLSKETCH", [value], with_id=False)
+        with adm.AdbcStatement(self.connection) as stmt:
+            stmt.set_sql_query(
+                "SELECT HLL_CARDINALITY($1::HLLSKETCH) AS rebound, "
+                "(SELECT HLL_CARDINALITY(HLL_COMBINE(value)) FROM "
+                f"(SELECT h AS value FROM {name} WHERE id = 1 "
+                "UNION ALL SELECT $1::HLLSKETCH AS value) AS sketches) AS combined"
+            )
+            stmt.bind(batch)
+            handle, _ = stmt.execute_query()
+            with pa.RecordBatchReader._import_from_c(handle.address) as reader:
+                self.assertEqual(
+                    reader.read_all().to_pylist(), [{"rebound": 1, "combined": 1}]
+                )
 
     def check_tagged_execution(self, name):
         # Query-history visibility is limited to the current user's own query.
