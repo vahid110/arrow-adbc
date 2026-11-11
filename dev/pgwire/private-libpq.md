@@ -127,9 +127,10 @@ libpq/common/port targets, including their private encoding aliases. It disables
 PCH/LTO and string pooling, uses the existing static-library/dynamic-CRT (`/MD`)
 triplets, and rejects cross builds. Tool paths, source pins, target machine and
 runtime directives are checked explicitly. The first pass inventories COFF;
-the second uses `/FI` for C identifiers and LLVM objcopy for only the exact
-inventoried numeric constants which cannot be C macro names. Unknown special
-symbols fail. The final audit requires every original definition to be prefixed,
+the second uses `/FI` for C identifiers and LLVM objcopy for inventoried numeric
+constants and decorated function-local static data. If an identifier in a
+decorated name is itself a global, objcopy renames it as well so both builds
+emit the same original decoration. Unknown special symbols fail. The final audit requires every original definition to be prefixed,
 no original internal references, and unchanged compiler metadata.
 
 The Windows C jobs now include original/relocated static and shared consumers

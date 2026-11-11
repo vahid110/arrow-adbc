@@ -18,6 +18,9 @@
 import contextlib
 import io
 import json
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +114,104 @@ class CoffSymbolAuditTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     symbols.inventory([Path("libpq.lib")], False, coff=True)
 
+    def test_scoped_static_and_its_c_tokens_are_renamed_at_object_level(self):
+        owner = "__local_stdio_scanf_options"
+        name = f"?_OptionsStorage@?1??{owner}@@9@9"
+        names = {name, owner, "_OptionsStorage", self.literal, "PQlibVersion"}
+        self.assertEqual(symbols.coff_object_names(names), names - {"PQlibVersion"})
+        output = f"{name} B 0 0\n" + f"{symbols.PREFIX}{name} D 0 0\n"
+        with patch("subprocess.check_output", return_value=output):
+            self.assertEqual(
+                symbols.inventory([Path("a")], False, coff=True)[0],
+                {name, symbols.PREFIX + name},
+            )
+        with patch(
+            "subprocess.check_output",
+            return_value=f"{name} T 0 0\n??bad D 0 0\n?unknown R 0 0\n",
+        ):
+            with self.assertRaises(ValueError) as rejected:
+                symbols.inventory([Path("a")], False, coff=True)
+            for symbol in (name, "??bad", "?unknown"):
+                self.assertIn(symbol, str(rejected.exception))
+
+    @unittest.skipUnless(
+        all(
+            shutil.which(t)
+            for t in ("clang", "llvm-lib", "llvm-nm", "llvm-objcopy", "lld-link")
+        ),
+        "requires LLVM COFF tools",
+    )
+    def test_real_coff_archive_indexes_and_imports(self):
+        # No SDK, CRT or Windows execution is required for this link test.
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            (base / "owner.c").write_text(
+                "extern int dependency(void);\n"
+                "__declspec(selectany) volatile int scoped "
+                '__asm__("?_OptionsStorage@?1??owner@@9@9") = 4;\n'
+                "int owner(void) {return scoped;}\n"
+                "int PQlibVersion(void) {return owner()+dependency();}\n"
+                "int ADBCPQprivatePackageAbi(void) {return 1;}\n"
+                "int ADBCPQexecPreparedFormats(void) {return 1;}\n"
+                "int ADBCPQsendQueryPreparedFormats(void) {return 1;}\n"
+            )
+            (base / "dependency.c").write_text(
+                "__declspec(dllimport) int external_system_fn(void);\n"
+                "int dependency(void) {return external_system_fn();}\n"
+            )
+            (base / "consumer.c").write_text(
+                f"int PQlibVersion(void), {symbols.PREFIX}PQlibVersion(void);\n"
+                "int stub(void) {return 1;}\n"
+                "int (*__imp_external_system_fn)(void) = stub;\n"
+                "int entry(void) {return PQlibVersion() + "
+                f"{symbols.PREFIX}PQlibVersion();}}\n"
+            )
+            (base / "exports.txt").write_text("PQlibVersion 1\n")
+            for arch in ("x86_64", "aarch64"):
+                folder = base / arch
+                folder.mkdir()
+
+                def run(*args):
+                    subprocess.run(args, check=True, cwd=folder, capture_output=True)
+
+                cc = ["clang", f"--target={arch}-pc-windows-msvc", "-c"]
+                for phase in ("raw", "private"):
+                    include = [] if phase == "raw" else ["-include", "map/namespace.h"]
+                    for src in ("owner", "dependency"):
+                        run(*cc, *include, f"../{src}.c", "-o", f"{src}.obj")
+                    run("llvm-lib", f"/out:{phase}.lib", "owner.obj", "dependency.obj")
+                    tool = [sys.executable, symbols.__file__]
+                    common = ["--coff", "--nm", "llvm-nm", "--directory", "map"]
+                    if phase == "raw":
+                        run(
+                            *tool,
+                            "generate",
+                            *common,
+                            "--exports",
+                            "../exports.txt",
+                            "raw.lib",
+                        )
+                    else:
+                        run(
+                            "llvm-objcopy",
+                            "--redefine-syms=map/coff-redefine.syms",
+                            "private.lib",
+                            "renamed.lib",
+                        )
+                        run(*tool, "audit", *common, "renamed.lib")
+                run(*cc, "../consumer.c", "-o", "consumer.obj")
+                run(
+                    "lld-link",
+                    "/entry:entry",
+                    "/subsystem:console",
+                    "/nodefaultlib",
+                    "/out:consumer.exe",
+                    "consumer.obj",
+                    "raw.lib",
+                    "renamed.lib",
+                )
+                self.assertTrue((folder / "consumer.exe").is_file())
+
     def test_macro_and_object_maps_partition_all_definitions(self):
         public = [
             "PQlibVersion",
@@ -159,7 +260,14 @@ class CoffSymbolAuditTest(unittest.TestCase):
                 + " R 0 0\n"
             )
             argv = ["symbols", "audit", "--coff", "--directory", str(root), "libpq.lib"]
-            for mutation in (None, "constant", "metadata", "reference"):
+            for mutation in (
+                None,
+                "constant",
+                "metadata",
+                "reference",
+                "import",
+                "private-import",
+            ):
                 changed = private
                 if mutation == "constant":
                     changed = changed.replace(
@@ -169,6 +277,10 @@ class CoffSymbolAuditTest(unittest.TestCase):
                     changed = changed.replace("A 800", "A 1")
                 elif mutation == "reference":
                     changed += "PQlibVersion U 0 0\n"
+                elif mutation == "import":
+                    changed += "__imp_PQlibVersion U 0 0\n"
+                elif mutation == "private-import":
+                    changed += "__imp_" + symbols.PREFIX + "PQlibVersion U 0 0\n"
                 with (
                     self.subTest(mutation=mutation),
                     patch("sys.argv", argv),

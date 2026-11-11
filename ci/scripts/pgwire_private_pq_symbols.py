@@ -37,8 +37,30 @@ def coff_literal(name):
     )
 
 
+def coff_scoped_static(name):
+    """MSVC decorated storage for a static local in an extern C function."""
+    return re.fullmatch(
+        r"\?([A-Za-z_][A-Za-z_0-9]*)@\?(?:[0-9]|[A-P]+@)\?\?"
+        r"([A-Za-z_][A-Za-z_0-9]*)@@9@9",
+        name.removeprefix(PREFIX),
+    )
+
+
+def coff_object_names(defined):
+    # Macro-renaming either identifier within the decoration produces a different
+    # raw/private name before objcopy. Keep those globals in the object rename set.
+    names = {name for name in defined if coff_literal(name)}
+    for name in defined:
+        local = coff_scoped_static(name)
+        if local:
+            names.add(name)
+            names.update(defined.intersection(local.groups()))
+    return names
+
+
 def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
     defined, undefined = set(), set()
+    unsupported_coff = set()
     for archive in archives:
         output = subprocess.check_output([nm, "-g", "-P", str(archive)], text=True)
         for line in output.splitlines():
@@ -63,12 +85,24 @@ def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
                 undefined.add(name)
             elif kind in {"T", "D", "B", "S", "R", "C", "G", "V", "W"}:
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) and not (
-                    coff and kind == "R" and coff_literal(name)
+                    coff
+                    and (
+                        (kind == "R" and coff_literal(name))
+                        or (kind in {"B", "D", "R", "V"} and coff_scoped_static(name))
+                    )
                 ):
+                    if coff:
+                        unsupported_coff.add((name, kind))
+                        continue
                     raise ValueError(f"defined global is not a C identifier: {name}")
                 defined.add(name)
             else:
-                raise ValueError(f"unreviewed nm global kind: {line}")
+                if coff:
+                    unsupported_coff.add((name, kind))
+                else:
+                    raise ValueError(f"unreviewed nm global kind: {line}")
+    if unsupported_coff:
+        raise ValueError(f"Unreviewed COFF definitions: {sorted(unsupported_coff)}")
     if not defined:
         raise ValueError("no definitions found")
     return defined, undefined
@@ -105,8 +139,9 @@ def main():
         if not public <= defined:
             raise ValueError(f"public definitions absent: {sorted(public - defined)}")
         args.directory.mkdir(parents=True, exist_ok=True)
+        object_names = coff_object_names(defined) if args.coff else set()
         for filename, names in [
-            ("namespace.h", defined),
+            ("namespace.h", defined - object_names),
             ("public-namespace.h", public),
         ]:
             content = (
@@ -114,9 +149,7 @@ def main():
                 "#pragma once\n"
             )
             content += "".join(
-                f"#define {name} {PREFIX}{name}\n"
-                for name in sorted(names)
-                if not (args.coff and coff_literal(name))
+                f"#define {name} {PREFIX}{name}\n" for name in sorted(names)
             )
             (args.directory / filename).write_text(content)
         manifest = {
@@ -127,10 +160,9 @@ def main():
 
         if args.coff:
             manifest["coff_metadata"] = sorted(metadata)
-            literals = sorted(name for name in defined if coff_literal(name))
-            manifest["coff_object_symbols"] = literals
+            manifest["coff_object_symbols"] = sorted(object_names)
             (args.directory / "coff-redefine.syms").write_text(
-                "".join(f"{name} {PREFIX}{name}\n" for name in literals)
+                "".join(f"{name} {PREFIX}{name}\n" for name in sorted(object_names))
             )
         (args.directory / "symbols.json").write_text(
             json.dumps(manifest, indent=2) + "\n"
@@ -156,6 +188,14 @@ def main():
                 name for name in undefined - defined if name.startswith(PREFIX)
             ),
         }
+        if args.coff:
+            # Static private symbols cannot resolve via the public DLL import table.
+            problems["imported_internal_references"] = sorted(
+                name
+                for name in undefined
+                if name.startswith("__imp_")
+                and (name[6:] in original or name[6:].startswith(PREFIX))
+            )
         if args.coff and manifest.get("coff_metadata") != [
             list(m) for m in sorted(metadata)
         ]:

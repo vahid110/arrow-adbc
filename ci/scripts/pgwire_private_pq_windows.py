@@ -305,8 +305,8 @@ def build(args, pins):
                 args.architecture,
             )
         if phase == "private":
-            # Compiler numeric constants cannot be renamed with C macros. Rename
-            # only the exact raw-pass numeric symbols, then audit the complete set.
+            # Rename the exact raw-pass COFF object symbols, including decorated
+            # local storage and its enclosing functions, then audit the entire set.
             renames = mapping / "coff-redefine.syms"
             if renames.read_text().strip():
                 for index, archive in enumerate(archives):
