@@ -20,6 +20,7 @@
 import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import pgwire_vendor_public_test as vendor
@@ -90,6 +91,33 @@ class MixedOracleTest(unittest.TestCase):
             self.assertIn('FROM "fixture" WHERE id = 1', sql)
             self.assertIn("UNION ALL SELECT $1::HLLSKETCH", sql)
 
+    def test_empty_query_must_match_its_describe_and_both_controls(self):
+        original = self.mixed.slice(0, 0)
+        idx = original.schema.get_field_index("vc")
+        field = original.schema.field(idx).with_metadata(
+            {b"ADBC:redshift:type_modifier": b"-1", b"unknown": b"private-value"}
+        )
+        changed = original.set_column(idx, field, original.column(idx))
+        hll = original.select(["first_h", "last_h"])
+        ordinary = changed.select(self.ordinary.column_names)
+        report = io.StringIO()
+        with redirect_stdout(report):
+            self.case.check_empty_projection(
+                changed, changed.schema, ordinary, hll, original.schema
+            )
+            for described, scalar, sketch in (
+                (original.schema, ordinary, hll),
+                (changed.schema, original.select(self.ordinary.column_names), hll),
+                (changed.schema, ordinary, hll.rename_columns(["last_h", "first_h"])),
+            ):
+                with self.assertRaises(AssertionError):
+                    self.case.check_empty_projection(
+                        changed, described, scalar, sketch, original.schema
+                    )
+        self.assertIn("ADBC:redshift:type_modifier", report.getvalue())
+        self.assertIn("-1", report.getvalue())
+        self.assertNotIn("private-value", report.getvalue())
+
     def test_history_observation_never_replays_volatile_statement(self):
         result = pa.table({"sample": [0.3], "h": ["sketch"]})
         with patch.object(self.case, "query_table", return_value=result) as execute:
@@ -102,6 +130,24 @@ class MixedOracleTest(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     self.case.check_tagged_execution('"fixture"')
             execute.assert_called_once()
+
+    def test_safe_result_keeps_only_validated_server_status(self):
+        for state, visible in (("42601", True), ("private-value", False)):
+            result = vendor.SafeResult(None, True, 1)
+            try:
+                raise vendor.adm.Error(
+                    "synthetic-secret",
+                    status_code=vendor.adm.AdbcStatusCode.IO,
+                    sqlstate=state,
+                )
+            except vendor.adm.Error as exc:
+                evidence = result._exc_info_to_string(
+                    (type(exc), exc, exc.__traceback__), self
+                )
+            self.assertEqual("SQLSTATE=42601" in evidence, visible)
+            self.assertIn("ADBC=", evidence)
+            self.assertNotIn("private-value", evidence)
+            self.assertNotIn("synthetic-secret", evidence)
 
     def test_private_pipe_and_redacted_failure(self):
         read, write = os.pipe()

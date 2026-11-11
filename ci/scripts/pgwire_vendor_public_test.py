@@ -30,8 +30,10 @@ The command runs both temporal modes and returns nonzero on failure.
 """
 
 import argparse
+import hashlib
 import os
 import pathlib
+import re
 import stat
 import time
 import unittest
@@ -216,6 +218,36 @@ class VendorPublicTest(unittest.TestCase):
             with pa.RecordBatchReader._import_from_c(stream.address) as reader:
                 return reader.read_all()
 
+    def describe(self, sql):
+        with adm.AdbcStatement(self.connection) as stmt:
+            stmt.set_sql_query(sql)
+            handle = stmt.execute_schema()
+            return pa.Schema._import_from_c(handle.address)
+
+    def check_empty_projection(self, empty, described, ordinary, hll, populated):
+        for table in (empty, ordinary, hll):
+            self.assertEqual(table.num_rows, 0)
+        # Use positional fields so a missing/reordered/renamed field is a
+        # reportable schema mismatch rather than an error looking up an alias.
+        controls = pa.schema(
+            [hll.schema.field(0), *ordinary.schema, hll.schema.field(1)],
+            metadata=ordinary.schema.metadata,
+        )
+        self.assertEqual(hll.schema.metadata, ordinary.schema.metadata)
+        comparisons = (
+            ("populated-vs-empty", populated, empty.schema),
+            ("empty-describe", described, empty.schema),
+            ("empty-controls", controls, empty.schema),
+        )
+        failed = []
+        for label, expected, actual in comparisons:
+            if not actual.equals(expected, check_metadata=True):
+                mode = self.connection_options["adbc.redshift.temporal_representation"]
+                print(mode, label, safe_schema_diff(expected, actual), flush=True)
+                if label != "populated-vs-empty":
+                    failed.append(label)
+        self.assertFalse(failed)
+
     def test_encoded_replace_preserves_sentinel_on_both_bind_apis(self):
         self.execute(f'CREATE TEMP TABLE "{self.table}" (marker INTEGER)')
         self.execute(f'INSERT INTO "{self.table}" VALUES (71)')
@@ -361,14 +393,17 @@ class VendorPublicTest(unittest.TestCase):
         mixed = self.query_table("SELECT " + mixed_columns + tail)
         self.check_projection(mixed, ordinary, hll)
         self.check_mixed_sketch_member(name, mixed)
-        with adm.AdbcStatement(self.connection) as stmt:
-            stmt.set_sql_query(f"SELECT {mixed_columns} FROM {name}")
-            handle = stmt.execute_schema()
-            described = pa.Schema._import_from_c(handle.address)
-            self.assertTrue(described.equals(mixed.schema, check_metadata=True))
-        empty = self.query_table(f"SELECT {mixed_columns} FROM {name} WHERE 1 = 0")
-        self.assertEqual(empty.num_rows, 0)
-        self.assertTrue(empty.schema.equals(mixed.schema, check_metadata=True))
+        described = self.describe(f"SELECT {mixed_columns} FROM {name}")
+        self.assertTrue(described.equals(mixed.schema, check_metadata=True))
+        empty_from = f" FROM {name} WHERE 1 = 0"
+        empty_sql = "SELECT " + mixed_columns + empty_from
+        self.check_empty_projection(
+            self.query_table(empty_sql),
+            self.describe(empty_sql),
+            self.query_table("SELECT id, " + ", ".join(names) + empty_from),
+            self.query_table("SELECT h AS first_h, h AS last_h" + empty_from),
+            mixed.schema,
+        )
 
         # Bind and BindStream each execute one fixed SELECT per input row.
         # Two nonempty input batches surround an empty batch; no duplicating or
@@ -613,18 +648,100 @@ class VendorPublicTest(unittest.TestCase):
             )
 
 
+def safe_schema_diff(expected, actual):
+    """Report fixture fields and numeric modifiers; hash arbitrary metadata."""
+
+    def digest(value):
+        return hashlib.sha256(value).hexdigest()[:12]
+
+    def metadata_diff(left, right):
+        left, right = left or {}, right or {}
+        changes = []
+        numeric = {
+            b"ADBC:redshift:" + key
+            for key in (
+                b"type_modifier",
+                b"byte_width",
+                b"precision",
+                b"scale",
+                b"fractional_precision",
+                b"oid",
+            )
+        }
+        known = numeric | {
+            b"POSTGRESQL:type",
+            b"ADBC:redshift:sql_type",
+            b"ARROW:extension:name",
+            b"ARROW:extension:metadata",
+        }
+        for key in sorted(left.keys() | right.keys()):
+            if left.get(key) == right.get(key):
+                continue
+
+            def token(value):
+                if value is None:
+                    return "absent"
+                if key in numeric and len(value) <= 11 and value.lstrip(b"-").isdigit():
+                    return value.decode("ascii")
+                return digest(value)
+
+            label = key.decode("ascii") if key in known else digest(key)
+            changes.append((label, token(left.get(key)), token(right.get(key))))
+        return changes
+
+    def type_token(field):
+        arrow_type = field.type
+        if pa.types.is_decimal(arrow_type):
+            return (arrow_type.id, arrow_type.precision, arrow_type.scale)
+        return (arrow_type.id, digest(str(arrow_type).encode()))
+
+    changes = [("fields", len(expected), len(actual))]
+    top = metadata_diff(expected.metadata, actual.metadata)
+    if top:
+        changes.append(("schema-metadata", top))
+    names = {"id", "first_h", "last_h"} | {alias for alias, _, _ in MIXED_FIELDS}
+    for i, (left, right) in enumerate(zip(expected, actual)):
+        if left.equals(right, check_metadata=True):
+            continue
+        changes.append(
+            (
+                i,
+                left.name if left.name in names else digest(left.name.encode()),
+                right.name if right.name in names else digest(right.name.encode()),
+                type_token(left),
+                type_token(right),
+                left.nullable,
+                right.nullable,
+                metadata_diff(left.metadata, right.metadata),
+            )
+        )
+    text = repr(changes)
+    if len(text) > 255:
+        return text[:235] + "..." + digest(text.encode())
+    return text
+
+
 class SafeResult(unittest.TextTestResult):
     def _exc_info_to_string(self, err, test):
         # libpq/manager exceptions can quote complete connection arguments.
         # Report a useful failing frame but never stringify the exception.
-        kind, _, trace = err
+        kind, exc, trace = err
         selected = trace
         while trace is not None:
             if trace.tb_frame.f_code.co_filename == __file__:
                 selected = trace
             trace = trace.tb_next
         frame = selected.tb_frame.f_code.co_name
-        return f"{kind.__name__} in {frame}:{selected.tb_lineno}"
+        detail = ""
+        if isinstance(exc, adm.Error):
+            state = exc.sqlstate
+            if isinstance(state, bytes):
+                state = state.decode("ascii", "replace")
+            if isinstance(state, str) and re.fullmatch("[0-9A-Z]{5}", state):
+                detail += f" SQLSTATE={state}"
+            if exc.status_code in tuple(adm.AdbcStatusCode):
+                detail += f" ADBC={int(exc.status_code)}"
+        return f"{kind.__name__} in {frame}:{selected.tb_lineno}{detail}"
 
 
 def read_uri(fd):
