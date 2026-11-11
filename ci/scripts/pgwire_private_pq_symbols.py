@@ -46,18 +46,6 @@ def coff_scoped_static(name):
     )
 
 
-def coff_object_names(defined):
-    # Macro-renaming either identifier within the decoration produces a different
-    # raw/private name before objcopy. Keep those globals in the object rename set.
-    names = {name for name in defined if coff_literal(name)}
-    for name in defined:
-        local = coff_scoped_static(name)
-        if local:
-            names.add(name)
-            names.update(defined.intersection(local.groups()))
-    return names
-
-
 def inventory(archives, macho, *, coff=False, nm="nm", metadata=None, common=None):
     defined, undefined = set(), set()
     unsupported_coff = set()
@@ -154,7 +142,7 @@ def main():
         if not public <= defined:
             raise ValueError(f"public definitions absent: {sorted(public - defined)}")
         args.directory.mkdir(parents=True, exist_ok=True)
-        object_names = coff_object_names(defined) if args.coff else set()
+        object_names = defined if args.coff else set()
         for filename, names in [
             ("namespace.h", defined - object_names),
             ("public-namespace.h", public),
@@ -174,6 +162,7 @@ def main():
         }
 
         if args.coff:
+            manifest["coff_external_references"] = sorted(undefined - defined)
             manifest["coff_metadata"] = sorted(metadata)
             manifest["coff_common"] = sorted(common)
             manifest["coff_object_symbols"] = sorted(object_names)
@@ -205,6 +194,13 @@ def main():
             ),
         }
         if args.coff:
+            external = set(manifest["coff_external_references"])
+            problems["missing_external_references"] = sorted(
+                external - (undefined - defined)
+            )
+            problems["unexpected_external_references"] = sorted(
+                (undefined - defined) - external
+            )
             expected_common = {
                 (PREFIX + name, size) for name, size in manifest["coff_common"]
             }

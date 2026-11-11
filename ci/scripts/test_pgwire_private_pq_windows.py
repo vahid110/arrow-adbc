@@ -213,14 +213,12 @@ class WindowsRecipeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _, _, args = fixture(Path(tmp))
             args.openssl_libdir = args.openssl_prefix / "lib"
-            flags = windows.meson_options(args, Path(tmp) / "namespace.h")
             args.prefix = PureWindowsPath("D:/vcpkg/buildtrees/private/install")
-            for namespace in (None, Path(tmp) / "namespace.h"):
-                options = windows.meson_options(args, namespace)
-                self.assertEqual(
-                    [option for option in options if option.startswith("--prefix=")],
-                    ["--prefix=D:/vcpkg/buildtrees/private/install"],
-                )
+            flags = windows.meson_options(args)
+            self.assertEqual(
+                [option for option in flags if option.startswith("--prefix=")],
+                ["--prefix=D:/vcpkg/buildtrees/private/install"],
+            )
             self.assertIn("-Db_vscrt=md", flags)
             self.assertIn("-Db_pch=false", flags)
             self.assertIn("-Db_lto=false", flags)
@@ -228,8 +226,7 @@ class WindowsRecipeTest(unittest.TestCase):
             cflags = json.loads(
                 next(f.split("=", 1)[1] for f in flags if f.startswith("-Dc_args="))
             )
-            self.assertEqual(cflags[0], "/GF-")
-            self.assertTrue(cflags[1].startswith("/FI"))
+            self.assertEqual(cflags, ["/GF-"])
 
     def test_source_member_escape_rejected_before_extract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -348,6 +345,9 @@ class WindowsRecipeTest(unittest.TestCase):
                         if any(a.startswith("--redefine-syms=") for a in c)
                     )
                     self.assertLess(rewrite, audit)
+                    self.assertEqual(sum("setup" in c for c in calls), 1)
+                    self.assertFalse(any("/FI" in arg for c in calls for arg in c))
+                    self.assertEqual(len(recorded["raw_archive_digests"]), 3)
                     self.assertFalse(any("postgres.exe" in str(c) for c in calls))
 
 

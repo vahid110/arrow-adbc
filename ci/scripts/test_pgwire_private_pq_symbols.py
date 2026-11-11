@@ -117,8 +117,6 @@ class CoffSymbolAuditTest(unittest.TestCase):
     def test_scoped_static_and_its_c_tokens_are_renamed_at_object_level(self):
         owner = "__local_stdio_scanf_options"
         name = f"?_OptionsStorage@?1??{owner}@@9@9"
-        names = {name, owner, "_OptionsStorage", self.literal, "PQlibVersion"}
-        self.assertEqual(symbols.coff_object_names(names), names - {"PQlibVersion"})
         output = f"{name} B 0 0\n" + f"{symbols.PREFIX}{name} D 0 0\n"
         with patch("subprocess.check_output", return_value=output):
             self.assertEqual(
@@ -175,30 +173,21 @@ class CoffSymbolAuditTest(unittest.TestCase):
                     subprocess.run(args, check=True, cwd=folder, capture_output=True)
 
                 cc = ["clang", f"--target={arch}-pc-windows-msvc", "-fcommon", "-c"]
-                for phase in ("raw", "private"):
-                    include = [] if phase == "raw" else ["-include", "map/namespace.h"]
-                    for src in ("owner", "dependency"):
-                        run(*cc, *include, f"../{src}.c", "-o", f"{src}.obj")
-                    run("llvm-lib", f"/out:{phase}.lib", "owner.obj", "dependency.obj")
-                    tool = [sys.executable, symbols.__file__]
-                    common = ["--coff", "--nm", "llvm-nm", "--directory", "map"]
-                    if phase == "raw":
-                        run(
-                            *tool,
-                            "generate",
-                            *common,
-                            "--exports",
-                            "../exports.txt",
-                            "raw.lib",
-                        )
-                    else:
-                        run(
-                            "llvm-objcopy",
-                            "--redefine-syms=map/coff-redefine.syms",
-                            "private.lib",
-                            "renamed.lib",
-                        )
-                        run(*tool, "audit", *common, "renamed.lib")
+                for src in ("owner", "dependency"):
+                    run(*cc, f"../{src}.c", "-o", f"{src}.obj")
+                run("llvm-lib", "/out:raw.lib", "owner.obj", "dependency.obj")
+                tool = [sys.executable, symbols.__file__]
+                common = ["--coff", "--nm", "llvm-nm", "--directory", "map"]
+                run(
+                    *tool, "generate", *common, "--exports", "../exports.txt", "raw.lib"
+                )
+                run(
+                    "llvm-objcopy",
+                    "--redefine-syms=map/coff-redefine.syms",
+                    "raw.lib",
+                    "renamed.lib",
+                )
+                run(*tool, "audit", *common, "renamed.lib")
                 run(*cc, "../consumer.c", "-o", "consumer.obj")
                 run(
                     "lld-link",
@@ -255,10 +244,13 @@ class CoffSymbolAuditTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 symbols.main()
-            self.assertNotIn(self.literal, (root / "namespace.h").read_text())
+            self.assertNotIn("#define", (root / "namespace.h").read_text())
             self.assertEqual(
                 (root / "coff-redefine.syms").read_text(),
-                self.literal + " " + symbols.PREFIX + self.literal + "\n",
+                "".join(
+                    f"{n} {symbols.PREFIX}{n}\n"
+                    for n in sorted(public + [self.literal])
+                ),
             )
             manifest = json.loads((root / "symbols.json").read_text())
             self.assertEqual(set(manifest["defined"]), set(public) | {self.literal})

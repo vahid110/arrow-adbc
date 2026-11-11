@@ -126,12 +126,12 @@ libpq target and the static libpgcommon_shlib and libpgport_shlib support
 archives. These expose the public encoding symbols required by libpq. It disables
 PCH/LTO and string pooling, uses the existing static-library/dynamic-CRT (`/MD`)
 triplets, and rejects cross builds. Tool paths, source pins, target machine and
-runtime directives are checked explicitly. The first pass inventories COFF;
-the second uses `/FI` for C identifiers and LLVM objcopy for inventoried numeric
-constants and decorated function-local static data. If an identifier in a
-decorated name is itself a global, objcopy renames it as well so both builds
-emit the same original decoration. Unknown special symbols fail. The final audit requires every original definition to be prefixed,
-no original internal references, and unchanged compiler metadata.
+runtime directives are checked explicitly. LLVM inventories the three compiled COFF archives and
+rewrites every defined global and its references into new private archives.
+The configure probes and compiler see the original C identifiers. The final
+audit checks the complete prefixed definition set, external references, common
+allocation sizes and compiler metadata. The package retains the original
+archive digests and LLVM rename map for reproduction.
 
 The Windows C jobs build and run static and shared consumers against the
 original and relocated packages alongside stock libpq. A whole-archive link

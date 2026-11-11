@@ -22,6 +22,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -141,10 +142,7 @@ def extract_source(archive, directory):
     return directory / "postgresql-17.11"
 
 
-def meson_options(args, namespace=None):
-    flags = ["/GF-"]  # No pooled string COMDAT names dependent on source identifiers.
-    if namespace is not None:
-        flags.append("/FI" + namespace.as_posix())
+def meson_options(args):
     return [
         "--backend=ninja",
         # PostgreSQL defaults to /usr/local/pgsql, a drive-relative path on Windows.
@@ -158,7 +156,7 @@ def meson_options(args, namespace=None):
         "-Db_vscrt=md",
         "-Ddebug=false",
         "-Doptimization=2",
-        "-Dc_args=" + json.dumps(flags),
+        "-Dc_args=" + json.dumps(["/GF-"]),
         "-Dextra_include_dirs="
         + json.dumps([(args.openssl_prefix / "include").as_posix()]),
         "-Dextra_lib_dirs=" + json.dumps([args.openssl_libdir.as_posix()]),
@@ -249,104 +247,88 @@ def build(args, pins):
     run([*args.meson_command_element, "--version"])
     mapping = work / "namespace"
     symbols = Path(__file__).with_name("pgwire_private_pq_symbols.py")
-    for phase in ("raw", "private"):
-        phase_dir = work / phase
-        phase_dir.mkdir()
-        source = extract_source(args.source_archive, phase_dir)
-        for patch in ("libpq-result-formats.patch", "namespace-macro-restore.patch"):
-            if phase == "private" or patch == "libpq-result-formats.patch":
-                run(
-                    [args.git, "apply", "--whitespace=nowarn", package.ASSETS / patch],
-                    source,
-                )
-        build_dir = phase_dir / "build"
-        namespace = mapping / "namespace.h" if phase == "private" else None
-        run(
-            [
-                *args.meson_command_element,
-                "setup",
-                build_dir,
-                source,
-                "--native-file",
-                native_file,
-                *meson_options(args, namespace),
-            ]
+    raw_dir = work / "raw"
+    raw_dir.mkdir()
+    source = extract_source(args.source_archive, raw_dir)
+    run(
+        [
+            args.git,
+            "apply",
+            "--whitespace=nowarn",
+            package.ASSETS / "libpq-result-formats.patch",
+        ],
+        source,
+    )
+    build_dir = raw_dir / "build"
+    run(
+        [
+            *args.meson_command_element,
+            "setup",
+            build_dir,
+            source,
+            "--native-file",
+            native_file,
+            *meson_options(args),
+        ]
+    )
+    targets = json.loads(
+        run([*args.meson_command_element, "introspect", "--targets", build_dir])
+    )
+    archives = static_targets(targets, build_dir)
+    run(
+        [
+            args.ninja,
+            "-C",
+            build_dir,
+            "-j1",
+            *[p.relative_to(build_dir).as_posix() for p in archives],
+        ]
+    )
+    abi_object = raw_dir / "package-abi.obj"
+    cflags = ["/nologo", "/MD", "/O2", "/GF-"]
+    run(
+        [
+            args.cc,
+            *cflags,
+            "/c",
+            package.ASSETS / "package-abi.c",
+            "/Fo" + str(abi_object),  # codespell:ignore fo
+        ]
+    )
+    merged = raw_dir / "libpq-with-abi.lib"
+    run([args.lib, "/NOLOGO", "/OUT:" + str(merged), archives[0], abi_object])
+    archives[0] = merged
+    for archive in archives:
+        verify_coff(
+            run([args.readobj, "--file-headers", "--coff-directives", archive]),
+            args.architecture,
         )
-        targets = json.loads(
-            run([*args.meson_command_element, "introspect", "--targets", build_dir])
+    raw_archives = list(archives)
+    symbol_tool = [sys.executable, symbols]
+    symbol_options = ["--coff", "--nm", args.nm, "--directory", mapping]
+    run(
+        [
+            *symbol_tool,
+            "generate",
+            *symbol_options,
+            "--exports",
+            source / "src/interfaces/libpq/exports.txt",
+            *raw_archives,
+        ]
+    )
+    private_dir = work / "private"
+    private_dir.mkdir()
+    renames = mapping / "coff-redefine.syms"
+    archives = []
+    for archive in raw_archives:
+        renamed = private_dir / archive.name
+        run([args.objcopy, "--redefine-syms=" + str(renames), archive, renamed])
+        verify_coff(
+            run([args.readobj, "--file-headers", "--coff-directives", renamed]),
+            args.architecture,
         )
-        archives = static_targets(targets, build_dir)
-        run(
-            [
-                args.ninja,
-                "-C",
-                build_dir,
-                "-j1",
-                *[p.relative_to(build_dir).as_posix() for p in archives],
-            ]
-        )
-        abi_object = phase_dir / "package-abi.obj"
-        cflags = ["/nologo", "/MD", "/O2", "/GF-"]
-        if namespace is not None:
-            cflags.append("/FI" + str(namespace))
-        run(
-            [
-                args.cc,
-                *cflags,
-                "/c",
-                package.ASSETS / "package-abi.c",
-                "/Fo" + str(abi_object),  # codespell:ignore fo
-            ]
-        )
-        merged = phase_dir / "libpq-with-abi.lib"
-        run([args.lib, "/NOLOGO", "/OUT:" + str(merged), archives[0], abi_object])
-        archives[0] = merged
-        for archive in archives:
-            verify_coff(
-                run([args.readobj, "--file-headers", "--coff-directives", archive]),
-                args.architecture,
-            )
-        if phase == "private":
-            # Rename the exact raw-pass COFF object symbols, including decorated
-            # local storage and its enclosing functions, then audit the entire set.
-            renames = mapping / "coff-redefine.syms"
-            if renames.read_text().strip():
-                for index, archive in enumerate(archives):
-                    renamed = phase_dir / f"namespaced-{index}.lib"
-                    run(
-                        [
-                            args.objcopy,
-                            "--redefine-syms=" + str(renames),
-                            archive,
-                            renamed,
-                        ]
-                    )
-                    archives[index] = renamed
-            for archive in archives:
-                verify_coff(
-                    run([args.readobj, "--file-headers", "--coff-directives", archive]),
-                    args.architecture,
-                )
-            action = ["audit"]
-        else:
-            action = [
-                "generate",
-                "--exports",
-                source / "src/interfaces/libpq/exports.txt",
-            ]
-        run(
-            [
-                sys.executable,
-                symbols,
-                *action,
-                "--coff",
-                "--nm",
-                args.nm,
-                "--directory",
-                mapping,
-                *archives,
-            ]
-        )
+        archives.append(renamed)
+    run([*symbol_tool, "audit", *symbol_options, *archives])
     package.install_package(
         args.prefix,
         source,
@@ -378,7 +360,9 @@ def build(args, pins):
     )
     run([probe])  # NULL-only API calls, never a socket or a credential read.
     share = args.prefix / "share" / package.PACKAGE
+    shutil.copyfile(renames, share / renames.name)
     receipt = {
+        "raw_archive_digests": {p.name: package.digest(p) for p in raw_archives},
         "status": "built-audited-installed-socket-free-probe-passed",
         "pins": pins,
         "system": "Windows",
