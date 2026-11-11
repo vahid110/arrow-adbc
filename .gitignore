@@ -142,3 +142,6 @@ javascript/native/build/
 # Static assets with a license that precludes them from being included in
 # source distributions. Downloaded at docs build time instead.
 docs/source/_static/fontawesome/
+
+# Generated dependency provenance staged for Redshift wheels.
+python/adbc_driver_redshift/adbc_driver_redshift/_private_pq/

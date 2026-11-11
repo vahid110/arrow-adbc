@@ -19,7 +19,7 @@
 
 #include <memory>
 
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 namespace adbc::driver::pgwire {
 

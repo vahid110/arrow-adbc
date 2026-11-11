@@ -37,3 +37,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(adbc_redshift_qualification
                         PRIVATE AdbcDriverManager::adbc_driver_manager_shared)
 endif()
+
+if(UNIX)
+  add_executable(adbc_redshift_mixed_hll ../redshift_mixed_hll.c
+                                         ../../../vendor/nanoarrow/nanoarrow.c)
+  target_compile_features(adbc_redshift_mixed_hll PRIVATE c_std_11)
+  target_include_directories(adbc_redshift_mixed_hll PRIVATE ../../../vendor)
+  target_link_libraries(adbc_redshift_mixed_hll
+                        PRIVATE AdbcDriverManager::adbc_driver_manager_shared)
+endif()

@@ -114,27 +114,34 @@ Status PqResultHelper::Execute(const std::vector<std::string>& params,
   return Status::Ok();
 }
 
-Status PqResultHelper::ExecutePreparedOutput() {
+Status PqResultHelper::ExecutePreparedOutput(const std::vector<int>* formats) {
   UNWRAP_STATUS(CheckEncoding());
   ClearResult();
-  result_.reset(PQexecPrepared(conn_, "", 0, nullptr, nullptr, nullptr,
-                               static_cast<int>(output_format_)));
+  result_.reset(ExecutePrepared(conn_, 0, nullptr, nullptr, nullptr,
+                                static_cast<int>(output_format_), formats));
   const auto status = PQresultStatus(result_.get());
   if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK)
     return MakeStatus(result_.get(), "[libpq] Failed prepared result execution");
   return CheckEncoding();
 }
 Status PqResultHelper::CheckDescriptor(const PGresult* expected, int format) const {
-  if (!expected || !result_ || PQnfields(expected) != PQnfields(result_.get()))
+  if (!expected) return Status::InvalidState("[Redshift] Missing result descriptor");
+  return CheckDescriptor(expected, std::vector<int>(PQnfields(expected), format));
+}
+Status PqResultHelper::CheckDescriptor(const PGresult* expected,
+                                       const std::vector<int>& formats) const {
+  if (!expected || !result_ || PQnfields(expected) != PQnfields(result_.get()) ||
+      formats.size() != static_cast<size_t>(PQnfields(expected)))
     return Status::InvalidState("[Redshift] Result descriptor count changed");
   for (int i = 0; i < PQnfields(expected); ++i) {
     if (PQftype(expected, i) != PQftype(result_.get(), i) ||
         PQfmod(expected, i) != PQfmod(result_.get(), i) ||
+        PQfsize(expected, i) != PQfsize(result_.get(), i) ||
         PQftable(expected, i) != PQftable(result_.get(), i) ||
         PQftablecol(expected, i) != PQftablecol(result_.get(), i) ||
         std::string_view(PQfname(expected, i)) !=
             std::string_view(PQfname(result_.get(), i)) ||
-        PQfformat(result_.get(), i) != format)
+        PQfformat(result_.get(), i) != formats[i])
       return Status::InvalidState("[Redshift] Result descriptor/format changed");
   }
   return Status::Ok();

@@ -40,6 +40,8 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-package.yml"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/**"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "c/driver/postgresql/**"
@@ -54,6 +56,8 @@ on:
       - feature/pgwire-core-redshift
     paths:
       - ".github/workflows/pgwire-package.yml"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/**"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "c/driver/postgresql/**"
@@ -110,7 +114,7 @@ jobs:
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
           apt-get update -o Acquire::Retries=3
-          apt-get install --yes build-essential ca-certificates cmake git libpq-dev ninja-build pkg-config python3
+          apt-get install --yes build-essential bison flex ca-certificates cmake git libpq-dev libssl-dev ninja-build pkg-config python3
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,12 +141,23 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Package version: $expected (SOVERSION $so_version)"
 
-      - name: Build and install drivers and manager
+      - name: Build pinned private Redshift dependency
+        run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
+          python3 ci/scripts/pgwire_private_pq.py \
+            --source-archive "$RUNNER_TEMP/postgresql-17.11.tar.bz2" \
+            --work-dir "$RUNNER_TEMP/private-pq" \
+            --prefix "$RUNNER_TEMP/private-pq/install" \
+            --openssl-prefix /usr --openssl-libdir "$(pkg-config --variable=libdir openssl)" --build-type release
+
+      - name: Build and install Linux drivers and manager
         run: |
           cmake -S c -B build/pgwire-package -G Ninja \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/private-pq/install" \
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_TESTS=OFF \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \
@@ -152,6 +167,8 @@ jobs:
 
       - name: Package, verify, and load from extracted archive
         run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py bundle \
+            "$RUNNER_TEMP/private-pq/install" "$RUNNER_TEMP/pgwire-prefix"
           cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
           cp c/driver/pgwire/DEVELOPMENT_PACKAGE.md \
             "$RUNNER_TEMP/pgwire-prefix/README.md"
@@ -163,6 +180,7 @@ jobs:
           (cd "$artifact_dir" && sha256sum -c "$archive.sha256")
           mkdir "$RUNNER_TEMP/pgwire-package-test"
           tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$artifact_dir/$archive"
+          python3 ci/scripts/pgwire_private_pq_distribution.py verify "$RUNNER_TEMP/pgwire-package-test"
           test -f "$RUNNER_TEMP/pgwire-package-test/README.md"
           test -f "$RUNNER_TEMP/pgwire-package-test/LICENSE.txt"
           test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
@@ -251,9 +269,12 @@ jobs:
       - name: Install build dependencies
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
-          brew install --quiet postgresql@18 libpq ninja pkgconf
+          brew install --quiet postgresql@18 libpq ninja pkgconf bison flex openssl@3
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Resolve package version
         shell: bash
@@ -273,12 +294,23 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Package version: $expected (SOVERSION $so_version)"
 
+      - name: Build pinned private Redshift dependency
+        run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
+          python3 ci/scripts/pgwire_private_pq.py \
+            --source-archive "$RUNNER_TEMP/postgresql-17.11.tar.bz2" \
+            --work-dir "$RUNNER_TEMP/private-pq" \
+            --prefix "$RUNNER_TEMP/private-pq/install" \
+            --openssl-prefix "$(brew --prefix openssl@3)" --build-type release
+
       - name: Build and install drivers and manager
         run: |
           cmake -S c -B build/pgwire-package -G Ninja \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/private-pq/install" \
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_TESTS=OFF \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \
@@ -296,6 +328,8 @@ jobs:
 
       - name: Package, verify, and load from extracted archive
         run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py bundle \
+            "$RUNNER_TEMP/private-pq/install" "$RUNNER_TEMP/pgwire-prefix"
           cp LICENSE.txt NOTICE.txt "$RUNNER_TEMP/pgwire-prefix/"
           cp c/driver/pgwire/DEVELOPMENT_PACKAGE_MACOS.md \
             "$RUNNER_TEMP/pgwire-prefix/README.md"
@@ -305,6 +339,7 @@ jobs:
           (cd "$RUNNER_TEMP" && LC_ALL=C shasum -a 256 -c "$archive.sha256")
           mkdir "$RUNNER_TEMP/pgwire-package-test"
           LC_ALL=C tar -C "$RUNNER_TEMP/pgwire-package-test" -xzf "$RUNNER_TEMP/$archive"
+          python3 ci/scripts/pgwire_private_pq_distribution.py verify "$RUNNER_TEMP/pgwire-package-test"
           test -f "$RUNNER_TEMP/pgwire-package-test/README.md"
           test -f "$RUNNER_TEMP/pgwire-package-test/LICENSE.txt"
           test -f "$RUNNER_TEMP/pgwire-package-test/NOTICE.txt"
@@ -396,6 +431,7 @@ jobs:
       PACKAGE_VERSION: ${{ inputs.version }}
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
       VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.triplet }}
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,18 +467,43 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.env', 'ci/vcpkg/**', 'c/**/vcpkg.json', '.github/workflows/native-vcpkg.yml') }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.env', 'ci/vcpkg/**', 'ci/scripts/pgwire_private_pq*.py', 'c/**/vcpkg.json', '.github/workflows/native-vcpkg.yml') }}
 
       - name: Install vcpkg
         shell: bash
         run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"
 
-      - name: Install libpq and its static-link dependencies
+      - name: Install ordinary and private libpq dependencies
         working-directory: c
         run: |
-          & "$($env:VCPKG_ROOT)\vcpkg.exe" install libpq `
-            --overlay-triplets "$pwd\..\ci\vcpkg\triplets"
-          if ($LASTEXITCODE -ne 0) { throw "failed to install libpq" }
+          & "$($env:VCPKG_ROOT)\vcpkg.exe" install libpq adbc-redshift-private-pq `
+            --overlay-triplets "$pwd\..\ci\vcpkg\triplets" `
+            --overlay-ports "$pwd\..\ci\vcpkg\ports"
+          if ($LASTEXITCODE -ne 0) {
+            & ../ci/scripts/show_private_pq_windows_log.ps1 $env:VCPKG_DEFAULT_TRIPLET
+            throw "failed to install libpq"
+          }
+
+      - name: Prove original and relocated Windows private package consumers
+        run: |
+          $dependency = "$($env:VCPKG_ROOT)/installed/$($env:VCPKG_DEFAULT_TRIPLET)"
+          $relocated = Join-Path $env:RUNNER_TEMP "private-pq-relocated"
+          python ci/scripts/pgwire_private_pq_distribution.py bundle $dependency $relocated
+          if ($LASTEXITCODE -ne 0) { throw "private dependency relocation failed" }
+          $arch = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          foreach ($pair in @(@("original", $dependency), @("relocated", $relocated))) {
+            $build = Join-Path $env:RUNNER_TEMP "private-pq-consumer-$($pair[0])"
+            cmake -S ci/vcpkg/ports/adbc-redshift-private-pq/consumer -B $build -A $arch `
+              "-DCMAKE_TOOLCHAIN_FILE=$($env:VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake" `
+              "-DVCPKG_TARGET_TRIPLET=$($env:VCPKG_DEFAULT_TRIPLET)" `
+              "-DCMAKE_PREFIX_PATH=$($pair[1])" `
+              "-DAdbcRedshiftPrivatePQ_DIR=$($pair[1])/lib/cmake/AdbcRedshiftPrivatePQ"
+            if ($LASTEXITCODE -ne 0) { throw "private consumer configure failed" }
+            cmake --build $build --config Release --parallel 1
+            if ($LASTEXITCODE -ne 0) { throw "private consumer build failed" }
+            ctest --test-dir $build -C Release --output-on-failure --no-tests=error
+            if ($LASTEXITCODE -ne 0) { throw "private consumer execution failed" }
+          }
 
       - name: Resolve package version
         shell: bash
@@ -465,6 +526,7 @@ jobs:
       - name: Build and install drivers and manager
         run: |
           cmake .\c\ --preset windows-release `
+            -DADBC_DRIVER_REDSHIFT=ON `
             -DADBC_BUILD_TESTS=OFF `
             -DADBC_DRIVER_FLIGHTSQL=OFF `
             -DADBC_DRIVER_SQLITE=OFF `
@@ -478,6 +540,9 @@ jobs:
       - name: Package, verify, and load from extracted ZIP
         run: |
           $prefix = Join-Path $pwd "local\release"
+          python ci/scripts/pgwire_private_pq_distribution.py bundle `
+            "$($env:VCPKG_ROOT)/installed/$($env:VCPKG_DEFAULT_TRIPLET)" $prefix
+          if ($LASTEXITCODE -ne 0) { throw "failed to bundle private-pq provenance" }
           $artifactDir = Join-Path $pwd "pgwire-artifacts"
           $licenseDir = Join-Path $prefix "THIRD_PARTY_LICENSES"
           New-Item -Path $artifactDir, $licenseDir `
@@ -511,6 +576,8 @@ jobs:
           if ($actual -ne $expected) { throw "archive checksum mismatch" }
           $extract = Join-Path $env:RUNNER_TEMP "pgwire-package-test"
           Expand-Archive -LiteralPath $archivePath -DestinationPath $extract
+          python ci/scripts/pgwire_private_pq_distribution.py verify $extract
+          if ($LASTEXITCODE -ne 0) { throw "extracted private-pq provenance verification failed" }
           $driverDll = Join-Path $extract "bin\adbc_driver_redshift.dll"
           if (-not (Test-Path $driverDll)) { throw "Redshift DLL missing" }
           if (-not (Test-Path (Join-Path $extract "README.md"))) {

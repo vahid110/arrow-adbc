@@ -82,7 +82,7 @@ class RedshiftSuperPrepared {
       return Status::Internal("[Redshift] Could not snapshot logical SUPER description");
     PostgresType output;
     UNWRAP_STATUS(logical_helper.ResolveOutputTypes(resolver, &output, temporal));
-    UNWRAP_STATUS(SelectVendorResultFormat(output, &result_format_));
+    UNWRAP_STATUS(SelectVendorResultFormats(output, &result_formats_, &result_format_));
 
     PqResultHelper physical_helper(conn, generated_.sql, true);
     auto status = physical_helper.Prepare(physical);
@@ -99,12 +99,13 @@ class RedshiftSuperPrepared {
   }
 
   int result_format() const { return result_format_; }
+  const std::vector<int>& result_formats() const { return result_formats_; }
   const PostgresType& output() const { return output_; }
   PGresult* CopyPhysicalDescriptor() const {
     return PQcopyResult(physical_.get(), PG_COPYRES_ATTRS);
   }
   Status CheckResult(PqResultHelper& helper) const {
-    return helper.CheckDescriptor(physical_.get(), result_format_);
+    return helper.CheckDescriptor(physical_.get(), result_formats_);
   }
   Status Decorate(Status status) const {
     // Preserve every original libpq detail. The additional position has a
@@ -130,6 +131,7 @@ class RedshiftSuperPrepared {
   adbc::driver::pgwire::UniqueResult logical_, physical_;
   PostgresType output_;
   int result_format_ = 1;
+  std::vector<int> result_formats_;
 
   static Status Compatible(const PGresult* logical, const PGresult* physical) {
     if (!logical || !physical || PQnfields(logical) != PQnfields(physical))
@@ -137,6 +139,7 @@ class RedshiftSuperPrepared {
     for (int i = 0; i < PQnfields(logical); ++i)
       if (PQftype(logical, i) != PQftype(physical, i) ||
           PQfmod(logical, i) != PQfmod(physical, i) ||
+          PQfsize(logical, i) != PQfsize(physical, i) ||
           PQftable(logical, i) != PQftable(physical, i) ||
           PQftablecol(logical, i) != PQftablecol(physical, i) ||
           PQfformat(logical, i) != 0 || PQfformat(physical, i) != 0)

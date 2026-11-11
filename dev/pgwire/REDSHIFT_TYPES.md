@@ -39,11 +39,10 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
-`U` = explicitly unsupported operation. Mixed HLL results remain separate B1
-work. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
+`U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
 workflows are mandatory v1 scope under the human decision of 2026-10-28.
 A direct bind is application-supplied prepared SQL, distinct from the driver's
 generated CREATE/APPEND SQL. Bind/BindStream ingest proof never fills a direct-bind
@@ -68,7 +67,7 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | C | C | C | C | C identity | bool |
-| HLLSKETCH | M-P,Q-P all-HLL; U mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
+| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
 | SUPER | Q,V; historical C Arrow rerun open | V selected C/Python array/stream | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
 | GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
@@ -108,6 +107,16 @@ Evidence keys (precise retained paths/operations are indexed in
   output. Results and full teardown were independently reviewed. These cases do not rerun the
   historical Q C Arrow fixture or qualify generated APPEND, mixed HLL results,
   every size boundary or all metadata APIs. See [V details](STATUS.md#prepared-vendor-qualification).
+
+- **H:** macOS arm64, driver source `38dc469cb`, test revision `af0da5868`.
+  Installed standalone C and Python both passed in Arrow and lossless temporal
+  modes. The queries returned HLL sketches beside the other 20 native families.
+  Cases covered reordered and repeated fields, NULL, empty results, ExecuteSchema,
+  bound arrays and streams, and row counts after writes. Python rebound the
+  returned sketch and checked its union with the original singleton on Redshift.
+  Redshift reported different type modifiers for some empty projections. Each
+  empty schema matched its own description and controls with the same predicate.
+  See the [qualification evidence in PR #32](https://github.com/vahid110/arrow-adbc/pull/32).
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is
@@ -638,10 +647,13 @@ Format0 values own their NUL terminator (physical framed length n+1, logical
 Arrow length n), while NULL keeps the existing zero-placeholder/separate-nullptr
 framing. Generated ingest separately verifies actual relation targets.
 
-Result-returning queries describe first. All-HLL nonempty projections execute
-once in global text format and validate actual descriptor/format before reading.
-Mixed HLL/non-HLL projections reject before execution; normal scalar expressions
-remain normal scalars. No SQL rewrite, retry or unrelated text fallback occurs.
+Result-returning queries describe first. The private Redshift dependency executes
+HLL columns in text format while every other field keeps its binary codec. Mixed
+results validate the exact described names, OIDs, modifiers, sizes, origin and
+per-column formats before decoding. Array/stream binds, including direct SUPER
+and spatial inputs, use the same selection without a second execution. The `H` campaign exercised installed C and Python clients in both temporal modes. The stock PostgreSQL
+artifact retains its uniform-format boundary. No HLL SQL rewrite, retry or
+unrelated text fallback occurs.
 The fixed installed subsets passed on the selected macOS arm64 artifacts; this
 does not close full native boundaries, lossless SUPER reads or all 21 acceptance.
 

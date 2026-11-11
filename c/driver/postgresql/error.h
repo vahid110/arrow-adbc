@@ -24,7 +24,7 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include <fmt/core.h>
 #include <fmt/format.h>

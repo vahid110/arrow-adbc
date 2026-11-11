@@ -20,7 +20,7 @@
 #include <memory>
 #include <string>
 
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include "driver/framework/status.h"
 #include "driver/pgwire/backend.h"

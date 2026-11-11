@@ -44,22 +44,42 @@ adbc_postgres_driver_lib = library(
     install: true,
 )
 
-adbc_redshift_driver_lib = library(
-    'adbc_driver_redshift',
-    sources: pgwire_driver_sources + [
-        'redshift_csv_writer.cc',
-        'redshift_staged_arrow_copy.cc',
-        'redshift_staged_arrow_stream_copy.cc',
-        'redshift_staged_copy.cc',
-        'redshift_staged_copy_coordinator.cc',
-    ],
-    include_directories: [include_dir, c_dir, safe_math_dir],
-    link_with: [adbc_common_lib, adbc_framework_lib],
-    dependencies: [nanoarrow_dep, fmt_dep, libpq_dep],
-    cpp_args: ['-DADBC_PGWIRE_DEFAULT_REDSHIFT'],
-    override_options: pgwire_cpp_options,
-    install: true,
-)
+if get_option('redshift')
+    private_pq_dep = dependency(
+        'adbc-redshift-private-pq',
+        version: '=17.11.1',
+        method: 'pkg-config',
+        static: true,
+        required: true,
+    )
+    if private_pq_dep.get_variable(pkgconfig: 'abi') != '1'
+        error('Wrong private libpq package ABI')
+    endif
+    if not meson.get_compiler('c').links(
+        files('../../../ci/vcpkg/ports/adbc-redshift-private-pq/link_check.c'),
+        dependencies: private_pq_dep,
+        name: 'private Redshift libpq ABI and both result format helpers',
+    )
+        error('Private Redshift libpq ABI/helper link check failed')
+    endif
+    adbc_redshift_driver_lib = library(
+        'adbc_driver_redshift',
+        sources: pgwire_driver_sources + [
+            'redshift_csv_writer.cc',
+            'redshift_staged_arrow_copy.cc',
+            'redshift_staged_arrow_stream_copy.cc',
+            'redshift_staged_copy.cc',
+            'redshift_staged_copy_coordinator.cc',
+        ],
+        include_directories: [include_dir, c_dir, safe_math_dir],
+        link_with: [adbc_common_lib, adbc_framework_lib],
+        dependencies: [nanoarrow_dep, fmt_dep, private_pq_dep],
+        cpp_args: ['-DADBC_PGWIRE_DEFAULT_REDSHIFT', '-DADBC_PGWIRE_PRIVATE_PQ'],
+        override_options: pgwire_cpp_options,
+        install: true,
+    )
+
+endif
 
 pkg.generate(
     name: 'Apache Arrow Database Connectivity (ADBC) PostgreSQL driver',
@@ -69,23 +89,29 @@ pkg.generate(
     filebase: 'adbc-driver-postgresql',
 )
 
-pkg.generate(
-    name: 'Apache Arrow Database Connectivity (ADBC) Redshift driver',
-    description: 'The ADBC Redshift driver provides an ADBC driver for Amazon Redshift.',
-    url: 'https://github.com/apache/arrow-adbc',
-    libraries: [adbc_redshift_driver_lib],
-    filebase: 'adbc-driver-redshift',
-)
+if get_option('redshift')
+    pkg.generate(
+        name: 'Apache Arrow Database Connectivity (ADBC) Redshift driver',
+        description: 'The ADBC Redshift driver provides an ADBC driver for Amazon Redshift.',
+        url: 'https://github.com/apache/arrow-adbc',
+        libraries: [adbc_redshift_driver_lib],
+        filebase: 'adbc-driver-redshift',
+    )
+
+endif
 
 adbc_driver_postgresql_dep = declare_dependency(
     include_directories: include_dir,
     link_with: adbc_postgres_driver_lib,
 )
 
-adbc_driver_redshift_dep = declare_dependency(
-    include_directories: include_dir,
-    link_with: adbc_redshift_driver_lib,
-)
+if get_option('redshift')
+    adbc_driver_redshift_dep = declare_dependency(
+        include_directories: include_dir,
+        link_with: adbc_redshift_driver_lib,
+    )
+
+endif
 
 postgres_tests = {
     'driver-postgresql': {
@@ -142,7 +168,10 @@ foreach name, conf : postgres_tests
 endforeach
 
 # Test-only public C API recorder; production artifacts have no fixture symbols.
-interval_recording_args = ['-DADBC_EXPORTING']
+interval_recording_args = [
+    '-DADBC_EXPORTING',
+    '-DADBC_PGWIRE_RESULT_FORMATS_TEST',
+]
 foreach symbol : [
     'PQconnectdb',
     'PQstatus',
@@ -176,29 +205,36 @@ interval_recording = executable(
 )
 test('adbc-driver-redshift-interval-recording', interval_recording, timeout: 30)
 
-redshift_exc = executable(
-    'adbc-driver-redshift-test',
-    sources: [
-        '../pgwire/redshift_driver_test.cc',
-        '../pgwire/redshift_csv_writer_test.cc',
-        '../pgwire/redshift_replace_preflight_test.cc',
-        '../pgwire/redshift_staged_arrow_copy_test.cc',
-        '../pgwire/redshift_staged_arrow_stream_copy_test.cc',
-        '../pgwire/redshift_staged_copy_test.cc',
-        '../pgwire/redshift_staged_copy_coordinator_test.cc',
-        'redshift_csv_writer.cc',
-        'redshift_replace_preflight.cc',
-        'redshift_staged_arrow_copy.cc',
-        'redshift_staged_arrow_stream_copy.cc',
-        'redshift_staged_copy.cc',
-        'redshift_staged_copy_coordinator.cc',
-    ],
-    include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
-    link_with: [adbc_common_lib, adbc_framework_lib, adbc_redshift_driver_lib],
-    dependencies: [libpq_dep, gtest_main_dep, fmt_dep, nanoarrow_dep],
-    override_options: pgwire_cpp_options,
-)
-test('adbc-driver-redshift', redshift_exc)
+if get_option('redshift')
+    redshift_exc = executable(
+        'adbc-driver-redshift-test',
+        sources: [
+            '../pgwire/redshift_driver_test.cc',
+            '../pgwire/redshift_csv_writer_test.cc',
+            '../pgwire/redshift_replace_preflight_test.cc',
+            '../pgwire/redshift_staged_arrow_copy_test.cc',
+            '../pgwire/redshift_staged_arrow_stream_copy_test.cc',
+            '../pgwire/redshift_staged_copy_test.cc',
+            '../pgwire/redshift_staged_copy_coordinator_test.cc',
+            'redshift_csv_writer.cc',
+            'redshift_replace_preflight.cc',
+            'redshift_staged_arrow_copy.cc',
+            'redshift_staged_arrow_stream_copy.cc',
+            'redshift_staged_copy.cc',
+            'redshift_staged_copy_coordinator.cc',
+        ],
+        include_directories: [include_dir, driver_dir, c_dir, safe_math_dir],
+        link_with: [
+            adbc_common_lib,
+            adbc_framework_lib,
+            adbc_redshift_driver_lib,
+        ],
+        dependencies: [libpq_dep, gtest_main_dep, fmt_dep, nanoarrow_dep],
+        override_options: pgwire_cpp_options,
+    )
+    test('adbc-driver-redshift', redshift_exc)
+
+endif
 
 # Noninstalled protocol observer; no driver runtime or fixture authorization path.
 protocol_capture = executable(

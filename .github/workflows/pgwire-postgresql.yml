@@ -67,6 +67,8 @@ on:
       - "c/**"
       - "!c/**/*.md"
       - ".github/workflows/pgwire-postgresql.yml"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/ports/adbc-redshift-private-pq/**"
   push:
     branches:
       - feature/pgwire-core-redshift
@@ -74,6 +76,8 @@ on:
       - "c/**"
       - "!c/**/*.md"
       - ".github/workflows/pgwire-postgresql.yml"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/ports/adbc-redshift-private-pq/**"
 
 concurrency:
   group: pgwire-offline-${{ github.ref }}
@@ -150,7 +154,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update -o Acquire::Retries=3
-          apt-get install --yes build-essential ca-certificates cmake git libpq-dev ninja-build pkg-config
+          apt-get install --yes build-essential bison flex ca-certificates cmake git libpq-dev libssl-dev ninja-build pkg-config python3
 
       - name: Test staged COPY cleanup without AWS
         if: ${{ matrix.platform == 'Ubuntu x86-64' }}
@@ -159,12 +163,44 @@ jobs:
           bash .github/scripts/test-pgwire-redshift-copy-fixture.sh
           bash .github/scripts/test-pgwire-redshift-ingress.sh
 
+      - name: Test private dependency distribution failures without a build
+        if: ${{ matrix.platform == 'Ubuntu x86-64' }}
+        run: |
+          python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_distribution.py -v
+          python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_symbols.py -v
+          python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_windows.py -v
+
+      - name: Verify stock PostgreSQL configures without private libpq
+        if: ${{ matrix.platform == 'Ubuntu x86-64' }}
+        run: |
+          apt-get install --yes meson
+          cmake -S c -B build/stock-cmake -G Ninja -DADBC_DRIVER_POSTGRESQL=ON
+          ninja -C build/stock-cmake -t targets all > "$RUNNER_TEMP/stock-targets"
+          grep -q '^adbc_driver_postgresql_shared:' "$RUNNER_TEMP/stock-targets"
+          if grep -q '^adbc_driver_redshift_shared:' "$RUNNER_TEMP/stock-targets"; then exit 1; fi
+          meson setup build/stock-meson c -Dpostgresql=enabled -Dtests=disabled
+          meson introspect build/stock-meson --targets | python3 -c '
+          import json, sys
+          names = {target["name"] for target in json.load(sys.stdin)}
+          if "adbc_driver_postgresql" not in names or "adbc_driver_redshift" in names:
+              sys.exit("unexpected stock PostgreSQL target selection")'
+
+      - name: Build pinned private Redshift dependency
+        run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
+          python3 ci/scripts/pgwire_private_pq.py \
+            --source-archive "$RUNNER_TEMP/postgresql-17.11.tar.bz2" \
+            --work-dir "$RUNNER_TEMP/private-pq" --prefix "$RUNNER_TEMP/private-pq/install" \
+            --openssl-prefix /usr --openssl-libdir "$(pkg-config --variable=libdir openssl)" --build-type release
+
       - name: Configure
         run: >-
           cmake -S c -B build/pgwire-ci -G Ninja
+          -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/private-pq/install"
           -DCMAKE_BUILD_TYPE=Debug
           -DADBC_BUILD_TESTS=ON
           -DADBC_DRIVER_POSTGRESQL=ON
+          -DADBC_DRIVER_REDSHIFT=ON
           -DADBC_DRIVER_MANAGER=ON
           -DADBC_DRIVER_SQLITE=OFF
           -DADBC_DRIVER_FLIGHTSQL=OFF
@@ -192,6 +228,8 @@ jobs:
         run: |
           cmake --build build/pgwire-ci --parallel 4
           cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          python3 ci/scripts/pgwire_private_pq_distribution.py bundle \
+            "$RUNNER_TEMP/private-pq/install" "$RUNNER_TEMP/pgwire-prefix"
           cc -std=c11 -Wall -Wextra -Werror \
             -I "$RUNNER_TEMP/pgwire-prefix/include" \
             c/driver/pgwire/redshift_install_smoke.c \
@@ -211,10 +249,11 @@ jobs:
       - name: Test PostgreSQL-wire Meson build parity without AWS
         if: ${{ matrix.platform == 'Ubuntu x86-64' }}
         run: |
-          apt-get install --yes meson
+          PKG_CONFIG_PATH="$RUNNER_TEMP/private-pq/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
           meson setup build/pgwire-meson c \
             -Dtests=enabled \
             -Dpostgresql=enabled \
+            -Dredshift=true \
             -Dflightsql=disabled \
             -Dsqlite=disabled \
             -Ddriver_manager=disabled \
@@ -255,10 +294,13 @@ jobs:
 
       - name: Install PostgreSQL 18 build dependencies
         run: |
-          brew install --quiet postgresql@18 libpq ninja pkgconf
+          brew install --quiet postgresql@18 libpq ninja pkgconf bison flex openssl@3
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           pg_prefix="$(brew --prefix postgresql@18)"
           echo "$pg_prefix/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Start temporary PostgreSQL server
         run: |
@@ -268,12 +310,22 @@ jobs:
             -l "$RUNNER_TEMP/postgres.log" start
           echo "ADBC_POSTGRESQL_TEST_URI=postgresql://127.0.0.1:55433/postgres?user=$(whoami)" >> "$GITHUB_ENV"
 
+      - name: Build pinned private Redshift dependency
+        run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
+          python3 ci/scripts/pgwire_private_pq.py \
+            --source-archive "$RUNNER_TEMP/postgresql-17.11.tar.bz2" \
+            --work-dir "$RUNNER_TEMP/private-pq" --prefix "$RUNNER_TEMP/private-pq/install" \
+            --openssl-prefix "$(brew --prefix openssl@3)" --build-type release
+
       - name: Configure and build
         run: |
           cmake -S c -B build/pgwire-ci -G Ninja \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/private-pq/install" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DADBC_BUILD_TESTS=ON \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \
@@ -290,6 +342,8 @@ jobs:
       - name: Install and test the Redshift driver through the driver manager
         run: |
           cmake --install build/pgwire-ci --prefix "$RUNNER_TEMP/pgwire-prefix"
+          python3 ci/scripts/pgwire_private_pq_distribution.py bundle \
+            "$RUNNER_TEMP/private-pq/install" "$RUNNER_TEMP/pgwire-prefix"
           cc -std=c11 -Wall -Wextra -Werror \
             -I "$RUNNER_TEMP/pgwire-prefix/include" \
             c/driver/pgwire/redshift_install_smoke.c \

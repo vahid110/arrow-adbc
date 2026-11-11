@@ -32,8 +32,8 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
-#include <libpq-fe.h>
 #include <nanoarrow/nanoarrow.h>
+#include "driver/pgwire/libpq.h"
 
 #include "driver/common/utils.h"
 #include "driver/pgwire/libpq_raii.h"

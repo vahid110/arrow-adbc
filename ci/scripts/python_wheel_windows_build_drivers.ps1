@@ -53,7 +53,11 @@ if ($Architecture -eq "amd64") {
 $BuildType = "RelWithDebInfo"
 $FlightSql = if ($Components -contains "adbc_driver_flightsql") { "ON" } else { "OFF" }
 $Sqlite = if ($Components -contains "adbc_driver_sqlite") { "ON" } else { "OFF" }
+$Redshift = $Components -contains "adbc_driver_redshift"
 $VcpkgPackages = @("libpq")
+if ($Redshift) {
+    $VcpkgPackages += "adbc-redshift-private-pq"
+}
 if ($Sqlite -eq "ON") {
     $VcpkgPackages += "sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]"
 }
@@ -67,8 +71,19 @@ Write-Host "=== Building ADBC drivers for $Architecture ==="
 & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
     "--triplet=$VcpkgTriplet" `
     @VcpkgPackages `
-    --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets")
-if (-not $?) { throw "Failed to install vcpkg dependencies" }
+    --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets") `
+    --overlay-ports $(Join-Path $SourceDir "ci\vcpkg\ports")
+if ($LASTEXITCODE -ne 0) {
+    & (Join-Path $SourceDir "ci/scripts/show_private_pq_windows_log.ps1") $VcpkgTriplet
+    throw "Failed to install vcpkg dependencies"
+}
+
+if ($Redshift) {
+    python (Join-Path $SourceDir "ci/scripts/pgwire_private_pq_distribution.py") stage `
+        (Join-Path $env:VCPKG_ROOT "installed/$VcpkgTriplet") `
+        (Join-Path $SourceDir "python/adbc_driver_redshift/adbc_driver_redshift/_private_pq")
+    if (-not $?) { throw "Failed to verify private-pq provenance" }
+}
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
@@ -87,6 +102,7 @@ cmake `
     "-DADBC_DRIVER_FLIGHTSQL=$FlightSql" `
     -DADBC_DRIVER_MANAGER=ON `
     -DADBC_DRIVER_POSTGRESQL=ON `
+    "-DADBC_DRIVER_REDSHIFT=$Redshift" `
     "-DADBC_DRIVER_SQLITE=$Sqlite" `
     "-DADBC_VERSION_OVERRIDE=$env:ADBC_VERSION_OVERRIDE"
 if (-not $?) { throw "Failed to configure the CMake build" }

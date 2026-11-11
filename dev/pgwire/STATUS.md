@@ -27,10 +27,16 @@ verified, preserving the original C-stream cleanup timeout and separate cleanup.
 [Its bounded evidence](#task010t-interval-edge-qualification) is complete;
 **the all-21-type first-release milestone remains open**.
 
+The [private libpq dependency](private-libpq.md) now supplies the Redshift-only
+namespace and per-column result dispatch: HLL text, every other field binary,
+with exact described-result verification and no retry. The installed macOS arm64
+C and Python drivers passed live in both temporal modes. [Case H](REDSHIFT_TYPES.md#current-evidence-by-operation)
+records the tested artifacts. [PR #32 checks](https://github.com/vahid110/arrow-adbc/pull/32/checks)
+track the seven C distributions, five portable Python wheels and native
+stock/private library coexistence tests for the revised build recipe.
+
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
-[finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
-blockers are mandatory mixed HLL results, remaining operation and metadata
-gaps, and candidate delivery. Selected direct SUPER/spatial cases now pass in
+[finite acceptance checklist](V1_ACCEPTANCE.md) track remaining operation and metadata gaps and candidate delivery. Selected direct SUPER/spatial cases now pass in
 standalone C and Python; this does not close every acceptance gate.
 No exhaustive mathematical-domain proof is required. No release-ready claim is made.
 

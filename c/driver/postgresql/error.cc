@@ -19,7 +19,7 @@
 
 #include <string_view>
 
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include "driver/common/utils.h"
 

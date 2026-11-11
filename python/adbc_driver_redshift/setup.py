@@ -73,6 +73,16 @@ class build_py_with_version(build_py):
     """
 
     def run(self):
+        # Portable wheel helpers stage the independently verified private package
+        # receipt and sources. Never ship a wheel which silently omits them.
+        provenance = source_root / "adbc_driver_redshift/_private_pq/provenance.json"
+        if (
+            os.environ.get("_ADBC_IS_CONDA", "").strip().lower() not in ("1", "true")
+            and not provenance.is_file()
+        ):
+            raise ValueError(
+                "Stage verified private-pq provenance before building a wheel"
+            )
         super().run()
         if os.environ.get("SETUPTOOLS_SCM_PRETEND_VERSION"):
             target = Path(self.build_lib, "adbc_driver_redshift", "_static_version.py")

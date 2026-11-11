@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-#include <libpq-fe.h>
+#include "driver/pgwire/libpq.h"
 
 #include "bind_stream.h"
 #include "copy/reader.h"
@@ -101,6 +101,7 @@ class PqResultArrayReader {
   bool autocommit_;
   bool materialized_encoding_valid_ = false;
   int result_format_ = kPgBinaryFormat;
+  std::vector<int> result_formats_;
   adbc::driver::pgwire::UniqueResult described_;
   Status SelectDescribedResult();
   Status CheckEncodedParamDescriptor();
@@ -125,6 +126,7 @@ class PqResultArrayReader {
         autocommit_(other->autocommit_),
         materialized_encoding_valid_(other->materialized_encoding_valid_),
         result_format_(other->result_format_),
+        result_formats_(std::move(other->result_formats_)),
         described_(std::move(other->described_)),
         temporal_representation_(other->temporal_representation_),
         vendor_name_(std::move(other->vendor_name_)) {

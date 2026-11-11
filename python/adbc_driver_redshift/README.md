@@ -134,8 +134,9 @@ policies.  A minimal recipe is in `c/driver/postgresql/REDSHIFT.md` and
 
 ## Building
 
-Dependencies: a build of the Redshift driver (`-DADBC_DRIVER_POSTGRESQL=ON`
-builds both the PostgreSQL and Redshift drivers), and the
+Build the Redshift driver with
+`-DADBC_DRIVER_POSTGRESQL=ON -DADBC_DRIVER_REDSHIFT=ON` and stage the matching
+[private libpq provenance](../../dev/pgwire/private-libpq.md). Install the
 `adbc-driver-manager` Python package. Optionally, install PyArrow to use the
 DBAPI 2.0-compatible interface.
 

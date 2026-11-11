@@ -43,6 +43,7 @@ on:
       - ".github/workflows/pgwire-python-wheels.yml"
       - "ci/scripts/install_vcpkg.sh"
       - "ci/scripts/pgwire_python_wheel_test.sh"
+      - "ci/scripts/pgwire_private_pq*.py"
       - "ci/scripts/test_pgwire_python_wheel_verify.py"
       - "ci/scripts/python_util.sh"
       - "ci/scripts/python_wheel_fix_tag.py"
@@ -137,7 +138,7 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_ARCH"
           # The packages of ci/docker/python-wheel-manylinux.dockerfile (without Go
           # and Docker); CMake and Ninja come from PyPI.
-          dnf install -y autoconf autoconf-archive curl git flex perl-IPC-Cmd \
+          dnf install -y autoconf autoconf-archive bison curl git flex perl-IPC-Cmd \
             perl-Time-Piece unzip wget zip
           /opt/python/cp313-cp313/bin/python -m venv "$RUNNER_TEMP/build-env"
           "$RUNNER_TEMP/build-env/bin/python" -m pip install cmake ninja
@@ -249,7 +250,9 @@ jobs:
       - name: Install build tools
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
-          brew install --quiet autoconf bash ninja pkg-config
+          brew install --quiet autoconf bash bison flex ninja pkg-config
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
       - name: Install vcpkg
         run: ci/scripts/install_vcpkg.sh "$VCPKG_ROOT"

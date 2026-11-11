@@ -19,3 +19,5 @@
 
 include adbc_driver_redshift/libadbc_driver_redshift.so
 include adbc_driver_redshift/py.typed
+
+recursive-include adbc_driver_redshift/_private_pq *

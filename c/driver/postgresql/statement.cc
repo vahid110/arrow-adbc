@@ -41,8 +41,8 @@
 #include <vector>
 
 #include <arrow-adbc/adbc.h>
-#include <libpq-fe.h>
 #include <nanoarrow/nanoarrow.hpp>
+#include "driver/pgwire/libpq.h"
 
 #include "bind_stream.h"
 #include "connection.h"

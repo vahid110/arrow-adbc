@@ -19,6 +19,8 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "result_helper.h"
 
@@ -100,15 +102,29 @@ inline Status CheckVendorReadBoundary(const PostgresType& output) {
   }
   return Status::Ok();
 }
-inline Status SelectVendorResultFormat(const PostgresType& output, int* format) {
+// Logical output OIDs have already been catalog-resolved. Preserve binary
+// decoding for every non-HLL column, including floats, NUMERIC and temporal data.
+inline Status SelectVendorResultFormats(const PostgresType& output,
+                                        std::vector<int>* formats, int* uniform) {
   UNWRAP_STATUS(CheckVendorReadBoundary(output));
+  if (output.n_children() > 65535)
+    return Status::InvalidArgument(
+        "[Redshift] Result format count exceeds protocol limit");
+  std::vector<int> selected;
+  selected.reserve(output.n_children());
   int hll = 0;
-  for (int i = 0; i < output.n_children(); ++i)
-    hll += output.child(i).encoded_kind() == RedshiftEncodedKind::kHll;
+  for (int i = 0; i < output.n_children(); ++i) {
+    const bool text = output.child(i).encoded_kind() == RedshiftEncodedKind::kHll;
+    hll += text;
+    selected.push_back(text ? 0 : 1);
+  }
+#if !defined(ADBC_PGWIRE_PRIVATE_PQ) && !defined(ADBC_PGWIRE_RESULT_FORMATS_TEST)
   if (hll && hll != output.n_children())
     return Status::NotImplemented(
-        "[Redshift] Mixed HLL/non-HLL projection is unsupported before execution");
-  *format = hll ? 0 : 1;
+        "[Redshift] Mixed HLL results require the private Redshift driver dependency");
+#endif
+  *uniform = hll == output.n_children() && hll ? 0 : 1;
+  *formats = std::move(selected);
   return Status::Ok();
 }
 

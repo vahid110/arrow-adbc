@@ -502,3 +502,29 @@ TEST_F(SuperPreparedRecordingTest, AmbiguousStringModeCannotReachTypedUserPrepar
   EXPECT_EQ(std::count(recording.events.begin(), recording.events.end(), "logical-prepare"), 0);
   EXPECT_EQ(std::count(recording.events.begin(), recording.events.end(), "physical-prepare"), 0);
 }
+
+TEST_F(SuperPreparedRecordingTest, MixedHllResultComposesWithPhysicalSuperPlan) {
+  recording.mixed_projection = true;
+  for (bool stream : {false, true}) {
+    recording.executions.clear();
+    recording.format_requests.clear();
+    Sql("SELECT $1, owned_hll");
+    BindSuper({"true", std::nullopt}, stream);
+    nanoarrow::UniqueArrayStream out;
+    ASSERT_EQ(driver.StatementExecuteQuery(&statement, out.get(), nullptr, &error), ADBC_STATUS_OK) << Message();
+    for (int row = 0; row < 2; ++row) {
+      nanoarrow::UniqueArray value;
+      ASSERT_EQ(out->get_next(out.get(), value.get()), 0) << out->get_last_error(out.get());
+      ASSERT_NE(value->release, nullptr);
+      EXPECT_EQ(value->length, 2);
+    }
+    nanoarrow::UniqueArray eof;
+    ASSERT_EQ(out->get_next(out.get(), eof.get()), 0);
+    EXPECT_EQ(eof->release, nullptr);
+    ASSERT_EQ(recording.executions.size(), 2);
+    ASSERT_EQ(recording.format_requests.size(), 2);
+    for (const auto& formats : recording.format_requests)
+      EXPECT_EQ(formats, (std::vector<int>{0, 1}));
+    EXPECT_NE(recording.prepared_query.find("json_parse"), std::string::npos);
+  }
+}

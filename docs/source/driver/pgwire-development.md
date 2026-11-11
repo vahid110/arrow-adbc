@@ -166,8 +166,12 @@ GitHub Actions is the build machine for this fork; avoid heavy local builds
 
 ### CMake
 
+Install the [pinned private libpq package](../../../dev/pgwire/private-libpq.md)
+and set `private_pq_prefix` to its installation directory.
+
 ```sh
 cmake -S c -B build/pgwire-ci -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_PREFIX_PATH="$private_pq_prefix" -DADBC_DRIVER_REDSHIFT=ON \
   -DADBC_BUILD_TESTS=ON -DADBC_DRIVER_POSTGRESQL=ON -DADBC_DRIVER_MANAGER=ON \
   -DADBC_DRIVER_SQLITE=OFF -DADBC_DRIVER_FLIGHTSQL=OFF
 cmake --build build/pgwire-ci --target adbc-driver-postgresql-test \
@@ -176,7 +180,7 @@ ctest --test-dir build/pgwire-ci --output-on-failure -L driver-postgresql
 ctest --test-dir build/pgwire-ci --output-on-failure -L driver-redshift
 ```
 
-`-DADBC_DRIVER_POSTGRESQL=ON` builds both drivers. Add `-DADBC_USE_ASAN=ON
+`-DADBC_DRIVER_POSTGRESQL=ON` alone builds the stock PostgreSQL driver. Add `-DADBC_USE_ASAN=ON
 -DADBC_USE_UBSAN=ON` for sanitizer builds. libpq is found with pkg-config; on
 macOS, Homebrew's keg-only `libpq` needs `PKG_CONFIG_PATH` set to its
 `lib/pkgconfig`.
@@ -208,7 +212,8 @@ SONAME keeps the upstream scheme `MAJOR * 100 + MINOR`, so `0.1.x` installs
 ### Meson
 
 ```sh
-meson setup build/pgwire-meson c -Dtests=enabled -Dpostgresql=enabled \
+export PKG_CONFIG_PATH="$private_pq_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+meson setup build/pgwire-meson c -Dtests=enabled -Dpostgresql=enabled -Dredshift=true \
   -Dflightsql=disabled -Dsqlite=disabled -Ddriver_manager=disabled \
   -Dbenchmarks=disabled
 meson compile -C build/pgwire-meson adbc-driver-postgresql-test \

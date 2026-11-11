@@ -25,6 +25,8 @@ on:
     paths:
       - ".github/workflows/pgwire-python.yml"
       - "ci/scripts/python_wheel_fix_tag.py"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/ports/adbc-redshift-private-pq/**"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/pgwire_interval_c_data_test.py"
@@ -33,6 +35,7 @@ on:
       - "ci/scripts/pgwire_super_c_data_test.py"
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
+      - "ci/scripts/test_pgwire_mixed_hll_public.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -54,6 +57,8 @@ on:
     paths:
       - ".github/workflows/pgwire-python.yml"
       - "ci/scripts/python_wheel_fix_tag.py"
+      - "ci/scripts/pgwire_private_pq*.py"
+      - "ci/vcpkg/ports/adbc-redshift-private-pq/**"
       - "ci/scripts/pgwire_qualification*.py"
       - "ci/scripts/pgwire_qualification_policy.json"
       - "ci/scripts/pgwire_interval_c_data_test.py"
@@ -62,6 +67,7 @@ on:
       - "ci/scripts/pgwire_super_c_data_test.py"
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
+      - "ci/scripts/test_pgwire_mixed_hll_public.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -112,7 +118,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update -o Acquire::Retries=3
-          apt-get install --yes build-essential ca-certificates cmake git libpq-dev \
+          apt-get install --yes build-essential bison flex ca-certificates cmake git libpq-dev libssl-dev \
             ninja-build pkg-config python3 python3-dev python3-venv
           python3 -m venv "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
@@ -124,14 +130,24 @@ jobs:
       - name: Trust the exact runner checkout in this container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Build pinned private Redshift dependency
+        run: |
+          python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
+          python3 ci/scripts/pgwire_private_pq.py \
+            --source-archive "$RUNNER_TEMP/postgresql-17.11.tar.bz2" \
+            --work-dir "$RUNNER_TEMP/private-pq" --prefix "$RUNNER_TEMP/private-pq/install" \
+            --openssl-prefix /usr --openssl-libdir "$(pkg-config --variable=libdir openssl)" --build-type release
+
       - name: Build the Redshift C driver
         run: |
           cmake -S c -B build/pgwire-python -G Ninja \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/private-pq/install" \
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_SHARED=ON \
             -DADBC_BUILD_STATIC=OFF \
             -DADBC_BUILD_TESTS=ON \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF
@@ -150,6 +166,8 @@ jobs:
 
       - name: Build wheels
         run: |
+          python ci/scripts/pgwire_private_pq_distribution.py stage \
+            "$RUNNER_TEMP/private-pq/install" python/adbc_driver_redshift/adbc_driver_redshift/_private_pq
           python -m pip install --upgrade pip wheel
           python -m pip wheel --no-deps -w dist python/adbc_driver_manager
           python -m pip wheel --no-deps -w dist python/adbc_driver_redshift
@@ -166,6 +184,8 @@ jobs:
               "adbc_driver_redshift/__init__.py",
               "adbc_driver_redshift/dbapi.py",
               "adbc_driver_redshift/py.typed",
+              "adbc_driver_redshift/_private_pq/provenance.json",
+              "adbc_driver_redshift/_private_pq/PostgreSQL-COPYRIGHT",
           ):
               assert name in names, (name, names)
           print(wheel, "OK")
@@ -199,6 +219,9 @@ jobs:
           python -I ci/scripts/pgwire_timetz_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
           python -I ci/scripts/pgwire_super_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
           python -I ci/scripts/pgwire_encoded_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
+
+      - name: Check mixed HLL schema and value regressions (offline)
+        run: python -B ci/scripts/test_pgwire_mixed_hll_public.py
 
       - name: Installed Python semantic public APIs (PostgreSQL plumbing)
         run: |

@@ -77,6 +77,10 @@ if get_option('flightsql').enabled()
     subdir('driver/flightsql')
 endif
 
+if get_option('redshift') and not get_option('postgresql').enabled()
+    error('Building Redshift requires -Dpostgresql=enabled')
+endif
+
 if get_option('postgresql').enabled()
     install_headers(
         'include/arrow-adbc/driver/postgresql.h',

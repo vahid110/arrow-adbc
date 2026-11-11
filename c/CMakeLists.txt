@@ -77,6 +77,10 @@ if(ADBC_DRIVER_MANAGER)
   add_subdirectory(driver_manager)
 endif()
 
+if(ADBC_DRIVER_REDSHIFT AND NOT ADBC_DRIVER_POSTGRESQL)
+  message(FATAL_ERROR "ADBC_DRIVER_REDSHIFT requires ADBC_DRIVER_POSTGRESQL=ON")
+endif()
+
 if(ADBC_DRIVER_POSTGRESQL)
   install(FILES "${REPOSITORY_ROOT}/c/include/arrow-adbc/driver/postgresql.h"
                 "${REPOSITORY_ROOT}/c/include/arrow-adbc/driver/redshift.h"
