@@ -113,10 +113,10 @@ inventory and the exact build recipe; wheels carry these under `_private_pq`.
 For a local wheel, first run `pgwire_private_pq_distribution.py stage <prefix>
 python/adbc_driver_redshift/adbc_driver_redshift/_private_pq` against the matching
 private dependency install; the wheel build rejects absent provenance.
-Driver CMake/Meson configuration
-now requires this dependency and rejects a missing/wrong ABI/helper package.
-Explicit PostgreSQL-only builds can set `ADBC_DRIVER_REDSHIFT=OFF` or Meson
-`-Dredshift=false`; those builds retain stock libpq and do not build Redshift.
+PostgreSQL-only builds use stock libpq by default. To also build the dedicated
+Redshift driver, use both `-DADBC_DRIVER_POSTGRESQL=ON -DADBC_DRIVER_REDSHIFT=ON`
+in CMake or `-Dpostgresql=enabled -Dredshift=true` in Meson. That build
+requires the private package and rejects a missing or incompatible ABI/helper.
 
 The Windows adapter now selects PostgreSQL 17.11's Meson static frontend
 libpq/common/port targets, including their private encoding aliases. It disables

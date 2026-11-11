@@ -157,6 +157,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_TESTS=OFF \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \
@@ -308,6 +309,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DADBC_BUILD_TESTS=OFF \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \
@@ -519,6 +521,7 @@ jobs:
       - name: Build and install drivers and manager
         run: |
           cmake .\c\ --preset windows-release `
+            -DADBC_DRIVER_REDSHIFT=ON `
             -DADBC_BUILD_TESTS=OFF `
             -DADBC_DRIVER_FLIGHTSQL=OFF `
             -DADBC_DRIVER_SQLITE=OFF `

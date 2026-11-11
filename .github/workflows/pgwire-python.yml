@@ -145,6 +145,7 @@ jobs:
             -DADBC_BUILD_STATIC=OFF \
             -DADBC_BUILD_TESTS=ON \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF

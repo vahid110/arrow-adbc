@@ -102,18 +102,6 @@ inline Status CheckVendorReadBoundary(const PostgresType& output) {
   }
   return Status::Ok();
 }
-inline Status SelectVendorResultFormat(const PostgresType& output, int* format) {
-  UNWRAP_STATUS(CheckVendorReadBoundary(output));
-  int hll = 0;
-  for (int i = 0; i < output.n_children(); ++i)
-    hll += output.child(i).encoded_kind() == RedshiftEncodedKind::kHll;
-  if (hll && hll != output.n_children())
-    return Status::NotImplemented(
-        "[Redshift] Mixed HLL/non-HLL projection is unsupported before execution");
-  *format = hll ? 0 : 1;
-  return Status::Ok();
-}
-
 // Logical output OIDs have already been catalog-resolved. Preserve binary
 // decoding for every non-HLL column, including floats, NUMERIC and temporal data.
 inline Status SelectVendorResultFormats(const PostgresType& output,

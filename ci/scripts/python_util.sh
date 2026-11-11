@@ -20,6 +20,11 @@ set -ex
 # Fork: ADBC_PYTHON_COMPONENTS narrows the packages (e.g. adbc_driver_redshift).
 COMPONENTS="${ADBC_PYTHON_COMPONENTS:-adbc_driver_manager adbc_driver_flightsql adbc_driver_postgresql adbc_driver_sqlite}"
 
+build_redshift_wheel=OFF
+if [[ " ${COMPONENTS} " == *" adbc_driver_redshift "* ]]; then
+    build_redshift_wheel=ON
+fi
+
 function find_drivers {
     local -r build_dir="${1}/${VCPKG_ARCH}"
 
@@ -73,7 +78,10 @@ function build_drivers {
     echo "=== Setup VCPKG ==="
 
     # Need to install sqlite3 to make CMake be able to find it below
-    local vcpkg_packages=(libpq adbc-redshift-private-pq)
+    local vcpkg_packages=(libpq)
+    if [[ "${build_redshift_wheel}" == ON ]]; then
+        vcpkg_packages+=(adbc-redshift-private-pq)
+    fi
     if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then
         vcpkg_packages+=('sqlite3[dbstat,fts3,fts4,fts5,geopoly,json1,limit,math,rtree,session,snapshot,soundex]')
     fi
@@ -82,7 +90,7 @@ function build_drivers {
           --overlay-ports "${VCPKG_OVERLAY_PORTS}" \
           --triplet "${VCPKG_DEFAULT_TRIPLET}"
 
-    if [[ " ${COMPONENTS} " == *" adbc_driver_redshift "* ]]; then
+    if [[ "${build_redshift_wheel}" == ON ]]; then
         python "${source_dir}/ci/scripts/pgwire_private_pq_distribution.py" stage \
             "${VCPKG_ROOT}/installed/${VCPKG_DEFAULT_TRIPLET}" \
             "${source_dir}/python/adbc_driver_redshift/adbc_driver_redshift/_private_pq"
@@ -105,6 +113,7 @@ function build_drivers {
         -DADBC_DRIVER_FLIGHTSQL=${ADBC_DRIVER_FLIGHTSQL} \
         -DADBC_DRIVER_MANAGER=ON \
         -DADBC_DRIVER_POSTGRESQL=ON \
+        -DADBC_DRIVER_REDSHIFT="${build_redshift_wheel}" \
         -DADBC_DRIVER_SQLITE=${ADBC_DRIVER_SQLITE} \
         -DADBC_VERSION_OVERRIDE="${ADBC_VERSION_OVERRIDE:-}" \
         ${source_dir}/c

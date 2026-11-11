@@ -320,18 +320,22 @@ TEST(RedshiftEncodedTest, TypedReaderPreservesBytesAndValidPrefixAcrossNulls) {
     EXPECT_TRUE(ArrowArrayViewIsNull(view.get(), 9));
   }
 }
-TEST(RedshiftEncodedTest, ResultFormatSelectionIsAllHllOnly) {
+TEST(RedshiftEncodedTest, StockResultFormatSelection) {
   using F = adbc::driver::pgwire::CatalogVendorFamily;
   PostgresType root(PostgresTypeId::kRecord);
+  std::vector<int> formats;
   int format = -1;
-  EXPECT_TRUE(SelectVendorResultFormat(root, &format).ok());
+  ASSERT_TRUE(SelectVendorResultFormats(root, &formats, &format).ok());
+  EXPECT_TRUE(formats.empty());
   EXPECT_EQ(format, 1);
   auto hll = PostgresType(PostgresTypeId::kUserDefined).WithVendorFamily(F::kHll);
   root.AppendChild("s", hll);
-  EXPECT_TRUE(SelectVendorResultFormat(root, &format).ok());
+  ASSERT_TRUE(SelectVendorResultFormats(root, &formats, &format).ok());
+  EXPECT_EQ(formats, std::vector<int>{0});
   EXPECT_EQ(format, 0);
   root.AppendChild("id", PostgresType(PostgresTypeId::kInt4));
-  EXPECT_FALSE(SelectVendorResultFormat(root, &format).ok());
+  EXPECT_EQ(SelectVendorResultFormats(root, &formats, &format).ToAdbc(nullptr),
+            ADBC_STATUS_NOT_IMPLEMENTED);
 }
 TEST(RedshiftEncodedTest, StagedWriterAndReaderFailuresPreservePrefixAndCursor) {
   ArrowError error{};

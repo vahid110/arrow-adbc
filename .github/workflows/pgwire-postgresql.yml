@@ -170,6 +170,21 @@ jobs:
           python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_symbols.py -v
           python3 -m unittest discover -s ci/scripts -p test_pgwire_private_pq_windows.py -v
 
+      - name: Verify stock PostgreSQL configures without private libpq
+        if: ${{ matrix.platform == 'Ubuntu x86-64' }}
+        run: |
+          apt-get install --yes meson
+          cmake -S c -B build/stock-cmake -G Ninja -DADBC_DRIVER_POSTGRESQL=ON
+          ninja -C build/stock-cmake -t targets all > "$RUNNER_TEMP/stock-targets"
+          grep -q '^adbc_driver_postgresql_shared:' "$RUNNER_TEMP/stock-targets"
+          if grep -q '^adbc_driver_redshift_shared:' "$RUNNER_TEMP/stock-targets"; then exit 1; fi
+          meson setup build/stock-meson c -Dpostgresql=enabled -Dtests=disabled
+          meson introspect build/stock-meson --targets | python3 -c '
+          import json, sys
+          names = {target["name"] for target in json.load(sys.stdin)}
+          if "adbc_driver_postgresql" not in names or "adbc_driver_redshift" in names:
+              sys.exit("unexpected stock PostgreSQL target selection")'
+
       - name: Build pinned private Redshift dependency
         run: |
           python3 ci/scripts/pgwire_private_pq_distribution.py fetch "$RUNNER_TEMP/postgresql-17.11.tar.bz2"
@@ -185,6 +200,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DADBC_BUILD_TESTS=ON
           -DADBC_DRIVER_POSTGRESQL=ON
+          -DADBC_DRIVER_REDSHIFT=ON
           -DADBC_DRIVER_MANAGER=ON
           -DADBC_DRIVER_SQLITE=OFF
           -DADBC_DRIVER_FLIGHTSQL=OFF
@@ -233,11 +249,11 @@ jobs:
       - name: Test PostgreSQL-wire Meson build parity without AWS
         if: ${{ matrix.platform == 'Ubuntu x86-64' }}
         run: |
-          apt-get install --yes meson
           PKG_CONFIG_PATH="$RUNNER_TEMP/private-pq/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
           meson setup build/pgwire-meson c \
             -Dtests=enabled \
             -Dpostgresql=enabled \
+            -Dredshift=true \
             -Dflightsql=disabled \
             -Dsqlite=disabled \
             -Ddriver_manager=disabled \
@@ -308,6 +324,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DADBC_BUILD_TESTS=ON \
             -DADBC_DRIVER_POSTGRESQL=ON \
+            -DADBC_DRIVER_REDSHIFT=ON \
             -DADBC_DRIVER_MANAGER=ON \
             -DADBC_DRIVER_SQLITE=OFF \
             -DADBC_DRIVER_FLIGHTSQL=OFF \

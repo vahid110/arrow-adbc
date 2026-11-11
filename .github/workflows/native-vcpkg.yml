@@ -115,15 +115,15 @@ jobs:
           if (-not $?) { throw "failed to configure CMake" }
 
           cmake --build .\build\${{ matrix.config }} --target install --config ${{ matrix.config }} --parallel
-      - name: Verify installed Redshift shared library
+      - name: Verify installed stock PostgreSQL shared library
         run: |
           $prefix = Join-Path $pwd "local\${{ matrix.config }}"
           $binDir = Join-Path $prefix "bin"
-          $driverDll = Join-Path $binDir "adbc_driver_redshift.dll"
+          $driverDll = Join-Path $binDir "adbc_driver_postgresql.dll"
           $smokeBuild = Join-Path $pwd "build\redshift-install-smoke"
           $smokeExe = Join-Path $smokeBuild "${{ matrix.config }}\adbc_redshift_install_smoke.exe"
           $cmakeArch = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
-          if (-not (Test-Path $driverDll)) { throw "Redshift DLL was not installed" }
+          if (-not (Test-Path $driverDll)) { throw "PostgreSQL DLL was not installed" }
           cmake -S .\c\driver\pgwire\install_smoke -B $smokeBuild `
             -A $cmakeArch "-DCMAKE_PREFIX_PATH=$prefix"
           if ($LASTEXITCODE -ne 0) { throw "failed to configure installed client" }
@@ -131,7 +131,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to build installed client" }
           $env:PATH = "$binDir;$env:PATH"
           & $smokeExe $driverDll --load-only
-          if ($LASTEXITCODE -ne 0) { throw "failed to load installed Redshift DLL" }
+          if ($LASTEXITCODE -ne 0) { throw "failed to load installed PostgreSQL DLL" }
       - name: Test (C++)
         env:
           BUILD_ALL: "0"

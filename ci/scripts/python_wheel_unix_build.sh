@@ -80,7 +80,9 @@ if [[ "${ADBC_DRIVER_FLIGHTSQL}" != "OFF" ]]; then
     check_visibility $ADBC_FLIGHTSQL_LIBRARY
 fi
 check_visibility $ADBC_POSTGRESQL_LIBRARY
-check_visibility $ADBC_REDSHIFT_LIBRARY
+if [[ "${build_redshift_wheel}" == ON ]]; then
+    check_visibility "$ADBC_REDSHIFT_LIBRARY"
+fi
 if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then
     check_visibility $ADBC_SQLITE_LIBRARY
 fi

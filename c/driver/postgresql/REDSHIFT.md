@@ -33,15 +33,18 @@ evidence, gaps, and platform qualification.
 Install a C/C++ compiler, CMake, Ninja, `pkg-config`, and libpq development
 files. On Debian or Ubuntu, `libpq-dev` provides the last dependency. On macOS,
 Homebrew's `libpq` is keg-only; set `PKG_CONFIG_PATH` to its `lib/pkgconfig`
-directory if CMake cannot find it. These commands build the driver and the ADBC
-driver manager from source on Linux or macOS:
+directory if CMake cannot find it. Build the
+[pinned private libpq package](../../../dev/pgwire/private-libpq.md) and set
+`private_pq_prefix` to its installation directory. These commands build both
+drivers and the ADBC driver manager from source on Linux or macOS:
 
 ```sh
 cmake -S c -B build/pgwire-install -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DADBC_BUILD_TESTS=OFF \
   -DADBC_DRIVER_MANAGER=ON \
-  -DADBC_DRIVER_POSTGRESQL=ON \
+  -DADBC_DRIVER_POSTGRESQL=ON -DADBC_DRIVER_REDSHIFT=ON \
+  -DCMAKE_PREFIX_PATH="$private_pq_prefix" \
   -DADBC_DRIVER_SQLITE=OFF \
   -DADBC_DRIVER_FLIGHTSQL=OFF
 cmake --build build/pgwire-install --parallel 4
@@ -50,7 +53,7 @@ cmake --install build/pgwire-install --prefix "$PWD/build/pgwire-prefix"
 
 The install contains `libadbc_driver_redshift` and `libadbc_driver_manager`,
 the public `arrow-adbc/driver/redshift.h` header, and CMake/pkg-config metadata.
-The installed shared Redshift library still needs a compatible libpq at runtime.
+The shared Redshift driver embeds its private libpq statically.
 Static-library consumers should inspect the generated package metadata and
 link transitive dependencies; the clean-client check below uses shared libraries.
 There are no release packages or platform-support guarantees yet.
