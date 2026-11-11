@@ -58,7 +58,7 @@ def coff_object_names(defined):
     return names
 
 
-def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
+def inventory(archives, macho, *, coff=False, nm="nm", metadata=None, common=None):
     defined, undefined = set(), set()
     unsupported_coff = set()
     for archive in archives:
@@ -81,6 +81,13 @@ def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
                 if metadata is not None:
                     metadata.add((name, int(fields[2], 16)))
                 continue
+            if coff and kind == "C":
+                # COFF common symbols encode their allocation size in the value
+                # column of llvm-nm -P; the final size column may be zero.
+                if len(fields) < 3 or not re.fullmatch(r"[0-9A-Fa-f]+", fields[2]):
+                    raise ValueError("Unparsed COFF common allocation")
+                if common is not None:
+                    common.add((name, int(fields[2], 16)))
             if kind in {"U", "w", "v"}:
                 undefined.add(name)
             elif kind in {"T", "D", "B", "S", "R", "C", "G", "V", "W"}:
@@ -88,7 +95,10 @@ def inventory(archives, macho, *, coff=False, nm="nm", metadata=None):
                     coff
                     and (
                         (kind == "R" and coff_literal(name))
-                        or (kind in {"B", "D", "R", "V"} and coff_scoped_static(name))
+                        or (
+                            kind in {"B", "C", "D", "R", "V"}
+                            and coff_scoped_static(name)
+                        )
                     )
                 ):
                     if coff:
@@ -119,9 +129,14 @@ def main():
     parser.add_argument("--exports", type=Path)
     parser.add_argument("archives", type=Path, nargs="+")
     args = parser.parse_args()
-    metadata = set()
+    metadata, common = set(), set()
     defined, undefined = inventory(
-        args.archives, args.macho, coff=args.coff, nm=args.nm, metadata=metadata
+        args.archives,
+        args.macho,
+        coff=args.coff,
+        nm=args.nm,
+        metadata=metadata,
+        common=common,
     )
     if args.mode == "generate":
         if args.exports is None:
@@ -160,6 +175,7 @@ def main():
 
         if args.coff:
             manifest["coff_metadata"] = sorted(metadata)
+            manifest["coff_common"] = sorted(common)
             manifest["coff_object_symbols"] = sorted(object_names)
             (args.directory / "coff-redefine.syms").write_text(
                 "".join(f"{name} {PREFIX}{name}\n" for name in sorted(object_names))
@@ -189,6 +205,11 @@ def main():
             ),
         }
         if args.coff:
+            expected_common = {
+                (PREFIX + name, size) for name, size in manifest["coff_common"]
+            }
+            problems["missing_common_allocations"] = sorted(expected_common - common)
+            problems["unexpected_common_allocations"] = sorted(common - expected_common)
             # Static private symbols cannot resolve via the public DLL import table.
             problems["imported_internal_references"] = sorted(
                 name

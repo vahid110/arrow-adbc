@@ -147,8 +147,8 @@ class CoffSymbolAuditTest(unittest.TestCase):
             base = Path(temp)
             (base / "owner.c").write_text(
                 "extern int dependency(void);\n"
-                "__declspec(selectany) volatile int scoped "
-                '__asm__("?_OptionsStorage@?1??owner@@9@9") = 4;\n'
+                "volatile long long scoped "
+                '__asm__("?_OptionsStorage@?1??owner@@9@9");\n'
                 "int owner(void) {return scoped;}\n"
                 "int PQlibVersion(void) {return owner()+dependency();}\n"
                 "int ADBCPQprivatePackageAbi(void) {return 1;}\n"
@@ -174,7 +174,7 @@ class CoffSymbolAuditTest(unittest.TestCase):
                 def run(*args):
                     subprocess.run(args, check=True, cwd=folder, capture_output=True)
 
-                cc = ["clang", f"--target={arch}-pc-windows-msvc", "-c"]
+                cc = ["clang", f"--target={arch}-pc-windows-msvc", "-fcommon", "-c"]
                 for phase in ("raw", "private"):
                     include = [] if phase == "raw" else ["-include", "map/namespace.h"]
                     for src in ("owner", "dependency"):
@@ -211,6 +211,16 @@ class CoffSymbolAuditTest(unittest.TestCase):
                     "renamed.lib",
                 )
                 self.assertTrue((folder / "consumer.exe").is_file())
+                manifest_path = folder / "map/symbols.json"
+                manifest = json.loads(manifest_path.read_text())
+                self.assertEqual(
+                    manifest["coff_common"], [["?_OptionsStorage@?1??owner@@9@9", 8]]
+                )
+                manifest["coff_common"][0][1] = 4
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaises(subprocess.CalledProcessError) as changed:
+                    run(*tool, "audit", *common, "renamed.lib")
+                self.assertIn(b"missing_common_allocations", changed.exception.stderr)
 
     def test_macro_and_object_maps_partition_all_definitions(self):
         public = [
