@@ -299,7 +299,8 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           pg_prefix="$(brew --prefix postgresql@18)"
           echo "$pg_prefix/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Start temporary PostgreSQL server
         run: |

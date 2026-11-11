@@ -248,15 +248,21 @@ def build(args, pins):
         commands.append(command)
         number = len(commands)
         (work / f"{number:02d}-command.json").write_text(json.dumps(command) + "\n")
-        with (work / f"{number:02d}.log").open("w") as output:
-            subprocess.run(
+        log = work / f"{number:02d}.log"
+        with log.open("w") as output:
+            result = subprocess.run(
                 command,
                 cwd=cwd,
                 env=env,
                 stdout=output,
                 stderr=subprocess.STDOUT,
-                check=True,
             )
+        if result.returncode:
+            print(
+                "\n".join(log.read_text(errors="replace").splitlines()[-60:]),
+                file=sys.stderr,
+            )
+            result.check_returncode()
 
     run([args.cc, "--version"])
     run(["make", "--version"])
@@ -298,9 +304,12 @@ def build(args, pins):
             source,
         )
         run(["make", "-j1", "-C", str(source / "src/backend"), "generated-headers"])
-        cppflags = include_ssl
-        if phase == "private":
-            cppflags += " -include " + str(mapping / "namespace.h")
+        # Preserve the configure-selected platform flags in both passes.
+        extra_flags = (
+            ["COPT=-include " + str(mapping / "namespace.h")]
+            if phase == "private"
+            else []
+        )
         for directory, target in (
             ("src/port", "libpgport_shlib.a"),
             ("src/common", "libpgcommon_shlib.a"),
@@ -312,8 +321,7 @@ def build(args, pins):
                     "-j1",
                     "-C",
                     str(source / directory),
-                    "CPPFLAGS=" + cppflags,
-                    "CFLAGS=" + cflags,
+                    *extra_flags,
                     target,
                 ]
             )

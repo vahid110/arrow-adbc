@@ -18,6 +18,7 @@
 """Offline negative gates; tiny fake libraries only, never PostgreSQL compilation."""
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -146,14 +147,18 @@ class PreflightTest(unittest.TestCase):
             def fake(command, **kwargs):
                 commands.append(command)
                 if command[-1] == "generated-headers":
-                    raise subprocess.CalledProcessError(2, command)
+                    kwargs["stdout"].write("compiler diagnostic")
+                    return subprocess.CompletedProcess(command, 2)
+                return subprocess.CompletedProcess(command, 0)
 
             with (
+                patch.object(sys, "stderr", new_callable=io.StringIO) as diagnostic,
                 patch.object(package, "ASSETS", assets),
                 patch.object(package.subprocess, "run", side_effect=fake),
             ):
                 with self.assertRaises(subprocess.CalledProcessError):
                     package.build(args, pins)
+            self.assertIn("compiler diagnostic", diagnostic.getvalue())
             self.assertEqual(commands[-1][:3], ["make", "-j1", "-C"])
             self.assertEqual(commands[-1][-1], "generated-headers")
             self.assertFalse(any(c[-1].endswith(".a") for c in commands))
