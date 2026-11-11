@@ -73,7 +73,10 @@ Write-Host "=== Building ADBC drivers for $Architecture ==="
     @VcpkgPackages `
     --overlay-triplets $(Join-Path $SourceDir "ci\vcpkg\triplets") `
     --overlay-ports $(Join-Path $SourceDir "ci\vcpkg\ports")
-if (-not $?) { throw "Failed to install vcpkg dependencies" }
+if ($LASTEXITCODE -ne 0) {
+    & (Join-Path $SourceDir "ci/scripts/show_private_pq_windows_log.ps1") $VcpkgTriplet
+    throw "Failed to install vcpkg dependencies"
+}
 
 if ($Redshift) {
     python (Join-Path $SourceDir "ci/scripts/pgwire_private_pq_distribution.py") stage `

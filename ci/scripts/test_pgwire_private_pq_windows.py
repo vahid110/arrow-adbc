@@ -25,6 +25,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -256,6 +257,8 @@ class WindowsRecipeTest(unittest.TestCase):
                     if any(arg.startswith("--redefine-syms=") for arg in command):
                         Path(command[-1]).write_bytes(Path(command[-2]).read_bytes())
                     if failure == "audit" and "audit" in command:
+                        kwargs["stdout"].write("earlier output\n" + "detail\n" * 60)
+                        kwargs["stdout"].write("COFF symbol audit failed\n")
                         raise subprocess.CalledProcessError(2, command)
                     if failure == "probe" and command[0].endswith(
                         "package-link-check.exe"
@@ -272,8 +275,19 @@ class WindowsRecipeTest(unittest.TestCase):
                     patch.object(windows.subprocess, "run", side_effect=process),
                 ):
                     if failure:
-                        with self.assertRaises(subprocess.CalledProcessError):
+                        with (
+                            self.assertRaises(subprocess.CalledProcessError),
+                            redirect_stderr(io.StringIO()) as diagnostic,
+                        ):
                             windows.build(args, pins)
+                        if failure == "audit":
+                            self.assertIn(
+                                "COFF symbol audit failed", diagnostic.getvalue()
+                            )
+                            self.assertNotIn("earlier output", diagnostic.getvalue())
+                            self.assertEqual(
+                                diagnostic.getvalue().count("detail\n"), 59
+                            )
                     else:
                         windows.build(args, pins)
                 receipt = args.prefix / "share/adbc-redshift-private-pq/provenance.json"

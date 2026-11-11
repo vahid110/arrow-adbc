@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tarfile
+from collections import deque
 from pathlib import Path
 
 import pgwire_private_pq as package
@@ -205,15 +206,21 @@ def build(args, pins):
         number = len(commands)
         (work / f"{number:02d}-command.json").write_text(json.dumps(command) + "\n")
         log = work / f"{number:02d}.log"
-        with log.open("w") as output:
-            subprocess.run(
-                command,
-                cwd=cwd,
-                env=env,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                check=True,
-            )
+        try:
+            with log.open("w") as output:
+                subprocess.run(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    check=True,
+                )
+        except subprocess.CalledProcessError:
+            with log.open(errors="replace") as failed_log:
+                print(f"Last 60 lines of {log.name}:", file=sys.stderr)
+                sys.stderr.writelines(deque(failed_log, maxlen=60))
+            raise
         return log.read_text()
 
     native_file = work / "native.ini"

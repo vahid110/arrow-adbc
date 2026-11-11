@@ -479,7 +479,10 @@ jobs:
           & "$($env:VCPKG_ROOT)\vcpkg.exe" install libpq adbc-redshift-private-pq `
             --overlay-triplets "$pwd\..\ci\vcpkg\triplets" `
             --overlay-ports "$pwd\..\ci\vcpkg\ports"
-          if ($LASTEXITCODE -ne 0) { throw "failed to install libpq" }
+          if ($LASTEXITCODE -ne 0) {
+            & ../ci/scripts/show_private_pq_windows_log.ps1 $env:VCPKG_DEFAULT_TRIPLET
+            throw "failed to install libpq"
+          }
 
       - name: Prove original and relocated Windows private package consumers
         run: |
