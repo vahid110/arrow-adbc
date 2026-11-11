@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Windows adapter orchestration tests: subprocesses and archives are fake."""
+"""Windows adapter tests with a real Git checkout and mocked build tools."""
 
 import argparse
 import io
@@ -75,6 +75,38 @@ def fake_source(archive, directory):
 
 
 class WindowsRecipeTest(unittest.TestCase):
+    def test_autocrlf_checkout_preserves_pinned_recipe_bytes(self):
+        port = package.ASSETS.relative_to(package.REPOSITORY).as_posix()
+        paths = {
+            "ci/scripts/pgwire_private_pq.py": "build_script_sha256",
+            "ci/scripts/pgwire_private_pq_windows.py": "windows_build_script_sha256",
+            "ci/scripts/pgwire_private_pq_symbols.py": "symbol_script_sha256",
+            f"{port}/libpq-result-formats.patch": "patch_sha256",
+            f"{port}/namespace-macro-restore.patch": "namespace_patch_sha256",
+            f"{port}/PostgreSQL-COPYRIGHT": "license_sha256",
+            "LICENSE.txt": "adbc_license_sha256",
+            "NOTICE.txt": "adbc_notice_sha256",
+        }
+        pins = json.loads((package.ASSETS / "pins.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp).resolve()
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=true",
+                    "checkout-index",
+                    "--prefix=" + destination.as_posix() + "/",
+                    "--",
+                    *paths,
+                ],
+                cwd=package.REPOSITORY,
+                check=True,
+            )
+            for path, key in paths.items():
+                with self.subTest(path=path):
+                    self.assertEqual(package.digest(destination / path), pins[key])
+
     def test_native_target_and_dynamic_runtime_are_required_before_subprocess(self):
         for failure in ("architecture", "crt", "source", "openssl", "tool"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:

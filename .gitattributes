@@ -32,3 +32,12 @@ python/adbc_driver_manager/adbc_driver_manager/_static_version.py export-subst
 python/adbc_driver_postgresql/adbc_driver_postgresql/_static_version.py export-subst
 python/adbc_driver_redshift/adbc_driver_redshift/_static_version.py export-subst
 python/adbc_driver_sqlite/adbc_driver_sqlite/_static_version.py export-subst
+
+# The private libpq build verifies the checked-out bytes against SHA-256 pins.
+/ci/scripts/pgwire_private_pq.py text eol=lf
+/ci/scripts/pgwire_private_pq_windows.py text eol=lf
+/ci/scripts/pgwire_private_pq_symbols.py text eol=lf
+/ci/vcpkg/ports/adbc-redshift-private-pq/*.patch text eol=lf
+/ci/vcpkg/ports/adbc-redshift-private-pq/PostgreSQL-COPYRIGHT text eol=lf
+/LICENSE.txt text eol=lf
+/NOTICE.txt text eol=lf
