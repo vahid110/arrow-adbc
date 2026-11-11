@@ -29,3 +29,8 @@ empty results, schema-only execution, prepared Bind, and three ordered
 BindStream results. A parameterized INSERT copies mixed rows into a second
 temporary table. The final read checks exact row multiplicity and values to
 detect skipped or repeated writes. A nonzero exit indicates failure.
+
+The zero-row query and its schema-only description are each checked against
+independent all-HLL and non-HLL projections using the same empty predicate.
+The client reports field ordinals and metadata differences when Redshift
+describes the empty projection differently from the populated one.

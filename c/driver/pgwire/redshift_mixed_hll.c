@@ -39,6 +39,36 @@ struct Client {
   bool lossless;
 };
 
+// Only fixed call names, numeric statuses and a validated five-character SQLSTATE
+// leave the process. Vendor messages can contain connection details or SQL.
+static bool StatusOk(const char* call, int rc, const struct AdbcError* error) {
+  if (!rc) return true;
+  char state[6] = "-----";
+  if (error) {
+    bool valid = true;
+    for (int i = 0; i < 5; i++) {
+      char ch = error->sqlstate[i];
+      if (!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z'))) valid = false;
+    }
+    if (valid) memcpy(state, error->sqlstate, 5);
+  }
+  fprintf(stderr, "call=%s status=%d sqlstate=%s\n", call, rc, state);
+  return false;
+}
+
+static bool StreamOk(const char* call, int rc, struct ArrowArrayStream* stream) {
+  if (!rc) return true;
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  const struct AdbcError* e = AdbcErrorFromArrayStream(stream, &status);
+  fprintf(stderr, "arrow_errno=%d ", rc);
+  return StatusOk(call, e && status ? (int)status : -1, e);
+}
+
+static bool FieldCheck(const char* why, int field) {
+  fprintf(stderr, "check=%s field=%d\n", why, field);
+  return false;
+}
+
 struct Control {
   struct ArrowSchema schema;
   struct ArrowArray array;
@@ -126,7 +156,8 @@ static bool SameCell(const struct ArrowArrayView* a, int64_t i,
 static bool CloseStatement(struct Client* c, struct AdbcStatement* stmt) {
   DROP_HANDLE(c->error);
   if (!stmt->private_data) return true;
-  bool ok = AdbcStatementRelease(stmt, &c->error) == ADBC_STATUS_OK;
+  bool ok =
+      StatusOk("statement-release", AdbcStatementRelease(stmt, &c->error), &c->error);
   DROP_HANDLE(c->error);
   return ok;
 }
@@ -148,7 +179,9 @@ static bool Parameters(struct Client* c, struct AdbcStatement* stmt, bool stream
         ArrowArrayFinishElement(&batch) || ArrowArrayFinishBuildingDefault(&batch, NULL))
       goto done;
     if (!stream) {
-      ok = count == 1 && !AdbcStatementBind(stmt, &batch, &schema, &c->error);
+      ok = count == 1 &&
+           StatusOk("bind", AdbcStatementBind(stmt, &batch, &schema, &c->error),
+                    &c->error);
       goto done;
     }
     if (!i) {
@@ -161,7 +194,8 @@ static bool Parameters(struct Client* c, struct AdbcStatement* stmt, bool stream
     }
     ArrowBasicArrayStreamSetArray(&input, i, &batch);
   }
-  ok = !AdbcStatementBindStream(stmt, &input, &c->error);
+  ok = StatusOk("bind-stream", AdbcStatementBindStream(stmt, &input, &c->error),
+                &c->error);
 done:
   DROP_HANDLE(batch);
   DROP_HANDLE(input);
@@ -172,11 +206,14 @@ done:
 static bool Start(struct Client* c, struct AdbcStatement* stmt, const char* sql,
                   const int64_t* ids, int n, bool bind_stream,
                   struct ArrowArrayStream* out) {
-  return !AdbcStatementNew(&c->conn, stmt, &c->error) &&
-         !AdbcStatementSetSqlQuery(stmt, sql, &c->error) &&
-         (!ids || (!AdbcStatementPrepare(stmt, &c->error) &&
-                   Parameters(c, stmt, bind_stream, ids, n))) &&
-         !AdbcStatementExecuteQuery(stmt, out, NULL, &c->error);
+  return StatusOk("statement-new", AdbcStatementNew(&c->conn, stmt, &c->error),
+                  &c->error) &&
+         StatusOk("set-sql", AdbcStatementSetSqlQuery(stmt, sql, &c->error), &c->error) &&
+         (!ids ||
+          (StatusOk("prepare", AdbcStatementPrepare(stmt, &c->error), &c->error) &&
+           Parameters(c, stmt, bind_stream, ids, n))) &&
+         StatusOk("execute-query", AdbcStatementExecuteQuery(stmt, out, NULL, &c->error),
+                  &c->error);
 }
 
 static bool Command(struct Client* c, const char* sql, const int64_t* ids, int n) {
@@ -185,17 +222,35 @@ static bool Command(struct Client* c, const char* sql, const int64_t* ids, int n
   return CloseStatement(c, &stmt) && ok;
 }
 
-static bool ReadControl(struct Client* c, const char* sql, struct Control* result) {
+static bool ReadControl(struct Client* c, const char* sql, struct Control* result,
+                        bool empty) {
   struct AdbcStatement stmt = {0};
   struct ArrowArrayStream stream = {0};
   struct ArrowArray end = {0};
-  bool ok = Start(c, &stmt, sql, NULL, 0, false, &stream) &&
-            !stream.get_schema(&stream, &result->schema) &&
-            !stream.get_next(&stream, &result->array) && result->array.release &&
-            result->array.length == 1 && !stream.get_next(&stream, &end) &&
-            !end.release &&
-            !ArrowArrayViewInitFromSchema(&result->view, &result->schema, NULL) &&
-            !ArrowArrayViewSetArray(&result->view, &result->array, NULL);
+  bool ok = false;
+  if (!Start(c, &stmt, sql, NULL, 0, false, &stream) ||
+      !StreamOk("control-schema", stream.get_schema(&stream, &result->schema), &stream))
+    goto done;
+  // A zero-row result may be represented by zero-length batches followed by EOF.
+  for (int n = 0; n < 16; n++) {
+    if (!StreamOk("control-next", stream.get_next(&stream, &result->array), &stream))
+      goto done;
+    if (!result->array.release) {
+      ok = empty;
+      break;
+    }
+    if (empty && result->array.length == 0) {
+      DROP_HANDLE(result->array);
+      continue;
+    }
+    ok = !empty && result->array.length == 1 &&
+         StreamOk("control-eof", stream.get_next(&stream, &end), &stream) &&
+         !end.release &&
+         !ArrowArrayViewInitFromSchema(&result->view, &result->schema, NULL) &&
+         !ArrowArrayViewSetArray(&result->view, &result->array, NULL);
+    break;
+  }
+done:
   DROP_HANDLE(end);
   DROP_HANDLE(stream);
   return CloseStatement(c, &stmt) && ok;
@@ -223,7 +278,7 @@ static bool ControlsValid(struct Client* c, const struct Control* h,
                            "z",
                            "Z",
                            "Z"};
-  if (c->lossless && f->schema.n_children == 20 &&
+  if (c->lossless && f->schema.n_children == 21 &&
       (!Metadata(f->schema.children[9], "ARROW:extension:name",
                  "adbc.redshift.time_us.v1") ||
        !Metadata(f->schema.children[11], "ARROW:extension:name",
@@ -231,7 +286,7 @@ static bool ControlsValid(struct Client* c, const struct Control* h,
        !Metadata(f->schema.children[12], "ARROW:extension:name",
                  "adbc.redshift.timestamptz_us_2000.v1")))
     return false;
-  if (h->schema.n_children != 1 || f->schema.n_children != 20 ||
+  if (h->schema.n_children != 1 || f->schema.n_children != 21 ||
       strcmp(h->schema.children[0]->format, "U") ||
       !Metadata(h->schema.children[0], "ARROW:extension:name",
                 "adbc.redshift.hllsketch") ||
@@ -240,6 +295,7 @@ static bool ControlsValid(struct Client* c, const struct Control* h,
       ArrowArrayViewIsNull(h->view.children[0], 0) ||
       ArrowArrayViewGetBytesUnsafe(h->view.children[0], 0).size_bytes <= 0)
     return false;
+  if (strcmp(f->schema.children[20]->format, "l")) return false;
   for (int i = 0; i < 20; i++) {
     if (strcmp(f->schema.children[i]->format, formats[i]) ||
         ArrowArrayViewIsNull(f->view.children[i], 0))
@@ -263,19 +319,68 @@ static bool ControlsValid(struct Client* c, const struct Control* h,
                   "adbc.redshift.geography.ewkb");
 }
 
+// Unknown metadata keys and values are never printed. The same-predicate controls
+// still compare every key and value, including those outside the diagnostic list.
+static void DescriptorDifference(const char* kind, int field,
+                                 const struct ArrowSchema* actual,
+                                 const struct ArrowSchema* control) {
+  struct ArrowSchemaView a, b;
+  int at = ArrowSchemaViewInit(&a, actual, NULL) ? -1 : (int)a.type;
+  int bt = ArrowSchemaViewInit(&b, control, NULL) ? -1 : (int)b.type;
+  fprintf(stderr, "schema=%s field=%d arrow_types=%d/%d", kind, field, at, bt);
+  const char* keys[] = {"ADBC:redshift:type_modifier",
+                        "ADBC:redshift:byte_width",
+                        "ADBC:redshift:precision",
+                        "ADBC:redshift:scale",
+                        "ADBC:redshift:fractional_precision",
+                        "ADBC:redshift:interval_raw_precision",
+                        "ADBC:redshift:interval_raw_datetime_precision",
+                        "ADBC:redshift:interval_raw_type",
+                        "ADBC:redshift:interval_constraint_state",
+                        "ADBC:redshift:interval_qualifier",
+                        "ADBC:redshift:sql_type",
+                        "ARROW:extension:name",
+                        "ARROW:extension:metadata"};
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    struct ArrowStringView x = {0}, y = {0}, k = ArrowCharView(keys[i]);
+    ArrowMetadataGetValue(actual->metadata, k, &x);
+    ArrowMetadataGetValue(control->metadata, k, &y);
+    if ((x.data != NULL) != (y.data != NULL) || !EqualText(x, y)) {
+      fprintf(stderr, " changed=%s", keys[i]);
+      struct ArrowStringView vals[] = {x, y};
+      for (int v = 0; v < 2; v++) {
+        bool numeric = vals[v].size_bytes > 0 && vals[v].size_bytes <= 11;
+        for (int n = 0; numeric && n < vals[v].size_bytes; n++) {
+          char ch = vals[v].data[n];
+          numeric =
+              (ch >= '0' && ch <= '9') || (!n && ch == '-' && vals[v].size_bytes > 1);
+        }
+        if (numeric)
+          fprintf(stderr, "[%.*s]", (int)vals[v].size_bytes, vals[v].data);
+        else
+          fputs(vals[v].data ? "[present]" : "[absent]", stderr);
+      }
+    }
+  }
+  fputc('\n', stderr);
+}
+
 static bool MixedSchema(const struct ArrowSchema* schema, const struct Control* h,
                         const struct Control* f) {
   if (strcmp(schema->format, "+s") || schema->n_children != 23 ||
-      strcmp(schema->children[0]->format, "l") ||
-      strcmp(schema->children[0]->name, "id") || strcmp(schema->children[1]->name, "h") ||
-      strcmp(schema->children[22]->name, "sketch_again") ||
-      !SameType(schema->children[1], h->schema.children[0]) ||
-      !SameType(schema->children[22], h->schema.children[0]))
-    return false;
-  for (int i = 0; i < 20; i++) {
-    if (strcmp(schema->children[i + 2]->name, f->schema.children[i]->name) ||
-        !SameType(schema->children[i + 2], f->schema.children[i]))
+      h->schema.n_children != 1 || f->schema.n_children != 21)
+    return FieldCheck("schema-shape", -1);
+  for (int i = 0; i < 23; i++) {
+    const struct ArrowSchema* ref = i == 1 || i == 22
+                                        ? h->schema.children[0]
+                                        : f->schema.children[i == 0 ? 20 : i - 2];
+    const char* name = i == 22 ? "sketch_again" : ref->name;
+    if (!name || !schema->children[i]->name || strcmp(schema->children[i]->name, name))
+      return FieldCheck("schema-name", i);
+    if (!SameType(schema->children[i], ref)) {
+      DescriptorDifference("control-mismatch", i, schema->children[i], ref);
       return false;
+    }
   }
   return true;
 }
@@ -292,39 +397,58 @@ static bool MixedRows(struct Client* c, const char* sql, const int64_t* bind, in
   int rows = 0, batches = 0, nonempty = 0;
   bool ok = false;
   if (schema_only) {
-    ok = !AdbcStatementNew(&c->conn, &stmt, &c->error) &&
-         !AdbcStatementSetSqlQuery(&stmt, sql, &c->error) &&
-         !AdbcStatementExecuteSchema(&stmt, &schema, &c->error) &&
-         MixedSchema(&schema, h, f);
+    ok =
+        StatusOk("statement-new", AdbcStatementNew(&c->conn, &stmt, &c->error),
+                 &c->error) &&
+        StatusOk("set-sql", AdbcStatementSetSqlQuery(&stmt, sql, &c->error), &c->error) &&
+        StatusOk("execute-schema", AdbcStatementExecuteSchema(&stmt, &schema, &c->error),
+                 &c->error) &&
+        MixedSchema(&schema, h, f);
     goto done;
   }
   if (!Start(c, &stmt, sql, bind, binds, binds > 1, &stream) ||
-      stream.get_schema(&stream, &schema) || !MixedSchema(&schema, h, f) ||
-      ArrowArrayViewInitFromSchema(&view, &schema, NULL))
+      !StreamOk("stream-schema", stream.get_schema(&stream, &schema), &stream) ||
+      !MixedSchema(&schema, h, f) ||
+      !StatusOk("array-view-schema", ArrowArrayViewInitFromSchema(&view, &schema, NULL),
+                NULL))
     goto done;
   for (;;) {
-    if (stream.get_next(&stream, &batch)) goto done;
+    if (!StreamOk("stream-next", stream.get_next(&stream, &batch), &stream)) goto done;
     if (!batch.release) break;
-    if (ArrowArrayViewSetArray(&view, &batch, NULL) || ++batches > 16) goto done;
+    if (!StatusOk("array-view-batch", ArrowArrayViewSetArray(&view, &batch, NULL), NULL))
+      goto done;
+    if (++batches > 16) {
+      FieldCheck("batch-cap", -1);
+      goto done;
+    }
     if (batch.length) nonempty++;
     for (int64_t i = 0; i < batch.length; i++, rows++) {
       int64_t j = view.offset + i;
       if (rows >= count || ArrowArrayViewIsNull(&view, i) ||
           ArrowArrayViewIsNull(view.children[0], j) ||
-          ArrowArrayViewGetIntUnsafe(view.children[0], j) != expected[rows])
+          ArrowArrayViewGetIntUnsafe(view.children[0], j) != expected[rows]) {
+        FieldCheck("row-id-or-count", 0);
         goto done;
+      }
       for (int k = 1; k < 23; k++) {
         const struct ArrowArrayView* ref =
             (k == 1 || k == 22) ? h->view.children[0] : f->view.children[k - 2];
         if (expected[rows] == 2) {
-          if (!ArrowArrayViewIsNull(view.children[k], j)) goto done;
-        } else if (!SameCell(view.children[k], j, ref, 0))
+          if (!ArrowArrayViewIsNull(view.children[k], j)) {
+            FieldCheck("expected-null", k);
+            goto done;
+          }
+        } else if (!SameCell(view.children[k], j, ref, 0)) {
+          FieldCheck("cell", k);
           goto done;
+        }
       }
     }
     DROP_HANDLE(batch);
   }
   ok = rows == count && nonempty >= min_batches;
+  if (!ok)
+    fprintf(stderr, "rows=%d/%d batches=%d/min%d\n", rows, count, nonempty, min_batches);
 done:
   ArrowArrayViewReset(&view);
   DROP_HANDLE(batch);
@@ -334,7 +458,7 @@ done:
 }
 
 static bool Run(struct Client* c) {
-  struct Control h = {0}, f = {0};
+  struct Control h = {0}, f = {0}, empty_h = {0}, empty_f = {0};
   const int64_t one[] = {1}, both[] = {1, 2}, ordered[] = {1, 2, 1},
                 effects[] = {1, 1, 2};
   const char* stage = "setup";
@@ -365,15 +489,41 @@ static bool Run(struct Client* c) {
       !Command(c, "INSERT INTO " TABLE_NAME " (id) VALUES (2)", NULL, 0))
     goto done;
   stage = "native-controls";
-  if (!ReadControl(c, "SELECT h FROM " TABLE_NAME " WHERE id=1", &h) ||
-      !ReadControl(c, "SELECT " FIELDS " FROM " TABLE_NAME " WHERE id=1", &f) ||
+  if (!ReadControl(c, "SELECT h FROM " TABLE_NAME " WHERE id=1", &h, false) ||
+      !ReadControl(c, "SELECT " FIELDS ",id FROM " TABLE_NAME " WHERE id=1", &f, false) ||
       !ControlsValid(c, &h, &f))
     goto done;
 #define QUERY "SELECT " MIXED " FROM " TABLE_NAME
   stage = "ordinary";
   if (!MixedRows(c, QUERY " ORDER BY id", NULL, 0, both, 2, 1, &h, &f, false)) goto done;
+    // Redshift can describe an empty unconstrained projection differently (e.g.
+    // interval raw modifiers). Use independent equivalent empty controls, and
+    // retain any populated/empty contrast for diagnosis rather than normalizing it.
+#define EMPTY " WHERE 1=0"
+  stage = "empty-controls";
+  if (!ReadControl(c, "SELECT h FROM " TABLE_NAME EMPTY, &empty_h, true) ||
+      !ReadControl(c, "SELECT " FIELDS ",id FROM " TABLE_NAME EMPTY, &empty_f, true) ||
+      empty_h.schema.n_children != 1 || empty_f.schema.n_children != 21 ||
+      strcmp(empty_h.schema.children[0]->format, "U") ||
+      !Metadata(empty_h.schema.children[0], "ARROW:extension:name",
+                "adbc.redshift.hllsketch") ||
+      !Metadata(empty_h.schema.children[0], "ARROW:extension:metadata",
+                "{\"version\":1,\"encoding\":\"redshift-serialized\",\"logm\":15}"))
+    goto done;
+  for (int k = 0; k < 21; k++) {
+    if (!SameType(empty_f.schema.children[k], f.schema.children[k]))
+      DescriptorDifference("empty-vs-populated", k == 20 ? 0 : k + 2,
+                           empty_f.schema.children[k], f.schema.children[k]);
+  }
+  if (!SameType(empty_h.schema.children[0], h.schema.children[0]))
+    DescriptorDifference("empty-vs-populated", 1, empty_h.schema.children[0],
+                         h.schema.children[0]);
   stage = "empty";
-  if (!MixedRows(c, QUERY " WHERE 1=0", NULL, 0, NULL, 0, 0, &h, &f, false)) goto done;
+  if (!MixedRows(c, QUERY EMPTY, NULL, 0, NULL, 0, 0, &empty_h, &empty_f, false))
+    goto done;
+  stage = "empty-execute-schema";
+  if (!MixedRows(c, QUERY EMPTY, NULL, 0, NULL, 0, 0, &empty_h, &empty_f, true))
+    goto done;
   stage = "schema-only";
   if (!MixedRows(c, QUERY, NULL, 0, NULL, 0, 0, &h, &f, true)) goto done;
   stage = "prepared-bind";
@@ -391,6 +541,47 @@ static bool Run(struct Client* c) {
   ok = true;
 done:
   if (!ok) fprintf(stderr, "mixed HLL case failed (%s)\n", stage);
+  ResetControl(&empty_h);
+  ResetControl(&empty_f);
+  ResetControl(&h);
+  ResetControl(&f);
+  return ok;
+}
+
+// A changed empty interval modifier is permitted only when the independent
+// empty control has the same modifier. Schema-only and stream routes share this check.
+static bool EmptySchemaSelfTest(void) {
+  struct ArrowSchema mix = {0};
+  struct Control h = {0}, f = {0};
+  struct ArrowBuffer metadata;
+  ArrowBufferInit(&metadata);
+  ArrowSchemaInit(&mix);
+  ArrowSchemaInit(&h.schema);
+  ArrowSchemaInit(&f.schema);
+  bool ok = false;
+  if (ArrowSchemaSetTypeStruct(&mix, 23) || ArrowSchemaSetTypeStruct(&h.schema, 1) ||
+      ArrowSchemaSetTypeStruct(&f.schema, 21))
+    goto done;
+  for (int i = 0; i < 23; i++) {
+    struct ArrowSchema* ref =
+        i == 1 || i == 22 ? h.schema.children[0] : f.schema.children[i == 0 ? 20 : i - 2];
+    const char* name = i == 1 || i == 22 ? "h" : "col";
+    if (ArrowSchemaSetType(ref, NANOARROW_TYPE_INT64) || ArrowSchemaSetName(ref, name) ||
+        ArrowSchemaSetType(mix.children[i], NANOARROW_TYPE_INT64) ||
+        ArrowSchemaSetName(mix.children[i], i == 22 ? "sketch_again" : name))
+      goto done;
+  }
+  if (!MixedSchema(&mix, &h, &f) || ArrowMetadataBuilderInit(&metadata, NULL) ||
+      ArrowMetadataBuilderAppend(&metadata, ArrowCharView("ADBC:redshift:type_modifier"),
+                                 ArrowCharView("-1")) ||
+      ArrowSchemaSetMetadata(mix.children[15], (const char*)metadata.data) ||
+      SameType(mix.children[15], f.schema.children[13]) ||
+      ArrowSchemaSetMetadata(f.schema.children[13], (const char*)metadata.data))
+    goto done;
+  ok = MixedSchema(&mix, &h, &f);
+done:
+  ArrowBufferReset(&metadata);
+  DROP_HANDLE(mix);
   ResetControl(&h);
   ResetControl(&f);
   return ok;
@@ -435,7 +626,8 @@ done:
 }
 
 int main(int argc, char** argv) {
-  if (argc == 2 && !strcmp(argv[1], "--self-test")) return SelfTest() ? 0 : 1;
+  if (argc == 2 && !strcmp(argv[1], "--self-test"))
+    return SelfTest() && EmptySchemaSelfTest() ? 0 : 1;
   if (argc != 3 || argv[1][0] != '/' ||
       (strcmp(argv[2], "arrow") && strcmp(argv[2], "lossless"))) {
     fprintf(stderr,
