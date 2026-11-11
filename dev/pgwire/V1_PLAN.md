@@ -72,8 +72,9 @@ This roadmap grants no additional paid attempt or publication authority.
 
 The [private libpq dependency](private-libpq.md) supplies local B1 Redshift
 linkage and mixed HLL result dispatch. The installed C and Python campaign passed on macOS arm64
-(see case H in the operation matrix). Portable dependency/provenance wiring and the Windows adapter are local
-and unqualified. Windows/cross and all seven C/five wheel validations remain B6 gates.
+(see case H in the operation matrix). The [PR #32 checks](https://github.com/vahid110/arrow-adbc/pull/32/checks) record
+portable build and installation results. B6 requires seven C distributions and five
+Python wheels, including Windows native builds and stock/private coexistence.
 
 Queries, core metadata, transactions, cancellation and prepared INSERT ingestion
 are implemented. Packaging supports seven archive targets and five portable

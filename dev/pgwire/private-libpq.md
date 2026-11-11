@@ -98,13 +98,12 @@ installed file hashes. Exact recipe sources and PostgreSQL COPYRIGHT accompany
 the package. This is reproducible input/provenance tracking, not a promise of
 bit-identical archives across different compiler/SDK/install paths.
 
-## Portable completion remains required
+## Portable builds and qualification
 
 The uniquely named vcpkg overlay `adbc-redshift-private-pq` uses the same script
 for native Linux/macOS static-release triplets. It never replaces the ordinary
-`libpq` port, and script digests participate in its cache inputs. This adapter is
-prepared but unqualified until built on each intended runner. The seven C package
-and five wheel jobs now request the unique private dependency; Unix package and
+`libpq` port, and script digests participate in its cache inputs. The seven C package
+and five wheel jobs request the unique private dependency; Unix package and
 fast driver/Python CI build the pinned source directly, while wheels and Windows
 use the overlay. Ordinary PostgreSQL still uses its original libpq dependency.
 Source downloads require both pinned hashes. Packaging verifies the full private
@@ -134,12 +133,11 @@ decorated name is itself a global, objcopy renames it as well so both builds
 emit the same original decoration. Unknown special symbols fail. The final audit requires every original definition to be prefixed,
 no original internal references, and unchanged compiler metadata.
 
-The Windows C jobs now include original/relocated static and shared consumers
-alongside stock libpq, plus a whole-archive collision probe. These jobs and the
-adapter have only source/mock validation locally: native x64/ARM64 compilation,
-COFF rewrites, link/runtime behavior and Windows wheel repair remain unverified.
-No Windows success or release readiness is claimed. Ordinary libpq remains a
-separate dependency; there is no private-dependency fallback.
+The Windows C jobs build and run static and shared consumers against the
+original and relocated packages alongside stock libpq. A whole-archive link
+checks for collisions with the stock library. The Windows wheel job installs
+and loads the repaired wheel. The [PR #32 checks](https://github.com/vahid110/arrow-adbc/pull/32/checks)
+record the native runner results for each revision.
 
 Then validate all seven C distributions and five wheels: installed/relocated
 shared and static consumers, both drivers plus stock libpq in both load orders,
