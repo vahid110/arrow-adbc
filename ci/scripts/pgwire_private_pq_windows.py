@@ -64,6 +64,7 @@ def preflight(args, pins):
         package.require(
             tool.is_absolute() and tool.is_file(), f"Explicit tool missing: {tool}"
         )
+    package.require(args.lib.name.lower() == "lib.exe", "MSVC lib.exe is required")
     package.require(bool(args.meson_command_element), "Explicit Meson command required")
     for element in args.meson_command_element:
         if element == "-I":
@@ -191,7 +192,8 @@ def build(args, pins):
         env.pop(key, None)
     env["PATH"] = (
         os.pathsep.join(
-            str(p.parent) for p in (args.ninja, args.bison, args.flex, args.perl)
+            str(p.parent)
+            for p in (args.lib, args.ninja, args.bison, args.flex, args.perl)
         )
         + os.pathsep
         + env.get("PATH", "")
@@ -227,12 +229,14 @@ def build(args, pins):
 
     native_file = work / "native.ini"
     native_file.write_text(
-        "[binaries]\n"
+        # Meson 0.58 probes bare lib.exe with /? but an absolute path with
+        # --version, misclassifying MSVC's librarian as Unix ar. The selected
+        # librarian directory is first on PATH for both Meson and Ninja.
+        "[binaries]\nar = 'lib.exe'\n"
         + "".join(
             name + " = " + repr(path.as_posix()) + "\n"
             for name, path in (
                 ("c", args.cc),
-                ("ar", args.lib),
                 ("pkgconfig", args.pkgconf),
             )
         )

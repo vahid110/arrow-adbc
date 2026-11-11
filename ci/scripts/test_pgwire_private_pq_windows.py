@@ -236,6 +236,14 @@ class WindowsRecipeTest(unittest.TestCase):
 
                 def process(command, **kwargs):
                     calls.append(command)
+                    if "setup" in command:
+                        native = (args.work_dir / "native.ini").read_text().splitlines()
+                        self.assertEqual(
+                            [line for line in native if line.startswith("ar = ")],
+                            ["ar = 'lib.exe'"],
+                        )
+                        search = kwargs["env"]["PATH"].split(os.pathsep)
+                        self.assertEqual(Path(search[0]) / "lib.exe", args.lib)
                     if "introspect" in command:
                         build = Path(command[-1])
                         build.mkdir(parents=True)
