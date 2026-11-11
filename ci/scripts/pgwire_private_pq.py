@@ -211,7 +211,14 @@ def install_package(
         "pgwire_private_pq_windows.py",
     ):
         shutil.copyfile(Path(__file__).with_name(name), scripts / name)
-    shutil.copytree(ASSETS, recipe / "ci/vcpkg/ports" / PACKAGE)
+    port_recipe = recipe / "ci/vcpkg/ports" / PACKAGE
+    shutil.copytree(ASSETS, port_recipe)
+    # vcpkg omits any file named vcpkg.json when installing, even inside an
+    # embedded recipe. A recipe used to rebuild already has the transport name.
+    manifest = port_recipe / "vcpkg.json"
+    if manifest.exists():
+        manifest.replace(port_recipe / "vcpkg.json.in")
+    require((port_recipe / "vcpkg.json.in").is_file(), "Missing port recipe manifest")
     for name in ("LICENSE.txt", "NOTICE.txt"):
         shutil.copyfile(REPOSITORY / name, share / name)
         shutil.copyfile(REPOSITORY / name, recipe / name)

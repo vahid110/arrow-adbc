@@ -8,7 +8,7 @@
   "prefix": "adbc_rs_pq_17_11_v1_",
   "package_version": "17.11.1",
   "abi": 1,
-  "build_script_sha256": "8cc9261eb293363516ce56f2766c0443c8e06893b42ba9ab8f76f70de37a912a",
+  "build_script_sha256": "ce57fadc6b0ed7c49515a3606054e2aad637f623cdd472f0c0957e0950e96f81",
   "symbol_script_sha256": "f20b0a9ff1c50b6b0201e3249e2cd5c7f42c0bb6566152ca3599ebc69147f04d",
   "adbc_license_sha256": "dbce1a629c53c225d5aa8cd537c0a2bd9c0ea45d843cac08fa0c67bc2bc022c3",
   "adbc_notice_sha256": "59d7cc401deb7b8ca6c6463848a9d6a302b18d83c2a3f75136bfead3c5c5f9bb",

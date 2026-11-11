@@ -110,6 +110,10 @@ use the overlay. Ordinary PostgreSQL still uses its original libpq dependency.
 Source downloads require both pinned hashes. Packaging verifies the full private
 installation against its build receipt and carries licenses, patches, namespace
 inventory and the exact build recipe; wheels carry these under `_private_pq`.
+The embedded overlay stores its manifest as `vcpkg.json.in` because vcpkg
+omits files named `vcpkg.json` when installing packages. To use the embedded
+recipe as a vcpkg overlay, copy it to a working directory and rename that
+file to `vcpkg.json`. Direct Python recipe builds accept the embedded layout.
 For a local wheel, first run `pgwire_private_pq_distribution.py stage <prefix>
 python/adbc_driver_redshift/adbc_driver_redshift/_private_pq` against the matching
 private dependency install; the wheel build rejects absent provenance.

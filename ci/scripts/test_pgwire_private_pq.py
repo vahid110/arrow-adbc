@@ -227,6 +227,47 @@ def fake_installed_package(root, variant):
     return installed
 
 
+@unittest.skipUnless(shutil.which("cc") and shutil.which("ar"), "needs cc and ar")
+class RecipeInstallTest(unittest.TestCase):
+    def test_vcpkg_manifest_survives_install_and_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = (package.ASSETS / "vcpkg.json").read_bytes()
+            assets = package.ASSETS
+            for generation in ("from-checkout", "from-embedded"):
+                work = root / generation
+                work.mkdir()
+                with patch.object(package, "ASSETS", assets):
+                    built = fake_installed_package(work, "good")
+                # vcpkg skips these three basenames at any depth during install.
+                copied = work / "vcpkg-install"
+                shutil.copytree(
+                    built,
+                    copied,
+                    ignore=shutil.ignore_patterns(
+                        "vcpkg.json", "CONTROL", "BUILD_INFO"
+                    ),
+                )
+                recipe_path = Path("share") / package.PACKAGE / "recipe"
+                assets = copied / recipe_path / "ci/vcpkg/ports" / package.PACKAGE
+                self.assertEqual((assets / "vcpkg.json.in").read_bytes(), manifest)
+                self.assertFalse(
+                    (
+                        built
+                        / recipe_path
+                        / "ci/vcpkg/ports"
+                        / package.PACKAGE
+                        / "vcpkg.json"
+                    ).exists()
+                )
+                for file in (built / recipe_path).rglob("*"):
+                    if file.is_file():
+                        self.assertEqual(
+                            file.read_bytes(),
+                            (copied / file.relative_to(built)).read_bytes(),
+                        )
+
+
 @unittest.skipUnless(
     all(shutil.which(t) for t in ("cc", "ar", "cmake", "meson", "pkg-config")),
     "configure seam tests require local CMake, Meson and C tools",
