@@ -60,9 +60,10 @@ Verify before extracting (Linux example; substitute the actual filename):
 The extracted tree contains headers, driver manager, Redshift and PostgreSQL
 libraries, and CMake/pkg-config metadata. Follow its embedded ``README.md``
 for macOS ``shasum`` or Windows PowerShell checksum/extraction commands and
-library search paths. Linux needs system ``libpq5``; macOS needs Homebrew
-``libpq``. Windows links libpq statically but may need the matching Visual
-C++ Redistributable. Only shared-library clients are qualified; static
+library search paths. The Redshift driver embeds a private libpq. Install the
+OpenSSL runtime listed for your archive if it links OpenSSL dynamically.
+The separate PostgreSQL driver in the archive uses system libpq on Linux
+and macOS. Windows may require the matching Visual C++ Redistributable. Only shared-library clients are qualified; static
 consumers must supply transitive dependencies.
 
 Release-format archives use ``SHA256SUMS`` and an enclosing versioned directory;
@@ -85,9 +86,8 @@ actual wheel file in your environment (replace the placeholder filename):
 
 The ``dbapi`` extra installs PyArrow (>=14.0.1) and pandas; the package also
 requires ``adbc-driver-manager``. The ``iam`` extra adds boto3 (>=1.28).
-Portable wheels bundle the driver and its libpq dependencies. The separate
-``PgWire Python`` fast Linux wheel uses system libpq and is not the portable
-manylinux wheel. These commands install a downloaded wheel; a bare
+Portable Redshift wheels include the driver and its private libpq. The fast
+Linux development wheel assumes its build platform's runtime libraries. These commands install a downloaded wheel; a bare
 ``pip install adbc-driver-redshift`` is not a publication promise.
 
 Connect
@@ -232,7 +232,7 @@ Type mapping (query results)
    * - ``SUPER``
      - ``large_utf8`` native JSON-wire extension (see limits below)
    * - ``HLLSKETCH``
-     - ``large_utf8`` serialized sketch extension; mixed results unsupported
+     - ``large_utf8`` serialized sketch extension, including mixed result columns
    * - ``GEOMETRY``, ``GEOGRAPHY``
      - ``large_binary`` EWKB extensions with per-value SRID
 
@@ -316,9 +316,8 @@ steps and Meson unit/recorder targets passed. Selected installed macOS arm64
 qualification passed 15 cases each in standalone C and Python, including
 array/stream parameters, retained-row failures, larger/deeper values and exact
 18,000,151-byte native SUPER output. Both results and full teardown were
-independently reviewed. The merged PR29 baseline rejects direct SUPER/spatial
-parameters. Mixed HLL results and full metadata parity remain
-separate release gates. Selected larger/deeper fixtures do not prove all maxima.
+independently reviewed. PR #30 integrated these prepared-parameter changes.
+The operation matrix tracks mixed HLL qualification and metadata coverage separately. Selected larger/deeper fixtures do not prove all maxima.
 
 * Queries, prepared/bound parameters, core metadata (``GetInfo``,
   ``GetTableTypes``, ``GetObjects``, ``GetTableSchema``), autocommit,
@@ -441,14 +440,14 @@ HLL parameters own NUL-terminated text format0 storage; ordinary parameters keep
 their formats. Generated writes validate the actual relation target; direct HLL
 binds validate server parameter Describe consistency after typed Prepare.
 
-An output projection containing only HLL columns is described upfront and executed
-once in text format, with actual descriptor checks. Mixed HLL/non-HLL projections
-reject before execution, without retry, rewrite or scalar text fallback. Empty
-results retain the typed schema. Vendor REPLACE remains rejected before DROP;
+A query such as ``SELECT account_id, sketch FROM daily_counts`` returns the
+ordinary Arrow type for the ID and the serialized HLL extension for the sketch.
+The driver describes the query, requests text for each HLL column and binary
+for each other column, and checks the result against that description. The
+same rule applies to prepared queries and preserves the schema of empty results. Vendor REPLACE remains rejected before DROP;
 CREATE residue and APPEND transaction ownership follow the SUPER policy above.
 The fixed installed cases cover spatial CREATE/readback (array and stream),
-HLL CREATE/readback and typed text parameters, plus the documented mixed-output
-rejection. Spatial/HLL APPEND was not exercised. These bounded capabilities do
-not imply full mixed-HLL or all-type qualification. HLL_CARDINALITY produces a
+HLL CREATE/readback and typed text parameters. Those cases did not exercise
+spatial/HLL APPEND. HLL_CARDINALITY produces a
 scalar result; combining its input with other parameters does not qualify mixed
 HLL result columns.
