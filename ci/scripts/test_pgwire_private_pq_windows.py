@@ -21,6 +21,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -335,6 +336,27 @@ class WindowsRecipeTest(unittest.TestCase):
                     self.assertFalse(receipt.exists())
                 else:
                     recorded = json.loads(receipt.read_text())
+                    link = next(
+                        c for c in calls if any(a.endswith("link_check.c") for a in c)
+                    )
+                    pc = (
+                        args.prefix / "lib/pkgconfig" / (package.PACKAGE + ".pc")
+                    ).read_text()
+                    cmake = (
+                        package.ASSETS / "AdbcRedshiftPrivatePQConfig.cmake"
+                    ).read_text()
+                    platform_libs = (
+                        re.search(r"set\(_adbc_rs_platform_libs\s+([^)]*)\)", cmake)
+                        .group(1)
+                        .split()
+                    )
+                    self.assertIn("shell32", platform_libs)
+                    self.assertEqual(
+                        set(platform_libs), set(package.WINDOWS_SYSTEM_LIBS)
+                    )
+                    for system_lib in platform_libs:
+                        self.assertIn(system_lib + ".lib", link)
+                        self.assertIn("-l" + system_lib, pc.split())
                     self.assertEqual(recorded["crt"], "md")
                     self.assertEqual(recorded["system"], "Windows")
                     self.assertEqual(len(list((args.prefix / "lib").glob("*.lib"))), 3)

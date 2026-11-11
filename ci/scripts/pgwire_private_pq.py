@@ -35,6 +35,16 @@ from pathlib import Path
 PACKAGE = "adbc-redshift-private-pq"
 LIBRARY = "adbc_rs_pq_17_11_v1"
 ASSETS = Path(__file__).resolve().parents[1] / "vcpkg/ports" / PACKAGE
+# PostgreSQL's Windows frontend calls SHGetFolderPathA for service-file lookup.
+WINDOWS_SYSTEM_LIBS = (
+    "ws2_32",
+    "secur32",
+    "advapi32",
+    "crypt32",
+    "bcrypt",
+    "user32",
+    "shell32",
+)
 REPOSITORY = Path(__file__).resolve().parents[2]
 ARCHIVES = (
     "src/interfaces/libpq/libpq.a",
@@ -196,7 +206,7 @@ def install_package(
         "Libs: -L${libdir} " + " ".join("-l" + n for n in names) + "\n"
         "Requires.private: libssl libcrypto\nLibs.private: "
         + (
-            "-lws2_32 -lsecur32 -ladvapi32 -lcrypt32 -lbcrypt -luser32\n"
+            " ".join("-l" + name for name in WINDOWS_SYSTEM_LIBS) + "\n"
             if windows
             else "-lm -pthread\n"
         )

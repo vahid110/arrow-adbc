@@ -52,7 +52,8 @@ if(WIN32)
       advapi32
       crypt32
       bcrypt
-      user32)
+      user32
+      shell32)
 else()
   set(_adbc_rs_platform_libs m)
 endif()

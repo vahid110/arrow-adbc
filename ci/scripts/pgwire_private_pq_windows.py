@@ -22,7 +22,6 @@ import json
 import os
 import platform
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -31,7 +30,6 @@ from pathlib import Path
 
 import pgwire_private_pq as package
 
-SYSTEM_LIBS = ("ws2_32", "secur32", "advapi32", "crypt32", "bcrypt", "user32")
 ARCHITECTURES = {"x64": "IMAGE_FILE_MACHINE_AMD64", "arm64": "IMAGE_FILE_MACHINE_ARM64"}
 # These static _shlib variants provide the public frontend encoding ABI.
 # Plain libpgcommon compiles those definitions with USE_PRIVATE_ENCODING_FUNCS.
@@ -353,14 +351,13 @@ def build(args, pins):
             *libraries,
             args.openssl_libdir / "libssl.lib",
             args.openssl_libdir / "libcrypto.lib",
-            *[name + ".lib" for name in SYSTEM_LIBS],
+            *[name + ".lib" for name in package.WINDOWS_SYSTEM_LIBS],
             "/Fe" + str(probe),
             "/Fo" + str(work / "probe.obj"),  # codespell:ignore fo
         ]
     )
     run([probe])  # NULL-only API calls, never a socket or a credential read.
     share = args.prefix / "share" / package.PACKAGE
-    shutil.copyfile(renames, share / renames.name)
     receipt = {
         "raw_archive_digests": {p.name: package.digest(p) for p in raw_archives},
         "status": "built-audited-installed-socket-free-probe-passed",
