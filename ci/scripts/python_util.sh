@@ -80,6 +80,14 @@ function build_drivers {
     # Need to install sqlite3 to make CMake be able to find it below
     local vcpkg_packages=(libpq)
     if [[ "${build_redshift_wheel}" == ON ]]; then
+        # The private port builds host tools and must execute its native probe.
+        # vcpkg otherwise compares the default host triplet with our static
+        # target triplet and classifies even a native build as cross-compiling.
+        case "$(uname -m):${VCPKG_ARCH}" in
+            x86_64:x64|aarch64:arm64|arm64:arm64) ;;
+            *) echo "Private Redshift wheels require a native runner" >&2; return 1 ;;
+        esac
+        local -x VCPKG_DEFAULT_HOST_TRIPLET="${VCPKG_DEFAULT_TRIPLET}"
         vcpkg_packages+=(adbc-redshift-private-pq)
     fi
     if [[ "${ADBC_DRIVER_SQLITE}" != "OFF" ]]; then

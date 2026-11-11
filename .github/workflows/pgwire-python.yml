@@ -35,6 +35,7 @@ on:
       - "ci/scripts/pgwire_super_c_data_test.py"
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
+      - "ci/scripts/test_pgwire_mixed_hll_public.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -66,6 +67,7 @@ on:
       - "ci/scripts/pgwire_super_c_data_test.py"
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
+      - "ci/scripts/test_pgwire_mixed_hll_public.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -217,6 +219,9 @@ jobs:
           python -I ci/scripts/pgwire_timetz_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
           python -I ci/scripts/pgwire_super_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
           python -I ci/scripts/pgwire_encoded_c_data_test.py --fixture "$ADBC_REDSHIFT_INTERVAL_FIXTURE"
+
+      - name: Check mixed HLL schema and value regressions (offline)
+        run: python -B ci/scripts/test_pgwire_mixed_hll_public.py
 
       - name: Installed Python semantic public APIs (PostgreSQL plumbing)
         run: |
