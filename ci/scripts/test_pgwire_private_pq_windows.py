@@ -27,7 +27,7 @@ import tarfile
 import tempfile
 import unittest
 from contextlib import redirect_stderr
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 import pgwire_private_pq as package
@@ -198,6 +198,13 @@ class WindowsRecipeTest(unittest.TestCase):
             _, _, args = fixture(Path(tmp))
             args.openssl_libdir = args.openssl_prefix / "lib"
             flags = windows.meson_options(args, Path(tmp) / "namespace.h")
+            args.prefix = PureWindowsPath("D:/vcpkg/buildtrees/private/install")
+            for namespace in (None, Path(tmp) / "namespace.h"):
+                options = windows.meson_options(args, namespace)
+                self.assertEqual(
+                    [option for option in options if option.startswith("--prefix=")],
+                    ["--prefix=D:/vcpkg/buildtrees/private/install"],
+                )
             self.assertIn("-Db_vscrt=md", flags)
             self.assertIn("-Db_pch=false", flags)
             self.assertIn("-Db_lto=false", flags)

@@ -144,6 +144,8 @@ def meson_options(args, namespace=None):
         flags.append("/FI" + namespace.as_posix())
     return [
         "--backend=ninja",
+        # PostgreSQL defaults to /usr/local/pgsql, a drive-relative path on Windows.
+        "--prefix=" + args.prefix.as_posix(),
         "--buildtype=release",
         "--wrap-mode=nodownload",
         "-Dauto_features=disabled",
