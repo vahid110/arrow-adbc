@@ -27,8 +27,8 @@ recorder evidence is not installed-driver/native qualification. Windows, cross
 builds, seven C distributions and five wheels remain mandatory release gates.
 
 Native package, relocation, stock/private coexistence and loopback vector proofs
-passed on macOS arm64. The mixed driver still needs coordinator full/installed
-validation and independent review before integration.
+passed on macOS arm64. The installed mixed driver also passed both C and Python live
+tests in both temporal modes. See [case H](REDSHIFT_TYPES.md#current-evidence-by-operation).
 
 ## Build and consume locally
 

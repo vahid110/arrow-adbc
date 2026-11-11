@@ -29,8 +29,8 @@ verified, preserving the original C-stream cleanup timeout and separate cleanup.
 
 The [private libpq dependency](private-libpq.md) now supplies the Redshift-only
 namespace and per-column result dispatch: HLL text, every other field binary,
-with exact described-result verification and no retry. Local recorder coverage
-is not installed/native qualification. Windows/cross packaging and the seven
+with exact described-result verification and no retry. The macOS arm64 C and Python live qualification passed in both temporal
+modes. [Case H](REDSHIFT_TYPES.md#current-evidence-by-operation) records the scope. Windows/cross packaging and the seven
 C-distribution/five-wheel gates remain open; stock PostgreSQL stays separate.
 Portable build inputs and provenance staging are wired locally, with source-only
 checks. The Windows adapter and consumer proof jobs are authored; actual native Windows
@@ -38,8 +38,8 @@ package execution remains unverified.
 
 The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 [finite acceptance checklist](V1_ACCEPTANCE.md) now own remaining work. Release
-blockers are mandatory mixed HLL results, remaining operation and metadata
-gaps, and candidate delivery. Selected direct SUPER/spatial cases now pass in
+blockers include cross-platform packaging of the mixed HLL implementation,
+remaining operation and metadata gaps, and candidate delivery. Selected direct SUPER/spatial cases now pass in
 standalone C and Python; this does not close every acceptance gate.
 No exhaustive mathematical-domain proof is required. No release-ready claim is made.
 

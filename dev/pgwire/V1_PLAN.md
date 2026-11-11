@@ -31,8 +31,8 @@ and native JSON output bounded by received length rather than stored object size
 Independent source review, 35 serial local validation steps and Meson targets
 passed at `aed6ced40fb058f56dc8b097937776c05cbe9496`. Selected installed
 qualification passed 15 cases each in standalone C and Python, with independently
-reviewed results and full teardown. Deliver this scoped PR, then pause. Mixed HLL
-results remain separate mandatory B1 work;
+reviewed results and full teardown. PR #30 delivered that scope. Issue #31 now has installed
+mixed HLL read evidence in both clients and temporal modes;
 selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
@@ -71,8 +71,8 @@ This roadmap grants no additional paid attempt or publication authority.
 ## Delivered foundations
 
 The [private libpq dependency](private-libpq.md) supplies local B1 Redshift
-linkage and mixed HLL result dispatch. Installed/native qualification remains
-pending. Portable dependency/provenance wiring and the Windows adapter are local
+linkage and mixed HLL result dispatch. The installed C and Python campaign passed on macOS arm64
+(see case H in the operation matrix). Portable dependency/provenance wiring and the Windows adapter are local
 and unqualified. Windows/cross and all seven C/five wheel validations remain B6 gates.
 
 Queries, core metadata, transactions, cancellation and prepared INSERT ingestion
