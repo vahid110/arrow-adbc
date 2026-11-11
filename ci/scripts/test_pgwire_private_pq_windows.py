@@ -21,6 +21,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -90,7 +91,18 @@ class WindowsRecipeTest(unittest.TestCase):
         }
         pins = json.loads((package.ASSETS / "pins.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
-            destination = Path(tmp).resolve()
+            # Container checkouts may be source archives without a Git index.
+            root = Path(tmp).resolve()
+            source = root / "source"
+            destination = root / "checkout"
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            for path in (".gitattributes", *paths):
+                target = source / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(package.REPOSITORY / path, target)
+            subprocess.run(
+                ["git", "add", "--", ".gitattributes", *paths], cwd=source, check=True
+            )
             subprocess.run(
                 [
                     "git",
@@ -101,7 +113,7 @@ class WindowsRecipeTest(unittest.TestCase):
                     "--",
                     *paths,
                 ],
-                cwd=package.REPOSITORY,
+                cwd=source,
                 check=True,
             )
             for path, key in paths.items():
