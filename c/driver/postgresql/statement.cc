@@ -55,6 +55,7 @@
 #include "postgres_util.h"
 #include "redshift_interval_catalog.h"
 #include "redshift_replace_preflight.h"
+#include "redshift_temporary_ingest.h"
 #include "result_helper.h"
 #include "result_reader.h"
 
@@ -789,6 +790,45 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
                      ingest_.target, ingest_.db_schema, column_names, read_setting));
   }
 
+  const bool unqualified_temp_create =
+      ingest_.temporary &&
+      connection_->backend_profile().capabilities.temporary_create_unqualified;
+  std::string temporary_schema;
+  std::string temporary_target;
+  auto resolve_temporary = [&]() -> Status {
+    auto read_setting = [conn](std::string_view query, std::string* value) -> Status {
+      PqResultHelper setting(conn, std::string(query), true);
+      UNWRAP_STATUS(setting.Execute());
+      if (setting.NumRows() != 1 || setting.NumColumns() != 1 ||
+          setting.Row(0)[0].is_null)
+        return Status(ADBC_STATUS_INVALID_DATA, "Missing identifier-case setting");
+      *value = std::string(setting.Row(0)[0].value());
+      return Status::Ok();
+    };
+    auto read_target = [conn](std::string_view query, const std::string& target,
+                              std::vector<std::string>* schemas) -> Status {
+      PqResultHelper result(conn, std::string(query), true);
+      UNWRAP_STATUS(result.Execute({target}));
+      if (result.NumColumns() != 1 || result.NumRows() > 1)
+        return Status(ADBC_STATUS_INVALID_DATA, "Ambiguous temporary ingest target");
+      for (const auto& row : result) {
+        if (row[0].is_null)
+          return Status(ADBC_STATUS_INVALID_DATA, "Missing temporary target namespace");
+        schemas->emplace_back(row[0].value());
+      }
+      return Status::Ok();
+    };
+    return adbc::driver::pgwire::ResolveRedshiftTemporaryTarget(
+        ingest_.target, read_setting, read_target, &temporary_schema, &temporary_target);
+  };
+  if (unqualified_temp_create) {
+    RAISE_STATUS(error, resolve_temporary());
+    if (ingest_.mode == IngestMode::kAppend && temporary_schema.empty()) {
+      InternalAdbcSetError(error, "[libpq] Temporary ingest target does not exist");
+      return ADBC_STATUS_NOT_FOUND;
+    }
+  }
+
   {
     if (!ingest_.db_schema.empty()) {
       char* escaped =
@@ -802,10 +842,10 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       *escaped_table += escaped;
       *escaped_table += " . ";
       PQfreemem(escaped);
-    } else if (ingest_.temporary) {
+    } else if (ingest_.temporary && !unqualified_temp_create) {
       // OK to be redundant (CREATE TEMPORARY TABLE pg_temp.foo)
       *escaped_table += "pg_temp . ";
-    } else {
+    } else if (!ingest_.temporary) {
       // Explicitly specify the current schema to avoid any temporary tables
       // shadowing this table
       char* escaped =
@@ -829,11 +869,38 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     }
   }
 
+  // CREATE TEMP must be unqualified on Redshift, while every operation on an
+  // existing table must use the verified current-session namespace. Never let
+  // search_path choose a permanent same-name table for append or replacement.
+  const std::string create_table = *escaped_table;
+  auto qualify_temporary = [&]() -> Status {
+    if (temporary_schema.empty())
+      return Status(ADBC_STATUS_NOT_FOUND, "Temporary ingest target does not exist");
+    char* escaped =
+        PQescapeIdentifier(conn, temporary_schema.c_str(), temporary_schema.size());
+    if (!escaped) return Status::Internal("Cannot escape temporary target namespace");
+    std::string qualified = std::string(escaped) + " . ";
+    PQfreemem(escaped);
+    // Use the exact catalog spelling for every subsequent operation, including
+    // regclass-based metadata lookup. Redshift can fold quoted SQL identifiers,
+    // whereas parsing an identifier in a regclass value need not use that rule.
+    escaped = PQescapeIdentifier(conn, temporary_target.c_str(), temporary_target.size());
+    if (!escaped) return Status::Internal("Cannot escape temporary target table");
+    qualified += escaped;
+    PQfreemem(escaped);
+    *escaped_table = std::move(qualified);
+    return Status::Ok();
+  };
+  if (unqualified_temp_create && !temporary_schema.empty())
+    RAISE_STATUS(error, qualify_temporary());
+
   // Interval constraints and temporal precision need an existing-vs-new
   // distinction: unused CREATE declarations must not erase append semantics.
-  bool append_existing_semantic = false;
+  bool append_existing_semantic = unqualified_temp_create &&
+                                  ingest_.mode == IngestMode::kCreateAppend &&
+                                  !temporary_schema.empty();
   bool interval_create_append = false;
-  if (ingest_.mode == IngestMode::kCreateAppend) {
+  if (ingest_.mode == IngestMode::kCreateAppend && !unqualified_temp_create) {
     bool requires_existing = false;
     for (int64_t i = 0; i < source_schema.n_children; ++i) {
       RedshiftTemporalSchema temporal;
@@ -928,10 +995,10 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     case IngestMode::kCreateAppend:
       // An absent interval target uses plain CREATE; a concurrent appearance
       // errors instead of silently replacing the requested declaration.
-      if (!interval_create_append) create += "IF NOT EXISTS ";
+      if (!interval_create_append && !unqualified_temp_create) create += "IF NOT EXISTS ";
       break;
   }
-  create += *escaped_table;
+  create += create_table;
   create += " (";
   std::vector<std::string> source_field_names;
   source_field_names.reserve(source_schema.n_children);
@@ -1072,7 +1139,8 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
   }
   RAISE_STATUS(error, ddl_transaction.Begin());
 
-  if (ingest_.mode == IngestMode::kReplace) {
+  if (ingest_.mode == IngestMode::kReplace &&
+      (!unqualified_temp_create || !temporary_schema.empty())) {
     std::string drop = "DROP TABLE IF EXISTS " + *escaped_table;
     adbc::driver::pgwire::UniqueResult result(
         PQexecParams(conn, drop.c_str(), /*nParams=*/0,
@@ -1101,6 +1169,12 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     return failure.ToAdbc(error);
   }
   RAISE_STATUS(error, ddl_transaction.Commit());
+  if (unqualified_temp_create) {
+    // Creation may allocate the session's first temp namespace. Resolve it now;
+    // failure must stop before either target-type lookup or data transfer.
+    RAISE_STATUS(error, resolve_temporary());
+    RAISE_STATUS(error, qualify_temporary());
+  }
   if (ingest_.mode == IngestMode::kCreateAppend || type_resolver_->is_redshift() ||
       has_semantic_schema) {
     AdbcStatusCode status = ResolveCopyTargetTypes(*escaped_table, source_field_names,

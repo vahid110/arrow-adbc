@@ -19,12 +19,23 @@
 
 # Status
 
-Merged baseline: PR #34, `69bd4620e94dc4c6ad009f2836f01bec474de007`
+Merged baseline: PR #36, `8da9a9049c1817bb71db26fa3eacfd7ca42cb6ef`
 (2026-11-22), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
 
-Issue #35 adds 21 passing installed macOS arm64 vendor recipe groups: 11 standalone
+Issue #37 qualifies the remaining selected SUPER/HLL routes with freshly rebuilt
+C and Python artifacts from `7d6825dfcee1161e64b35ed58e1a223d6013b294`.
+All eight groups passed: C SUPER CREATE+APPEND array/stream, C HLL direct
+array/stream, Python SUPER array APPEND/HLL direct stream, the original public
+SUPER native-read/IPC test and the new temporary/permanent-shadow regression.
+The driver creates Redshift temporary tables without a schema qualifier and
+preserves their resolved namespace/catalog spelling for subsequent operations.
+Case VR records exact scope. SQL schemas/sessions and all seven owned cloud
+resource classes are absent, with no cleanup issues. Broader B4/B5 and candidate
+delivery remain open.
+
+PR #36 records 21 passing installed macOS arm64 vendor recipe groups: 11 standalone
 C and 10 Python. GEOMETRY, GEOGRAPHY and HLLSKETCH passed CREATE+APPEND through
 array and stream input; all four vendor families passed selected metadata checks.
 The corrected standalone C Arrow `super.native` fixture also passed. Case VA in
@@ -127,15 +138,12 @@ Both fresh suites above passed with independently verified full teardown.
 
 ## Active
 
-- Deliver the scoped direct SUPER/spatial and B3 limits PR using the selected
-  C/Python results above, then pause. Keep mixed HLL output separate. Remaining
-  mismatched prepared-type qualification, other operation gaps, broader boundary
-  coverage and metadata parity stay visible in the acceptance checklist.
-
-- The stale public SUPER rejection assertion is repaired locally in coordinator
-  commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and
-  independent review. B4 still requires its native installed execution and the
-  corrected standalone C Arrow-mode fixture; no new live pass is claimed.
+- Finish remaining decimal/temporal/character/direct-interval qualification,
+  prepared-type mismatch and finite boundary cases, then consolidated metadata
+  parity. Reuse the completed SC/VA/VR and historical evidence at its exact scope.
+- Issue #37's repaired public SUPER test and temporary-table regression pass
+  against installed artifacts. The original SQLSTATE 3F000/42P01 failures and
+  separate startup timeout remain preserved; passing successors do not erase them.
 - Execute B1–B6 in [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md), retaining all 21 types and
   separating code, installed evidence, deliberate restrictions and human decisions.
 - Reuse S/T interval and R character/binary evidence at its exact source; do not

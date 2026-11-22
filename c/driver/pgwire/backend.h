@@ -49,6 +49,8 @@ struct BackendCapabilities {
   bool metadata_constraints = false;
   bool metadata_statistics = false;
   uint16_t parameterized_ingest_batch_rows = 1;
+  // Redshift disallows schema qualification in CREATE TEMP TABLE.
+  bool temporary_create_unqualified = false;
 };
 
 enum class IsolationLevelPolicy {
@@ -267,7 +269,8 @@ struct BackendProfile {
          /*type_catalog_has_typarray=*/false,
          /*metadata_constraints=*/false,
          /*metadata_statistics=*/false,
-         /*parameterized_ingest_batch_rows=*/16},
+         /*parameterized_ingest_batch_rows=*/16,
+         /*temporary_create_unqualified=*/true},
         {/*isolation_levels=*/IsolationLevelPolicy::kDatabaseConfigured,
          /*transactional_ddl=*/false,
          /*replace_savepoints=*/false},
