@@ -19,13 +19,18 @@
 
 # Status
 
-Merged baseline: PR29, `fca2eab2e05e1a63cfbd9adecc802c53334bdbd0`, reviewed
-identical tree `0fa498a6e88c30eb1758195c614755a9942c51af` (2026-10-28).
-Task010t completed all four installed Python/C array/stream legs (234 cases),
-independent review, applicable green CI and merge. Full resource closure is
-verified, preserving the original C-stream cleanup timeout and separate cleanup.
-[Its bounded evidence](#task010t-interval-edge-qualification) is complete;
-**the all-21-type first-release milestone remains open**.
+Merged baseline: PR #32, `dae9d97c29cc24f573527885c9a4400f3affb23d`
+(2026-11-11), following independent exact-head review and applicable green CI.
+PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
+results. **The all-21-type first-release milestone remains open.**
+
+Issue #33 adds installed macOS arm64 scalar qualification: all four recipe groups
+passed in each of standalone C and Python. SMALLINT, INTEGER, REAL, DOUBLE PRECISION
+and BOOLEAN passed native reads, prepared array/stream parameters, generated
+CREATE/APPEND readback and selected metadata APIs. See case SC in the
+[operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation).
+Full teardown verified all seven owned cloud resource classes absent; original
+failed attempts and their closure records remain preserved.
 
 The [private libpq dependency](private-libpq.md) now supplies the Redshift-only
 namespace and per-column result dispatch: HLL text, every other field binary,
@@ -40,7 +45,7 @@ The [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) and
 standalone C and Python; this does not close every acceptance gate.
 No exhaustive mathematical-domain proof is required. No release-ready claim is made.
 
-The local candidate at `aed6ced40fb058f56dc8b097937776c05cbe9496` implements
+PR #30 integrated candidate `aed6ced40fb058f56dc8b097937776c05cbe9496`, implementing
 direct prepared SUPER/GEOMETRY/GEOGRAPHY parameters. Independent source review,
 all 35 serial local validation steps and Meson unit/recorder targets passed.
 SUPER input permits 16MiB/depth1000; spatial read/write permits 1,048,447 raw EWKB
@@ -76,9 +81,8 @@ Native SUPER preserves received numeric spellings and wire NULLs in a separate
 output-only schema. The retained protocol collapses SQL NULL and parsed JSON
 null; input-lexeme/native-subtype losslessness is not claimed. Those Task010q results do
 not claim positive interval ingestion, complete domains, every metadata API or
-cross-platform live qualification. The merged PR29 baseline rejects direct
-SUPER/spatial binds and mixed HLL output; the local candidate implements the
-former, while mixed HLL results remain separate B1 work. Vendor REPLACE remains
+cross-platform live qualification. The historical PR29 baseline rejected direct SUPER/spatial binds and mixed HLL
+output; PR #30 and PR #32 respectively delivered those mandatory operations. Vendor REPLACE remains
 unsupported. Task010s adds bounded actual interval-target writes; unknown target
 constraints still fail closed. PR29 is merged; its exact reviewed tree and
 applicable CI are recorded in
