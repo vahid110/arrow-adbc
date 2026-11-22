@@ -67,8 +67,8 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
-| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
-| SUPER | Q,V,VA corrected C Arrow | V selected C/Python array/stream | VA array; M-P,Q-P JSON subset | M-P,Q-P JSON subset | VA selected APIs | large_utf8 native JSON wire |
+| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | VR C array/stream, Python stream; M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
+| SUPER | Q,V,VA corrected C Arrow; VR public IPC | V selected C/Python array/stream | VR C array/stream; M-P,Q-P Python subset | VR C array/stream, Python array; M-P,Q-P subset | VA selected APIs | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
 | GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
 | GEOGRAPHY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
@@ -145,6 +145,21 @@ Evidence keys (precise retained paths/operations are indexed in
   The corrected C Arrow SUPER fixture retains exact values and native markers,
   with a separate empty-query modifier expectation. VA does not qualify C SUPER
   APPEND, missing direct HLL routes, HLL transitions, all maxima or full B5.
+
+- **VR:** macOS arm64, fresh installed driver source
+  `7d6825dfcee1161e64b35ed58e1a223d6013b294`, integration baseline `8da9a9049`.
+  Issue #37 operation `ab549442ad0641e68e6589e24959805e` passed four C and four
+  Python groups: SUPER CREATE+APPEND via C arrays/streams and Python arrays;
+  HLL direct C array/stream and Python stream parameters with sparse/dense/NULL
+  fixtures and separate cardinality/union witnesses; the actual public SUPER
+  native-read/IPC method, including malformed-first rejection and retained rows;
+  and all four TEMP ingest modes with quoted mixed-case names and permanent
+  sentinel protection. TEMP uses unqualified CREATE and resolved catalog names
+  for later operations. These cases do not qualify every TEMP type/case setting,
+  HLL transition boundaries, all maxima or full B5. The first public run failed
+  SQLSTATE 3F000, a fresh-artifact attempt timed out during login, and the next
+  TEMP regression failed 42P01. Original results and full resource teardown
+  receipts remain separate; the exact historical 42P01 internal phase is unknown.
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is
@@ -543,8 +558,9 @@ implicit namespace in [CURRENT_SCHEMAS(true)](https://docs.aws.amazon.com/redshi
 matching the pinned JDBC `nspname=ANY(current_schemas(true))` reference; uppercase
 Redshift lookup identifiers use a fresh recognized case-setting read and ASCII-only
 normalization. No missing-regclass exception, SQL parsing or retry is used; races
-surface through actual target resolution. Native own-TEMP/case behavior remains
-a qualification gate.
+surface through actual target resolution. VR qualifies one mixed-case, quoted-name
+TEMP fixture across all ingest modes with permanent-shadow protection. Broader
+temporal precision/TEMP combinations and case-setting variants remain separate.
 The existing whole-stream transaction owner, caller-owned transaction semantics,
 rollback uncertainty retirement and result-owned UTF8 lifetime proof are retained.
 

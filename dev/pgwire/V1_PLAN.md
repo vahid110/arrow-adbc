@@ -37,12 +37,12 @@ selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
 
-Merged PR #34 is `69bd4620e94dc4c6ad009f2836f01bec474de007`.
-SC records eight passing scalar recipe groups. Issue #35 adds 21 vendor groups:
-spatial/HLL CREATE+APPEND array/stream, selected vendor metadata and corrected
-C Arrow SUPER reads. Remaining vendor routes include C SUPER APPEND, C HLL
-parameters, Python SUPER array APPEND/HLL stream parameters and the repaired
-public SUPER test. Broader B4/B5 work remains.
+Merged PR #36 is `8da9a9049c1817bb71db26fa3eacfd7ca42cb6ef`.
+SC records eight passing scalar groups; VA records 21 vendor groups.
+Issue #37 adds VR: eight passing groups with fresh installed C/Python artifacts,
+covering remaining selected SUPER APPEND/HLL direct routes, the repaired public
+SUPER read/IPC test and temporary-table mode/shadow protection. Broader B4/B5
+operation, boundary and metadata work remains; no release-ready claim is made.
 Task010t's 234 installed edge cases,
 independent review, applicable green CI and full resource closure are complete.
 Its original C-stream cleanup timeout remains separate from successful residual
