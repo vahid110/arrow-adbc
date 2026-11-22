@@ -39,7 +39,7 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V/H/SC` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H/SC/VA` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
 `U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
@@ -67,11 +67,11 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
-| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
-| SUPER | Q,V; historical C Arrow rerun open | V selected C/Python array/stream | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
+| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
+| SUPER | Q,V,VA corrected C Arrow | V selected C/Python array/stream | VA array; M-P,Q-P JSON subset | M-P,Q-P JSON subset | VA selected APIs | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
-| GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
-| GEOGRAPHY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | M-P,Q-P | C | M-P,Q-P query extension | large_binary EWKB/per-value SRID |
+| GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
+| GEOGRAPHY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
 
 Evidence keys (precise retained paths/operations are indexed in
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md#retained-evidence-index)):
@@ -87,7 +87,7 @@ Evidence keys (precise retained paths/operations are indexed in
 - **Q:** macOS arm64 source `26fb72348`: Python Arrow 76/76, lossless 11/11,
   writes 60/60 (48 decimal/temporal/TIMETZ positive, 12 interval-target rejections);
   standalone C Arrow 22/23, interval reads 37/37, lossless 24/24. The original C
-  SUPER fixture failure remains; the corrected fixture passed only in lossless mode.
+  SUPER fixture failure remains; its corrected Arrow rerun is separately recorded as VA.
 - **R:** macOS arm64 reads at `d5b39f4`: Python 61, C 16 small cases and two
   maximum reads per language. Corrected `3be87d3` passed 18 VARBYTE cases in each
   Python/C generated/direct route. Python character writes do not establish the
@@ -132,6 +132,19 @@ Evidence keys (precise retained paths/operations are indexed in
   retention, every metadata attribute or the final rebuilt release candidate.
   The first readback attempt failed with SQLSTATE 42601; quoting projection
   identifiers resolved the fixture failures. Original failures are retained.
+
+- **VA:** macOS arm64, retained installed driver source `38dc469cb`, integration
+  baseline `69bd4620e`. Issue #35 operation `385cef31d10e4d45aa23680beb4ce3dd`
+  passed 11 standalone C and 10 Python groups. GEOMETRY/GEOGRAPHY/HLLSKETCH
+  CREATE+APPEND array/stream preserve original/appended values and NULLs, with
+  independent SRID/dimension or sketch-cardinality/union witnesses. HLL values
+  are projected separately from those scalar witnesses; mixed reads remain H.
+  Four-family metadata covers normal/empty queries, GetTableSchema and filtered
+  GetObjects identity/ordinal. C checks exact descriptors, including the
+  query-specific SUPER modifier; Python checks selected family/extension identity.
+  The corrected C Arrow SUPER fixture retains exact values and native markers,
+  with a separate empty-query modifier expectation. VA does not qualify C SUPER
+  APPEND, missing direct HLL routes, HLL transitions, all maxima or full B5.
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is

@@ -19,18 +19,22 @@
 
 # Status
 
-Merged baseline: PR #32, `dae9d97c29cc24f573527885c9a4400f3affb23d`
-(2026-11-11), following independent exact-head review and applicable green CI.
+Merged baseline: PR #34, `69bd4620e94dc4c6ad009f2836f01bec474de007`
+(2026-11-22), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
 
-Issue #33 adds installed macOS arm64 scalar qualification: all four recipe groups
-passed in each of standalone C and Python. SMALLINT, INTEGER, REAL, DOUBLE PRECISION
-and BOOLEAN passed native reads, prepared array/stream parameters, generated
-CREATE/APPEND readback and selected metadata APIs. See case SC in the
-[operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation).
-Full teardown verified all seven owned cloud resource classes absent; original
-failed attempts and their closure records remain preserved.
+Issue #35 adds 21 passing installed macOS arm64 vendor recipe groups: 11 standalone
+C and 10 Python. GEOMETRY, GEOGRAPHY and HLLSKETCH passed CREATE+APPEND through
+array and stream input; all four vendor families passed selected metadata checks.
+The corrected standalone C Arrow `super.native` fixture also passed. Case VA in
+the [operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) records the
+scope. Full teardown verified all seven owned cloud resource classes absent,
+alongside SQL session/schema absence.
+
+PR #34 records eight passing scalar recipe groups (SC): SMALLINT, INTEGER, REAL,
+DOUBLE PRECISION and BOOLEAN read/direct/create/append plus selected metadata.
+Historical failures and their separate cleanup records remain preserved.
 
 The [private libpq dependency](private-libpq.md) now supplies the Redshift-only
 namespace and per-column result dispatch: HLL text, every other field binary,
@@ -70,8 +74,8 @@ arm64 completed on 2026-10-22 against that source:
 
 The C SUPER fixture now constructs JSON backslashes explicitly with `CHR(92)`;
 its unchanged expected bytes passed through the same native SUPER decoder in the
-lossless C leg. The corrected Arrow-mode C case was **not rerun**: its original
-failure is not relabeled as a pass. The earlier Python lossless attempt stopped
+lossless C leg. The corrected Arrow-mode C case subsequently passed in VA on 2026-11-22;
+the original Q failure remains unchanged. The earlier Python lossless attempt stopped
 before native cases at the strict installed-wheel cleanliness gate; the clean
 successor passed all 11 cases. Every isolated attempt completed verified full
 teardown, including all seven owned resource classes and independent database
