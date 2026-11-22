@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Offline counterexamples for the installed mixed-HLL recipe (no database)."""
+"""Offline counterexamples for installed vendor recipes (no database)."""
 
 import io
 import os
@@ -25,6 +25,103 @@ from unittest.mock import patch
 
 import pgwire_vendor_public_test as vendor
 import pyarrow as pa
+
+
+class TemporarySafetyTest(unittest.TestCase):
+    def make_case(self):
+        case = vendor.VendorPublicTest(
+            "test_temporary_ingest_modes_preserve_permanent_shadow"
+        )
+        case.backend = "redshift"
+        case.table = "owned_fixture"
+        return case
+
+    def test_unexpected_expected_error_stops_before_any_later_sql(self):
+        for position in ("append", "create"):
+            failures = [
+                vendor.adm.Error(
+                    "transport failed",
+                    status_code=vendor.adm.AdbcStatusCode.IO,
+                    sqlstate="08006",
+                ),
+                vendor.adm.Error(
+                    "wrong SQLSTATE",
+                    status_code=(
+                        vendor.adm.AdbcStatusCode.NOT_FOUND
+                        if position == "append"
+                        else vendor.adm.AdbcStatusCode.ALREADY_EXISTS
+                    ),
+                    sqlstate="XX000",
+                ),
+            ]
+            if position == "append":
+                failures.append(
+                    vendor.adm.Error(
+                        "an unrelated missing resource",
+                        status_code=vendor.adm.AdbcStatusCode.NOT_FOUND,
+                    )
+                )
+            for failure in failures:
+                with self.subTest(
+                    position=position,
+                    status=failure.status_code,
+                    state=failure.sqlstate,
+                ):
+                    case = self.make_case()
+                    calls = []
+                    failed_at = None
+                    creates = 0
+
+                    def ingest(mode, values, **kwargs):
+                        nonlocal creates, failed_at
+                        calls.append(("ingest", mode))
+                        if mode == "create":
+                            creates += 1
+                        if (position == "append" and mode == "append") or (
+                            position == "create" and mode == "create" and creates == 2
+                        ):
+                            failed_at = len(calls)
+                            raise failure
+                        if mode == "append":
+                            raise vendor.adm.Error(
+                                "[libpq] Temporary ingest target does not exist",
+                                status_code=vendor.adm.AdbcStatusCode.NOT_FOUND,
+                            )
+
+                    def execute(sql):
+                        calls.append(("execute", sql))
+
+                    def query(sql):
+                        calls.append(("query", sql))
+                        if "current_schema()" in sql:
+                            return [{"schema": "owned_schema"}]
+                        if '"owned_schema".' in sql:
+                            return [{"amount": 999}]
+                        return [{"amount": 1}]
+
+                    case.ingest, case.execute, case.query = ingest, execute, query
+                    with self.assertRaises(vendor.adm.Error) as caught:
+                        case.test_temporary_ingest_modes_preserve_permanent_shadow()
+                    self.assertIs(caught.exception, failure)
+                    self.assertIsNotNone(failed_at)
+                    self.assertEqual(len(calls), failed_at)
+                    self.assertEqual(case.table, "owned_fixture")
+                    self.assertFalse(any("DROP" in value for _, value in calls))
+
+    def test_current_schema_failure_preserves_original_table(self):
+        case = self.make_case()
+        failure = vendor.adm.Error(
+            "query failed", status_code=vendor.adm.AdbcStatusCode.IO
+        )
+        with (
+            patch.object(case, "query", side_effect=failure),
+            patch.object(case, "execute") as execute,
+        ):
+            with self.assertRaises(vendor.adm.Error) as caught:
+                case.test_temporary_ingest_modes_preserve_permanent_shadow()
+            self.assertIs(caught.exception, failure)
+            execute.assert_not_called()
+        self.assertEqual(case.table, "owned_fixture")
 
 
 class MixedOracleTest(unittest.TestCase):

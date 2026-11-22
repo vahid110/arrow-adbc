@@ -583,10 +583,10 @@ class VendorPublicTest(unittest.TestCase):
             self.skipTest("Redshift temporary namespace resolution")
         # A quoted name exercises escaping and the current identifier-case policy.
         # Use the admitted connection/search_path; never open another connection.
+        schema = self.query("SELECT current_schema() AS schema")[0]["schema"]
         original = self.table
         self.table = "Temp_" + original + '"shadow'
         quoted = '"' + self.table.replace('"', '""') + '"'
-        schema = self.query("SELECT current_schema() AS schema")[0]["schema"]
         permanent = '"' + schema.replace('"', '""') + '".' + quoted
         temporary_created = False
         permanent_created = False
@@ -607,20 +607,32 @@ class VendorPublicTest(unittest.TestCase):
             self.execute(f"CREATE TABLE {permanent} (row_id INTEGER, amount INTEGER)")
             permanent_created = True
             self.execute(f"INSERT INTO {permanent} VALUES (0,999)")
-            with self.assertRaises(adm.Error) as caught:
+            try:
                 self.ingest("append", [0], scalar=True)
-            self.assertEqual(caught.exception.status_code, adm.AdbcStatusCode.NOT_FOUND)
-            self.assertIsNone(caught.exception.sqlstate)
+            except adm.Error as error:
+                if not (
+                    error.status_code == adm.AdbcStatusCode.NOT_FOUND
+                    and error.sqlstate is None
+                    and "Temporary ingest target does not exist" in str(error)
+                ):
+                    raise
+            else:
+                self.fail("APPEND unexpectedly accepted a missing temporary target")
             expect_permanent()
 
             self.ingest("create", [1], scalar=True)
             temporary_created = True
             expect_temporary([1])
-            with self.assertRaises(adm.Error) as caught:
+            try:
                 self.ingest("create", [0], scalar=True)
-            self.assertEqual(
-                caught.exception.status_code, adm.AdbcStatusCode.ALREADY_EXISTS
-            )
+            except adm.Error as error:
+                if not (
+                    error.status_code == adm.AdbcStatusCode.ALREADY_EXISTS
+                    and error.sqlstate == "42P07"
+                ):
+                    raise
+            else:
+                self.fail("CREATE unexpectedly replaced an existing temporary target")
             self.ingest("append", [2], stream=True, scalar=True)
             expect_temporary([1, 2])
             self.ingest("create_append", [3], scalar=True)
