@@ -39,7 +39,7 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V/H/SC/VA` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H/SC/VA/VR/TW` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
 `U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
@@ -54,16 +54,16 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | SMALLINT / INT2 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int16 |
 | INTEGER / INT / INT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int32 |
 | BIGINT / INT8 | L | L | L | L | L bounded schema | int64 |
-| DECIMAL / NUMERIC | Q | C | Q-P | Q-P | Q query p/s; unknown expressions exact text | decimal128 or exact text |
+| DECIMAL / NUMERIC | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query p/s; unknown expressions exact text | decimal128 or exact text |
 | REAL / FLOAT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float32 |
 | DOUBLE PRECISION / FLOAT8 / FLOAT | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float64 |
-| CHAR / CHARACTER / NCHAR / BPCHAR | R | C | R-P | R-P | R widths/identity | utf8, padding retained |
-| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | Q,R | C | R-P | R-P | R widths/identity | utf8/large_utf8 |
-| DATE | Q | C | Q-P | Q-P | Q query identity; C remaining APIs | date32 |
-| TIME / TIME WITHOUT TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | time64(us) or native-count extension |
-| TIMETZ / TIME WITH TIME ZONE | Q | C | Q-P | Q-P | Q query family/offset struct | fixed-offset struct extension |
-| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | timestamp(us) or native-count extension |
-| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | timestamp(us, UTC) or native-count extension |
+| CHAR / CHARACTER / NCHAR / BPCHAR | R | TW C/Python array/stream | TW C; R-P | TW C; R-P | R widths/identity | utf8, padding retained |
+| VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | Q,R | TW C/Python array/stream | TW C; R-P | TW C; R-P | R widths/identity | utf8/large_utf8 |
+| DATE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query identity; C remaining APIs | date32 |
+| TIME / TIME WITHOUT TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query; unknown precision retained | time64(us) or native-count extension |
+| TIMETZ / TIME WITH TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query family/offset struct | fixed-offset struct extension |
+| TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query; unknown precision retained | timestamp(us) or native-count extension |
+| TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query; unknown precision retained | timestamp(us, UTC) or native-count extension |
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
@@ -160,6 +160,27 @@ Evidence keys (precise retained paths/operations are indexed in
   SQLSTATE 3F000, a fresh-artifact attempt timed out during login, and the next
   TEMP regression failed 42P01. Original results and full resource teardown
   receipts remain separate; the exact historical 42P01 internal phase is unknown.
+
+
+- **TW:** macOS arm64, integration baseline `9ef47ac620018c9c82bb9863be9d9965e0f6eb82`,
+  reusing VR's exact installed driver bytes from `7d6825dfc` (SHA-256
+  `d90dde3fad3c633a56b61a8d2d0c5bf73616532ced62885da07b770685c189b4`).
+  Issue #39 operation `35f90edc4ee7442d95ad940e5d89c7a9` passed twelve groups:
+  decimal/temporal/character array and stream input in C and Python. C covers
+  direct prepared INSERT, generated CREATE and APPEND; Python covers direct
+  INSERT. Every route checks full stored values and empty-result schemas.
+  Decimal fixtures cover eight (p,s) pairs: (1,0), (18,0), (19,0), (19,2), (20,0),
+  (38,0), (38,2), (38,37), with NULL/zero/positive/negative values. Temporal
+  fixtures cover DATE, TIME, TIMESTAMP, TIMESTAMPTZ and TIMETZ, including separate
+  Arrow/native-count inputs and normalized stored TIMETZ expectations. Both
+  clients read in lossless mode. CHAR widths 4/4096 and VARCHAR widths 4/65535
+  cover NULL/empty/padding/UTF8/quotes/backslashes and selected full-width values.
+  C APPEND uses reversed values with distinct row IDs; streams include an empty
+  batch. The original four-callback fixture limit rejected a legitimate second
+  end-of-stream poll during C stream ingestion; its failure is retained. The
+  corrected finite limit passed independent offline review and this live run.
+  TW does not qualify direct intervals, every invalid conversion, all metadata
+  APIs, Arrow-mode reads or final release-candidate artifacts.
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is
