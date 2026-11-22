@@ -19,10 +19,18 @@
 
 # Status
 
-Merged baseline: PR #36, `8da9a9049c1817bb71db26fa3eacfd7ca42cb6ef`
+Merged baseline: PR #38, `9ef47ac620018c9c82bb9863be9d9965e0f6eb82`
 (2026-11-22), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
+
+Issue #39 adds twelve passing installed typed-write groups (TW): standalone C
+and Python direct decimal/temporal/character array/stream bindings, plus C
+CREATE/APPEND and full/empty native readback after each route. Both clients read
+in lossless temporal mode; inputs include Arrow/native temporal variants.
+The original C stream fixture callback-limit failure is preserved separately
+from the successful corrected run. SQL schema/session cleanup passed;
+all seven owned cloud resource classes are verified absent, without cleanup issues. No product change was needed for TW.
 
 Issue #37 qualifies the remaining selected SUPER/HLL routes with freshly rebuilt
 C and Python artifacts from `7d6825dfcee1161e64b35ed58e1a223d6013b294`.
@@ -138,9 +146,9 @@ Both fresh suites above passed with independently verified full teardown.
 
 ## Active
 
-- Finish remaining decimal/temporal/character/direct-interval qualification,
+- Finish direct-interval qualification,
   prepared-type mismatch and finite boundary cases, then consolidated metadata
-  parity. Reuse the completed SC/VA/VR and historical evidence at its exact scope.
+  parity. Reuse the completed SC/VA/VR/TW and historical evidence at its exact scope.
 - Issue #37's repaired public SUPER test and temporary-table regression pass
   against installed artifacts. The original SQLSTATE 3F000/42P01 failures and
   separate startup timeout remain preserved; passing successors do not erase them.
