@@ -67,7 +67,7 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL YEAR TO MONTH | Q,S,T | DI C/Python array/stream | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | DI C/Python array/stream | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
-| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | VR C array/stream, Python stream; M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
+| HLLSKETCH | M-P,Q-P all-HLL; H mixed rows; HT crossing | HT C/Python array/stream; VR; M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
 | SUPER | Q,V,VA corrected C Arrow; VR public IPC | V positive; VB mismatch C/Python array/stream | VR C array/stream; M-P,Q-P Python subset | VR C array/stream, Python array; M-P,Q-P subset | VA selected APIs | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
 | GEOMETRY | M-P,Q-P,V bounded EWKB | V positive; VB mismatch C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
@@ -214,6 +214,30 @@ remains a separate gate.
   automated offline tests are committed. Offline recorder assertions establish
   injected descriptor drift separately; VB does not manufacture that condition
   from legal SQL casts. Full SQL/cloud cleanup and exact inputs are preserved.
+
+- **HT:** macOS arm64, qualification source
+  `07b535960a071751f506ad4699a8d2cf7107cec1`, retained VR installed artifacts from
+  `7d6825dfcee1161e64b35ed58e1a223d6013b294`; runtime source equivalence is verified.
+  Issue #45 operation `2f424f2683f64013a2433036d6643236` passed six groups:
+  native discovery, array and stream rebinding in standalone C and Python.
+  Both clients observed sparse prefix 3072/dense prefix 3073 using 14 observations
+  within the fixed 4..4096 bracket. Six rows exercise prefix 3072/3073/3074,
+  singleton key 3072, native combination and SQL NULL, with explicit row/count
+  identity and full/empty native schemas. The public helper and ten offline
+  regressions are reusable and wired into CI.
+  Each native serialization roundtrips unchanged; it is an observable byte
+  invariant, not an independent raw-wire decoding oracle. Receipts retain checked
+  outcomes and counts, not serialized sketch payloads. Native cardinality of
+  prefix 3072 combined with singleton 3072 matches independently built prefix 3073.
+  Estimates need not equal exact input counts; equivalent sketches need not have
+  identical encodings. This is one observed adjacent crossing, not a first or
+  universal threshold, general monotonicity, all maxima, full B5 or B6 proof.
+  Both clients exited zero; SQL schemas/sessions and all seven owned cloud resource
+  classes are verified absent without cleanup issues. The original operation
+  `0d8ad9248aa547909bd547970fba82c4` failed both discovery groups with SQLSTATE 42846 on an unsupported HLL-to-VARCHAR cast.
+  Its two SQL schemas remained until namespace deletion, with no runtime sessions;
+  all seven owned cloud resource classes were subsequently verified absent without
+  cleanup issues. That failure and its cleanup evidence remain unchanged.
 
 ## Source audit and gaps
 
@@ -785,7 +809,8 @@ and the [spatial object limit](https://docs.aws.amazon.com/redshift/latest/dg/sp
 Stored object size, JSON serialization, raw EWKB and text parameter expansion are
 different budgets. The retained nine native feasibility probes establish only
 small direct transport controls. V adds selected installed C/Python large/deep SUPER
-and spatial fixtures; broader maximum-value coverage and the finite
-sparse-to-dense HLL transition remain pending. HLL's known-format1,000,000
+and spatial fixtures; broader maximum-value coverage remains. HT records one
+finite sparse-to-dense HLL crossing with verified full teardown. HLL's known-format
+1,000,000
 encoded-byte contract is unchanged. Scalar HLL_CARDINALITY results do not qualify
 mixed HLL output (B1), and query identity checks do not close metadata parity (B5).

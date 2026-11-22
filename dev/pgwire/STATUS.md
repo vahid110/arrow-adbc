@@ -19,10 +19,21 @@
 
 # Status
 
-Merged baseline: PR #40, `c383d6146facd0c9f74428233c5db2040c174d29`
+Merged baseline: PR #44, `0209d9dc4e9d5799df0e32de62662277fcfe6d1c`
 (2026-11-22), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
+
+Issue #45 adds HT: six passing installed HLL groups, standalone C/Python
+native discovery and array/stream rebinding. Each observed the adjacent sparse
+prefix 3072/dense prefix 3073 pair within the fixed 4..4096 bracket using 14
+observations. Native bytes roundtrip unchanged; independently built prefix/union
+cardinality controls agree without assuming estimates equal row counts.
+Both child exits were zero and SQL schema/session absence passed. Full teardown
+verified all seven owned cloud resource classes absent without cleanup issues.
+The original unsupported HLL-to-VARCHAR cast failure remains separate; its owned
+cloud resources were fully removed. Case HT records the exact scope and artifacts.
+After the focused HLL PR passes review/CI and merges, pause at the user's request.
 
 Issue #41 adds four passing installed direct-interval groups (DI): standalone
 C/Python array and stream bindings for YEAR TO MONTH and DAY TO SECOND(6).
@@ -82,8 +93,8 @@ all 35 serial local validation steps and Meson unit/recorder targets passed.
 SUPER input permits 16MiB/depth1000; spatial read/write permits 1,048,447 raw EWKB
 bytes. Validation is iterative, native SUPER uses received wire length, and
 batches flush without skipping deferred rows. The selected installed
-prepared/large-value results are recorded below. Broader maximum-value coverage,
-HLL transitions and B5 metadata remain separate gates.
+prepared/large-value results are recorded below. Broader maximum-value coverage
+and B5 metadata remain separate gates; HT records the finite HLL transition slice.
 
 Task010q/q1 implements native SUPER observable JSON-wire reads at
 `26fb72348a6dee794d86d47b70d66d487f9894a0`, following independent source review
