@@ -16,6 +16,8 @@
 // under the License.
 
 #include "postgresql/redshift_replace_preflight.h"
+#include "driver/pgwire/backend.h"
+#include "postgresql/redshift_temporary_ingest.h"
 
 #include <gtest/gtest.h>
 
@@ -255,6 +257,93 @@ TEST(RedshiftReplacePreflightTest, LookupUnknownOrFailedCaseSettingPreservesName
     EXPECT_FALSE(NormalizeRedshiftLookupIdentifiers(&table, &schema, read).ok());
     EXPECT_EQ(table, "Table");
     EXPECT_EQ(schema, "Schema");
+  }
+}
+
+TEST(RedshiftTemporaryIngestTest, BackendCreationPolicy) {
+  EXPECT_FALSE(BackendProfile::PostgreSQL().capabilities.temporary_create_unqualified);
+  EXPECT_TRUE(BackendProfile::Redshift().capabilities.temporary_create_unqualified);
+}
+
+TEST(RedshiftTemporaryIngestTest, OnlyCurrentTemporaryNamespaceIsQueried) {
+  for (const bool present : {false, true}) {
+    std::string schema = "stale";
+    auto read_setting = [](std::string_view, std::string*) -> Status {
+      ADD_FAILURE() << "Lowercase identifier requires no setting query";
+      return Status::Internal("Unexpected setting query");
+    };
+    auto read_target = [present](std::string_view query, const std::string& target,
+                                 std::vector<std::string>* schemas) -> Status {
+      EXPECT_EQ(target, "table");
+      EXPECT_EQ(query,
+                "SELECT ns.nspname FROM pg_catalog.pg_class AS cls "
+                "INNER JOIN pg_catalog.pg_namespace AS ns ON ns.oid=cls.relnamespace "
+                "WHERE cls.relname=$1 AND substring(ns.nspname,1,8)='pg_temp_' "
+                "AND ns.nspname=ANY(current_schemas(true))");
+      if (present) schemas->push_back("pg_temp_42");
+      return Status::Ok();
+    };
+    ASSERT_TRUE(
+        ResolveRedshiftTemporaryTarget("table", read_setting, read_target, &schema).ok());
+    EXPECT_EQ(schema, present ? "pg_temp_42" : "");
+  }
+}
+
+TEST(RedshiftTemporaryIngestTest,
+     NormalizesLogicalQuotedIdentifierWithoutSqlInterpolation) {
+  for (const bool sensitive : {false, true}) {
+    std::string schema;
+    auto read_setting = [sensitive](std::string_view query,
+                                    std::string* value) -> Status {
+      EXPECT_EQ(query, "SHOW enable_case_sensitive_identifier");
+      *value = sensitive ? "on" : "off";
+      return Status::Ok();
+    };
+    auto read_target = [sensitive](std::string_view, const std::string& target,
+                                   std::vector<std::string>* schemas) -> Status {
+      EXPECT_EQ(target, sensitive ? "Table\"Name" : "table\"name");
+      schemas->push_back("pg_temp_42");
+      return Status::Ok();
+    };
+    ASSERT_TRUE(
+        ResolveRedshiftTemporaryTarget("Table\"Name", read_setting, read_target, &schema)
+            .ok());
+    EXPECT_EQ(schema, "pg_temp_42");
+  }
+}
+
+TEST(RedshiftTemporaryIngestTest, CatalogErrorsAndAmbiguityCannotBecomeAbsence) {
+  for (int failure = 0; failure < 4; ++failure) {
+    std::string schema = "stale";
+    auto setting = [](std::string_view, std::string*) { return Status::Ok(); };
+    auto reader = [failure](std::string_view, const std::string&,
+                            std::vector<std::string>* schemas) -> Status {
+      if (failure == 0) return Status(ADBC_STATUS_IO, "Catalog read failed");
+      if (failure == 1) *schemas = {"pg_temp_1", "pg_temp_2"};
+      if (failure == 2) *schemas = {"public"};
+      if (failure == 3) *schemas = {""};
+      return Status::Ok();
+    };
+    auto status = ResolveRedshiftTemporaryTarget("table", setting, reader, &schema);
+    EXPECT_EQ(status.ToAdbc(nullptr),
+              failure == 0 ? ADBC_STATUS_IO : ADBC_STATUS_INVALID_DATA);
+    EXPECT_TRUE(schema.empty());
+  }
+}
+
+TEST(RedshiftTemporaryIngestTest, InvalidIdentifiersNeverReachCatalog) {
+  auto setting = [](std::string_view, std::string*) { return Status::Ok(); };
+  auto reader = [](std::string_view, const std::string&,
+                   std::vector<std::string>*) -> Status {
+    ADD_FAILURE() << "Invalid identifier reached catalog";
+    return Status::Ok();
+  };
+  for (const auto& target :
+       {std::string(), std::string(128, 'a'), std::string("a\0b", 3)}) {
+    std::string schema;
+    EXPECT_EQ(
+        ResolveRedshiftTemporaryTarget(target, setting, reader, &schema).ToAdbc(nullptr),
+        ADBC_STATUS_INVALID_ARGUMENT);
   }
 }
 

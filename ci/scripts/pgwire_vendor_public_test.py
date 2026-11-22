@@ -175,7 +175,7 @@ class VendorPublicTest(unittest.TestCase):
             with pa.RecordBatchReader._import_from_c(stream.address) as reader:
                 return reader.read_all().to_pylist()
 
-    def ingest(self, mode, values, stream=False):
+    def ingest(self, mode, values, stream=False, *, scalar=False):
         with adm.AdbcStatement(self.connection) as statement:
             statement.set_options(
                 **{
@@ -184,7 +184,17 @@ class VendorPublicTest(unittest.TestCase):
                     "adbc.ingest.temporary": "true",
                 }
             )
-            batch = super_batch(values)
+            batch = (
+                pa.record_batch(
+                    [
+                        pa.array(range(len(values)), pa.int32()),
+                        pa.array(values, pa.int32()),
+                    ],
+                    names=["row_id", "amount"],
+                )
+                if scalar
+                else super_batch(values)
+            )
             if stream:
                 statement.bind_stream(
                     pa.RecordBatchReader.from_batches(batch.schema, [batch])
@@ -567,6 +577,89 @@ class VendorPublicTest(unittest.TestCase):
                     reader.read_all().column(0).to_pylist(),
                     [b"\x00\x80\xff", b"", None],
                 )
+
+    def test_temporary_ingest_modes_preserve_permanent_shadow(self):
+        if self.backend != "redshift":
+            self.skipTest("Redshift temporary namespace resolution")
+        # A quoted name exercises escaping and the current identifier-case policy.
+        # Use the admitted connection/search_path; never open another connection.
+        original = self.table
+        self.table = "Temp_" + original + '"shadow'
+        quoted = '"' + self.table.replace('"', '""') + '"'
+        schema = self.query("SELECT current_schema() AS schema")[0]["schema"]
+        permanent = '"' + schema.replace('"', '""') + '".' + quoted
+        temporary_created = False
+        permanent_created = False
+        primary_error = None
+
+        def expect_temporary(values):
+            self.assertEqual(
+                self.query(f"SELECT amount FROM {quoted} ORDER BY amount"),
+                [{"amount": value} for value in values],
+            )
+
+        def expect_permanent():
+            self.assertEqual(
+                self.query(f"SELECT amount FROM {permanent}"), [{"amount": 999}]
+            )
+
+        try:
+            self.execute(f"CREATE TABLE {permanent} (row_id INTEGER, amount INTEGER)")
+            permanent_created = True
+            self.execute(f"INSERT INTO {permanent} VALUES (0,999)")
+            with self.assertRaises(adm.Error) as caught:
+                self.ingest("append", [0], scalar=True)
+            self.assertEqual(caught.exception.status_code, adm.AdbcStatusCode.NOT_FOUND)
+            self.assertIsNone(caught.exception.sqlstate)
+            expect_permanent()
+
+            self.ingest("create", [1], scalar=True)
+            temporary_created = True
+            expect_temporary([1])
+            with self.assertRaises(adm.Error) as caught:
+                self.ingest("create", [0], scalar=True)
+            self.assertEqual(
+                caught.exception.status_code, adm.AdbcStatusCode.ALREADY_EXISTS
+            )
+            self.ingest("append", [2], stream=True, scalar=True)
+            expect_temporary([1, 2])
+            self.ingest("create_append", [3], scalar=True)
+            expect_temporary([1, 2, 3])
+            self.ingest("replace", [4], scalar=True)
+            expect_temporary([4])
+            expect_permanent()
+
+            self.execute(f"DROP TABLE {quoted}")
+            temporary_created = False
+            self.ingest("replace", [5], stream=True, scalar=True)
+            temporary_created = True
+            expect_temporary([5])
+            expect_permanent()
+            self.execute(f"DROP TABLE {quoted}")
+            temporary_created = False
+            self.ingest("create_append", [6], stream=True, scalar=True)
+            temporary_created = True
+            expect_temporary([6])
+            expect_permanent()
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            # Do not reuse a connection after an unexpected driver/transport
+            # failure. The admitted caller owns its schema/session teardown.
+            try:
+                if primary_error is None or isinstance(primary_error, AssertionError):
+                    # Unqualified DROP only follows successful TEMP creation.
+                    if temporary_created:
+                        self.execute(f"DROP TABLE {quoted}")
+                    if permanent_created:
+                        self.execute(f"DROP TABLE {permanent}")
+            except BaseException:
+                if primary_error is None:
+                    raise
+                # Preserve the test failure if best-effort cleanup also fails.
+            finally:
+                self.table = original
 
     def test_json_subset_ingest_native_read_and_ipc(self):
         if self.backend != "redshift":
