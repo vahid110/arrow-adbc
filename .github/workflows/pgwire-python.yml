@@ -36,6 +36,8 @@ on:
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
       - "ci/scripts/test_pgwire_mixed_hll_public.py"
+      - "ci/scripts/pgwire_prepared_boundary_cases.py"
+      - "ci/scripts/test_pgwire_prepared_boundary_cases.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -68,6 +70,8 @@ on:
       - "ci/scripts/pgwire_encoded_c_data_test.py"
       - "ci/scripts/pgwire_vendor_public_test.py"
       - "ci/scripts/test_pgwire_mixed_hll_public.py"
+      - "ci/scripts/pgwire_prepared_boundary_cases.py"
+      - "ci/scripts/test_pgwire_prepared_boundary_cases.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -222,6 +226,9 @@ jobs:
 
       - name: Check mixed HLL schema and value regressions (offline)
         run: python -B ci/scripts/test_pgwire_mixed_hll_public.py
+
+      - name: Check prepared vendor boundary qualification (offline)
+        run: python -B ci/scripts/test_pgwire_prepared_boundary_cases.py
 
       - name: Installed Python semantic public APIs (PostgreSQL plumbing)
         run: |
