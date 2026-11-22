@@ -39,7 +39,7 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V/H/SC/VA/VR/TW` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H/SC/VA/VR/TW/DI` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
 `U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
@@ -64,8 +64,8 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | TIMETZ / TIME WITH TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query family/offset struct | fixed-offset struct extension |
 | TIMESTAMP / TIMESTAMP WITHOUT TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query; unknown precision retained | timestamp(us) or native-count extension |
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query; unknown precision retained | timestamp(us, UTC) or native-count extension |
-| INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
-| INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
+| INTERVAL YEAR TO MONTH | Q,S,T | DI C/Python array/stream | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
+| INTERVAL DAY TO SECOND | Q,S,T | DI C/Python array/stream | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
 | HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | VR C array/stream, Python stream; M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
 | SUPER | Q,V,VA corrected C Arrow; VR public IPC | V selected C/Python array/stream | VR C array/stream; M-P,Q-P Python subset | VR C array/stream, Python array; M-P,Q-P subset | VA selected APIs | large_utf8 native JSON wire |
@@ -181,6 +181,20 @@ Evidence keys (precise retained paths/operations are indexed in
   corrected finite limit passed independent offline review and this live run.
   TW does not qualify direct intervals, every invalid conversion, all metadata
   APIs, Arrow-mode reads or final release-candidate artifacts.
+
+
+- **DI:** macOS arm64, integration baseline `c383d6146facd0c9f74428233c5db2040c174d29`,
+  reusing TW/VR's exact installed driver bytes from `7d6825dfc`.
+  Issue #41 operation `aaf0078cb043467c95dbfa6aa1053d45` passed four groups:
+  standalone C/Python, array/stream, each with explicit prepared INSERT into
+  YEAR TO MONTH and DAY TO SECOND(6) columns. Five rows include NULL, zero,
+  positive and negative months/microseconds. Full and empty native readback
+  checks exact storage and observed modifiers, retaining unknown public semantic
+  constraints. Month-family nonzero day and nanosecond submicrosecond inputs each
+  reject locally with INVALID_ARGUMENT; identity and unchanged stored rows are
+  verified afterward. Original numeric rejection statuses remain in the receipts.
+  This proves these direct source-validation paths, not direct target-qualifier
+  enforcement, every interval value or general streaming atomicity.
 
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is

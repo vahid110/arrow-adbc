@@ -19,10 +19,18 @@
 
 # Status
 
-Merged baseline: PR #38, `9ef47ac620018c9c82bb9863be9d9965e0f6eb82`
+Merged baseline: PR #40, `c383d6146facd0c9f74428233c5db2040c174d29`
 (2026-11-22), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
+
+Issue #41 adds four passing installed direct-interval groups (DI): standalone
+C/Python array and stream bindings for YEAR TO MONTH and DAY TO SECOND(6).
+Both clients verify exact stored months/microseconds, full/empty result schemas
+and unchanged rows after two first-invalid conversion controls. Public interval
+constraint metadata stays unknown. Both child exits were zero and SQL cleanup
+passed; all seven owned cloud resource classes are verified absent without
+cleanup issues. No driver change was needed.
 
 Issue #39 adds twelve passing installed typed-write groups (TW): standalone C
 and Python direct decimal/temporal/character array/stream bindings, plus C
@@ -146,9 +154,8 @@ Both fresh suites above passed with independently verified full teardown.
 
 ## Active
 
-- Finish direct-interval qualification,
-  prepared-type mismatch and finite boundary cases, then consolidated metadata
-  parity. Reuse the completed SC/VA/VR/TW and historical evidence at its exact scope.
+- Finish prepared-type mismatch and finite boundary cases, then consolidated metadata
+  parity. Reuse the completed SC/VA/VR/TW/DI and historical evidence at its exact scope.
 - Issue #37's repaired public SUPER test and temporary-table regression pass
   against installed artifacts. The original SQLSTATE 3F000/42P01 failures and
   separate startup timeout remain preserved; passing successors do not erase them.
