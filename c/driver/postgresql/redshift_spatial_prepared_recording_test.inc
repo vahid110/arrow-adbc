@@ -155,12 +155,15 @@ TEST_F(SpatialPreparedRecordingTest, DescriptorMismatchRejectsNullBeforeExecutio
   for (auto kind : {RedshiftEncodedKind::kGeometry, RedshiftEncodedKind::kGeography})
     for (bool stream : {false, true})
       for (int mismatch = 1; mismatch <= 4; ++mismatch) {
+        if (error.release) error.release(&error);
+        error = ADBC_ERROR_INIT;
         Bind(stream, kind, {std::nullopt});
         recording.spatial_mismatch = mismatch;
         recording.executions.clear();
         EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
                   ADBC_STATUS_INVALID_STATE)
             << Message();
+        EXPECT_EQ(std::string(error.sqlstate, 5), std::string(5, '\0'));
         EXPECT_TRUE(recording.executions.empty());
       }
 }

@@ -186,6 +186,25 @@ TEST_F(SuperPreparedRecordingTest, DescriptorDriftStopsBeforeLaterRows) {
   }
 }
 
+TEST_F(SuperPreparedRecordingTest, ParameterOidDriftRejectsNullBeforeExecution) {
+  for (bool stream : {false, true}) {
+    if (error.release) error.release(&error);
+    error = ADBC_ERROR_INIT;
+    Sql("SELECT $1");
+    recording.direct_descriptor_drift = 7;
+    recording.events.clear();
+    recording.executions.clear();
+    BindSuper({std::nullopt, "true"}, stream);
+    EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+              ADBC_STATUS_INVALID_STATE)
+        << Message();
+    EXPECT_EQ(std::string(error.sqlstate, 5), std::string(5, '\0'));
+    EXPECT_NE(std::string(Message()).find("Prepared parameter identity changed"),
+              std::string::npos);
+    EXPECT_TRUE(recording.executions.empty());
+  }
+}
+
 TEST_F(SuperPreparedRecordingTest, PrepareAndExecutionErrorsRetainOriginalDetails) {
   Sql("SELECT $1");
   for (const char* phase : {"logical-prepare", "physical-prepare", "execute"}) {
