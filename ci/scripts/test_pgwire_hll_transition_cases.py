@@ -81,10 +81,17 @@ def scalar_table(rows):
         [
             pa.array([r[0] for r in rows], pa.int32()),
             pa.array([r[1] for r in rows], pa.int32()),
-            pa.array([r[2] for r in rows], pa.string()),
+            pa.array([r[2] for r in rows], pa.large_string()),
             pa.array([r[3] for r in rows], pa.int64()),
         ],
-        names=["row_id", "input_count", "serialized", "cardinality"],
+        schema=pa.schema(
+            [
+                pa.field("row_id", pa.int32()),
+                pa.field("input_count", pa.int32()),
+                result_schema().field("value").with_name("serialized"),
+                pa.field("cardinality", pa.int64()),
+            ]
+        ),
     )
 
 
@@ -157,6 +164,12 @@ class Session:
 
     def query(self, sql):
         self.call(sql)
+        # Recorded live refusal: native HLL -> VARCHAR CAST is unsupported.
+        # Running the actual helper against this fake catches accidental reuse.
+        if "CAST(value AS VARCHAR" in sql:
+            raise adm.ProgrammingError(
+                "fixed unsupported HLL cast", status_code=5, sqlstate="42846"
+            )
         if sql == "SELECT current_database(),current_user":
             return pa.table(
                 {
@@ -169,7 +182,10 @@ class Session:
         if "FROM (SELECT HLL_CREATE_SKETCH" in sql:
             n = int(re.search(r"WHERE n<(\d+)", sql)[1])
             value = "unknown" if self.corrupt == "probe" else sketch(n)
-            return scalar_table([(0, n, value, estimate(n))])
+            table = scalar_table([(0, n, value, estimate(n))])
+            if self.corrupt == "witness-metadata":
+                table = table.set_column(2, "serialized", table.column(2))
+            return table
         table = re.search(r'"hll_[a-z0-9_]+"', sql).group()[1:-1]
         rows = self.tables[table]
         if "AS serialized" in sql:
@@ -299,6 +315,7 @@ class HllTransitionTest(unittest.TestCase):
         for mutation, phase in [
             ("identity", "identity"),
             ("probe", "bracket"),
+            ("witness-metadata", "bracket"),
             ("count", "scalar-witness"),
             ("union", "witness-check"),
             ("native-bytes", "native-read"),
@@ -415,16 +432,47 @@ class HllTransitionTest(unittest.TestCase):
             with self.subTest(bad=bad[:30]), self.assertRaises(hll.Mismatch):
                 hll.representation(bad)
 
-    def test_scalar_varchar_and_native_hll_are_distinct_storage(self):
-        scalar = scalar_table([(0, 4, sketch(4), estimate(4))])
-        self.assertEqual(hll._scalar_rows(scalar, [4]), ((sketch(4),), (estimate(4),)))
-        wrong = scalar.set_column(
-            2, "serialized", scalar.column(2).cast(pa.large_string())
+    def test_native_hll_witness_requires_exact_type_and_identity(self):
+        witness = scalar_table([(0, 4, sketch(4), estimate(4))])
+        self.assertEqual(hll._scalar_rows(witness, [4]), ((sketch(4),), (estimate(4),)))
+        variants = [
+            pa.field("serialized", pa.string()),  # Refused legacy VARCHAR path.
+            pa.field("serialized", pa.large_string()),  # Storage alone is not HLL.
+            pa.field(
+                "serialized", pa.string(), metadata=witness.schema.field(2).metadata
+            ),
+        ]
+        for key in witness.schema.field(2).metadata:
+            missing = dict(witness.schema.field(2).metadata)
+            del missing[key]
+            variants.append(pa.field("serialized", pa.large_string(), metadata=missing))
+            wrong = dict(witness.schema.field(2).metadata)
+            wrong[key] = b"wrong"
+            variants.append(pa.field("serialized", pa.large_string(), metadata=wrong))
+        extra = dict(witness.schema.field(2).metadata)
+        extra[b"ADBC:redshift:type_modifier"] = b"-1"
+        variants.append(pa.field("serialized", pa.large_string(), metadata=extra))
+        variants.append(witness.schema.field(2).with_nullable(False))
+        for field in variants:
+            with self.subTest(field=field), self.assertRaises(hll.Mismatch):
+                hll._scalar_rows(
+                    witness.set_column(2, field, witness.column(2).cast(field.type)),
+                    [4],
+                )
+
+    def test_observed_unsupported_cast_is_never_reintroduced(self):
+        session = Session()
+        fixture = self.complete(session)
+        self.assertEqual(fixture.crossing, THRESHOLD)
+        self.assertFalse(
+            any("CAST(value AS VARCHAR" in sql for sql in session.operations)
         )
-        with self.assertRaises(hll.Mismatch):
-            hll._scalar_rows(wrong, [4])
-        self.assertEqual(hll.native_schema().field("value").type, pa.large_string())
-        self.assertEqual(scalar.schema.field("serialized").type, pa.string())
+        self.assertEqual(
+            sum("value AS serialized" in sql for sql in session.operations), 17
+        )
+        self.assertTrue(
+            any("HLL_CARDINALITY(value)" in sql for sql in session.operations)
+        )
 
     def test_owned_fixture_and_bounds_before_sql(self):
         for n in (True, 4, 4097, -1):

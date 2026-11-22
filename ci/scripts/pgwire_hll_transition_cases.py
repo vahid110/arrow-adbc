@@ -22,6 +22,11 @@ query(sql)->Table. execute/query charge their own call. No connection, credentia
 or cleanup SQL is created here. discover costs at most23 calls; each qualify costs
 six. The owner stops SQL after UnsafeTransition and owns teardown. The crossing is
 one observed adjacent pair in this fixture, not a universal or first threshold.
+Native HLL serializations are observed before and after rebinding; this is an
+observable roundtrip invariant, not an independent raw-wire decoding oracle.
+HLL_CARDINALITY and the separately constructed prefix/union give server semantic
+controls. HLL values are projected directly: Redshift does not support the former
+HLL-to-VARCHAR cast used by this fixture.
 """
 
 from __future__ import annotations
@@ -208,6 +213,11 @@ def adjacent_crossing(observe):
 
 
 def _scalar_rows(table, counts):
+    """Read native HLL plus ordinary identity/cardinality scalar columns.
+
+    The legacy helper name does not imply a separate scalar serialization path.
+    Require the native HLL contract; plain UTF-8 is not evidence of HLL identity.
+    """
     rows = len(counts)
     if (
         not isinstance(table, pa.Table)
@@ -218,9 +228,16 @@ def _scalar_rows(table, counts):
     if [f.type for f in table.schema] != [
         pa.int32(),
         pa.int32(),
-        pa.string(),
+        pa.large_string(),
         pa.int64(),
     ]:
+        raise Mismatch("scalar-types")
+    expected_hll = pa.field(
+        "serialized",
+        pa.large_string(),
+        metadata={**HLL_METADATA, b"POSTGRESQL:type": b"hllsketch"},
+    )
+    if not table.schema.field("serialized").equals(expected_hll, check_metadata=True):
         raise Mismatch("scalar-types")
     values = table.to_pydict()
     if values["row_id"] != list(range(rows)) or values["input_count"] != list(counts):
@@ -246,7 +263,7 @@ def input_counts(crossing):
 
 def scalar_sql(table):
     return (
-        "SELECT row_id,input_count,CAST(value AS VARCHAR(65535)) AS serialized,"
+        "SELECT row_id,input_count,value AS serialized,"
         f"HLL_CARDINALITY(value) AS cardinality FROM {table} ORDER BY row_id"
     )
 
@@ -322,7 +339,7 @@ def discover(session):
     def probe(count):
         sql = (
             f"SELECT 0::INTEGER AS row_id,{count}::INTEGER AS input_count,"
-            "CAST(value AS VARCHAR(65535)) AS serialized,"
+            "value AS serialized,"
             "HLL_CARDINALITY(value) AS cardinality "
             f"FROM (SELECT HLL_CREATE_SKETCH(n) AS value FROM {keys} "
             f"WHERE n<{count}) AS sketch"
@@ -429,7 +446,7 @@ def _bind(session, table, batch, stream):
 
 
 def qualify(session, fixture, stream):
-    """Six charged operations; opaque values from scalar witnesses are rebound."""
+    """Six charged operations; observed native HLL bytes are rebound unchanged."""
     if (
         type(stream) is not bool
         or not isinstance(fixture, Fixture)
