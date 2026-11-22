@@ -37,7 +37,7 @@ selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
 
-Merged PR #40 is `c383d6146facd0c9f74428233c5db2040c174d29`.
+Merged PR #43 is `366fdb93bfbf39a01fe9046dca519e8d65171f00`.
 SC records eight passing scalar groups; VA records 21 vendor groups.
 Issue #37 adds VR: eight passing groups with fresh installed C/Python artifacts,
 covering remaining selected SUPER APPEND/HLL direct routes, the repaired public
@@ -47,7 +47,9 @@ Issue #39 adds TW: twelve passing decimal/temporal/character write groups,
 including C/Python direct array/stream parameters and C CREATE/APPEND. Direct
 intervals are now qualified by DI (issue #41): four passing installed C/Python
 array/stream groups with exact stored values and first-invalid retention checks.
-Selected vendor mismatch/boundary cases and consolidated metadata remain.
+Issue #42 adds VB: four passing installed vendor mismatch groups, reusable
+Python regression tests and CI wiring. Remaining scalar rejection boundaries,
+HLL transitions and consolidated metadata are still release gates.
 Task010t's 234 installed edge cases,
 independent review, applicable green CI and full resource closure are complete.
 Its original C-stream cleanup timeout remains separate from successful residual

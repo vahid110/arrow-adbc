@@ -39,7 +39,7 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V/H/SC/VA/VR/TW/DI` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H/SC/VA/VR/TW/DI/VB` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
 `U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
@@ -68,10 +68,10 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | INTERVAL DAY TO SECOND | Q,S,T | DI C/Python array/stream | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
 | BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
 | HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | VR C array/stream, Python stream; M-P,Q-P text subset | VA | VA array/stream | VA selected APIs | large_utf8 serialized sketch |
-| SUPER | Q,V,VA corrected C Arrow; VR public IPC | V selected C/Python array/stream | VR C array/stream; M-P,Q-P Python subset | VR C array/stream, Python array; M-P,Q-P subset | VA selected APIs | large_utf8 native JSON wire |
+| SUPER | Q,V,VA corrected C Arrow; VR public IPC | V positive; VB mismatch C/Python array/stream | VR C array/stream; M-P,Q-P Python subset | VR C array/stream, Python array; M-P,Q-P subset | VA selected APIs | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
-| GEOMETRY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
-| GEOGRAPHY | M-P,Q-P,V bounded EWKB | V selected C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
+| GEOMETRY | M-P,Q-P,V bounded EWKB | V positive; VB mismatch C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
+| GEOGRAPHY | M-P,Q-P,V bounded EWKB | V positive; VB mismatch C/Python array/stream | VA | VA array/stream | VA selected APIs | large_binary EWKB/per-value SRID |
 
 Evidence keys (precise retained paths/operations are indexed in
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md#retained-evidence-index)):
@@ -202,6 +202,18 @@ internal ingestion evidence only. Opaque bytes never qualify semantic reads.
 All receipts retain their original failures, source and platform scope; actual
 billing is unreconciled. PR #32 is merged with applicable CI green; exact final-candidate validation
 remains a separate gate.
+
+- **VB:** macOS arm64, source `ae1a10f45f4d08c181075ae4086c1ac0bcf355af`,
+  retained VR installed artifacts. Four standalone C/Python array/stream groups
+  qualify SUPER, GEOMETRY and GEOGRAPHY positive NULL/non-NULL rows, contradictory
+  metadata rejection, and native incompatible-cast rejection. Each family checks
+  all three stored columns after each rejection, including the untouched target
+  column, plus identity and final empty metadata. All metadata rejections are
+  bind phase55/INVALID_ARGUMENT/no SQLSTATE; native rejections are execute
+  phase56/INVALID_ARGUMENT/42846. The reusable repository Python helper and its
+  automated offline tests are committed. Offline recorder assertions establish
+  injected descriptor drift separately; VB does not manufacture that condition
+  from legal SQL casts. Full SQL/cloud cleanup and exact inputs are preserved.
 
 ## Source audit and gaps
 
