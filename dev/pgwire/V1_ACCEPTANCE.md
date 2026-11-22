@@ -19,8 +19,8 @@
 
 # V1 acceptance: current evidence and remaining gates
 
-Current merged baseline: `8da9a9049c1817bb71db26fa3eacfd7ca42cb6ef`
-(PR #36). Evidence reconciled 2026-11-22; historical sources remain identified.
+Current merged baseline: `c383d6146facd0c9f74428233c5db2040c174d29`
+(PR #40). Evidence reconciled 2026-11-22; historical sources remain identified.
 The [21-type operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation)
 is the coverage ledger. This is a finite remaining-work list, not release approval.
 Earlier successful suites stay qualified only for their recorded source and scope.
