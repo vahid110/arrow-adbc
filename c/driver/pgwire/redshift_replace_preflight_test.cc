@@ -267,7 +267,7 @@ TEST(RedshiftTemporaryIngestTest, BackendCreationPolicy) {
 
 TEST(RedshiftTemporaryIngestTest, OnlyCurrentTemporaryNamespaceIsQueried) {
   for (const bool present : {false, true}) {
-    std::string schema = "stale";
+    std::string schema = "stale", catalog_target = "stale";
     auto read_setting = [](std::string_view, std::string*) -> Status {
       ADD_FAILURE() << "Lowercase identifier requires no setting query";
       return Status::Internal("Unexpected setting query");
@@ -283,16 +283,18 @@ TEST(RedshiftTemporaryIngestTest, OnlyCurrentTemporaryNamespaceIsQueried) {
       if (present) schemas->push_back("pg_temp_42");
       return Status::Ok();
     };
-    ASSERT_TRUE(
-        ResolveRedshiftTemporaryTarget("table", read_setting, read_target, &schema).ok());
+    ASSERT_TRUE(ResolveRedshiftTemporaryTarget("table", read_setting, read_target,
+                                               &schema, &catalog_target)
+                    .ok());
     EXPECT_EQ(schema, present ? "pg_temp_42" : "");
+    EXPECT_EQ(catalog_target, present ? "table" : "");
   }
 }
 
 TEST(RedshiftTemporaryIngestTest,
      NormalizesLogicalQuotedIdentifierWithoutSqlInterpolation) {
   for (const bool sensitive : {false, true}) {
-    std::string schema;
+    std::string schema, catalog_target;
     auto read_setting = [sensitive](std::string_view query,
                                     std::string* value) -> Status {
       EXPECT_EQ(query, "SHOW enable_case_sensitive_identifier");
@@ -305,16 +307,17 @@ TEST(RedshiftTemporaryIngestTest,
       schemas->push_back("pg_temp_42");
       return Status::Ok();
     };
-    ASSERT_TRUE(
-        ResolveRedshiftTemporaryTarget("Table\"Name", read_setting, read_target, &schema)
-            .ok());
+    ASSERT_TRUE(ResolveRedshiftTemporaryTarget("Table\"Name", read_setting, read_target,
+                                               &schema, &catalog_target)
+                    .ok());
     EXPECT_EQ(schema, "pg_temp_42");
+    EXPECT_EQ(catalog_target, sensitive ? "Table\"Name" : "table\"name");
   }
 }
 
 TEST(RedshiftTemporaryIngestTest, CatalogErrorsAndAmbiguityCannotBecomeAbsence) {
   for (int failure = 0; failure < 4; ++failure) {
-    std::string schema = "stale";
+    std::string schema = "stale", catalog_target = "stale";
     auto setting = [](std::string_view, std::string*) { return Status::Ok(); };
     auto reader = [failure](std::string_view, const std::string&,
                             std::vector<std::string>* schemas) -> Status {
@@ -324,10 +327,12 @@ TEST(RedshiftTemporaryIngestTest, CatalogErrorsAndAmbiguityCannotBecomeAbsence) 
       if (failure == 3) *schemas = {""};
       return Status::Ok();
     };
-    auto status = ResolveRedshiftTemporaryTarget("table", setting, reader, &schema);
+    auto status = ResolveRedshiftTemporaryTarget("table", setting, reader, &schema,
+                                                 &catalog_target);
     EXPECT_EQ(status.ToAdbc(nullptr),
               failure == 0 ? ADBC_STATUS_IO : ADBC_STATUS_INVALID_DATA);
     EXPECT_TRUE(schema.empty());
+    EXPECT_TRUE(catalog_target.empty());
   }
 }
 
@@ -340,9 +345,10 @@ TEST(RedshiftTemporaryIngestTest, InvalidIdentifiersNeverReachCatalog) {
   };
   for (const auto& target :
        {std::string(), std::string(128, 'a'), std::string("a\0b", 3)}) {
-    std::string schema;
+    std::string schema, catalog_target;
     EXPECT_EQ(
-        ResolveRedshiftTemporaryTarget(target, setting, reader, &schema).ToAdbc(nullptr),
+        ResolveRedshiftTemporaryTarget(target, setting, reader, &schema, &catalog_target)
+            .ToAdbc(nullptr),
         ADBC_STATUS_INVALID_ARGUMENT);
   }
 }

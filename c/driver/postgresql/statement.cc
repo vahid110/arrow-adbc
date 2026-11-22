@@ -794,6 +794,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       ingest_.temporary &&
       connection_->backend_profile().capabilities.temporary_create_unqualified;
   std::string temporary_schema;
+  std::string temporary_target;
   auto resolve_temporary = [&]() -> Status {
     auto read_setting = [conn](std::string_view query, std::string* value) -> Status {
       PqResultHelper setting(conn, std::string(query), true);
@@ -818,7 +819,7 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
       return Status::Ok();
     };
     return adbc::driver::pgwire::ResolveRedshiftTemporaryTarget(
-        ingest_.target, read_setting, read_target, &temporary_schema);
+        ingest_.target, read_setting, read_target, &temporary_schema, &temporary_target);
   };
   if (unqualified_temp_create) {
     RAISE_STATUS(error, resolve_temporary());
@@ -878,8 +879,16 @@ AdbcStatusCode PostgresStatement::CreateBulkTable(
     char* escaped =
         PQescapeIdentifier(conn, temporary_schema.c_str(), temporary_schema.size());
     if (!escaped) return Status::Internal("Cannot escape temporary target namespace");
-    *escaped_table = std::string(escaped) + " . " + create_table;
+    std::string qualified = std::string(escaped) + " . ";
     PQfreemem(escaped);
+    // Use the exact catalog spelling for every subsequent operation, including
+    // regclass-based metadata lookup. Redshift can fold quoted SQL identifiers,
+    // whereas parsing an identifier in a regclass value need not use that rule.
+    escaped = PQescapeIdentifier(conn, temporary_target.c_str(), temporary_target.size());
+    if (!escaped) return Status::Internal("Cannot escape temporary target table");
+    qualified += escaped;
+    PQfreemem(escaped);
+    *escaped_table = std::move(qualified);
     return Status::Ok();
   };
   if (unqualified_temp_create && !temporary_schema.empty())

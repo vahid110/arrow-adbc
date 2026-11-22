@@ -39,12 +39,16 @@ using RedshiftTemporaryTargetReader =
                          std::vector<std::string>* schemas)>;
 
 // An empty result means absent. Errors and ambiguous results are not absence.
-// Return the real namespace, not the PostgreSQL-only pg_temp alias. The caller
-// must quote this namespace before using it for metadata, INSERT, COPY or DROP.
+// Return the real namespace and normalized catalog table name, not the
+// PostgreSQL-only pg_temp alias or the original mixed-case spelling. Catalog
+// regclass lookup must not reinterpret a name differently from SQL identifier
+// folding. The caller quotes BOTH returned names for metadata/INSERT/COPY/DROP.
 inline Status ResolveRedshiftTemporaryTarget(
     std::string target, const RedshiftSettingReader& read_setting,
-    const RedshiftTemporaryTargetReader& read_target, std::string* schema) {
+    const RedshiftTemporaryTargetReader& read_target, std::string* schema,
+    std::string* catalog_target) {
   schema->clear();
+  catalog_target->clear();
   if (target.empty() || target.size() > 127 || target.find('\0') != std::string::npos)
     return Status::InvalidArgument("Invalid Redshift temporary table identifier");
   std::string unused_schema;
@@ -57,6 +61,7 @@ inline Status ResolveRedshiftTemporaryTarget(
       schemas[0].compare(0, 8, "pg_temp_") != 0)
     return Status(ADBC_STATUS_INVALID_DATA, "Invalid Redshift temporary target catalog");
   *schema = schemas[0];
+  *catalog_target = target;
   return Status::Ok();
 }
 
