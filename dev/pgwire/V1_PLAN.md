@@ -25,20 +25,22 @@ A finite supported contract and checked rejection can establish readiness;
 exhaustive mathematical-domain testing is not the goal. The human explicitly
 required mixed HLL results and direct SUPER/spatial
 parameters on 2026-10-28. Documenting rejection does not close acceptance.
-The local candidate implements all three direct parameter families and B3 limits:
+PR #30 implements all three direct parameter families and B3 limits:
 SUPER JSON input at 16MiB/depth1000, spatial reads/writes at 1,048,447 raw bytes,
 and native JSON output bounded by received length rather than stored object size.
 Independent source review, 35 serial local validation steps and Meson targets
 passed at `aed6ced40fb058f56dc8b097937776c05cbe9496`. Selected installed
 qualification passed 15 cases each in standalone C and Python, with independently
-reviewed results and full teardown. PR #30 delivered that scope. Issue #31 now has installed
-mixed HLL read evidence in both clients and temporal modes;
+reviewed results and full teardown. PR #30 delivered that scope. PR #32 merged
+mixed HLL support with installed read evidence in both clients and temporal modes;
 selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
 
-Merged PR29 is `fca2eab2e05e1a63cfbd9adecc802c53334bdbd0`, reviewed tree
-`0fa498a6e88c30eb1758195c614755a9942c51af`. Task010t's 234 installed edge cases,
+Merged PR #32 is `dae9d97c29cc24f573527885c9a4400f3affb23d`.
+Issue #33 adds eight passing installed scalar recipe groups, four per language,
+covering five canonical families and selected metadata. Broader B4/B5 work remains.
+Task010t's 234 installed edge cases,
 independent review, applicable green CI and full resource closure are complete.
 Its original C-stream cleanup timeout remains separate from successful residual
 cleanup. Earlier L/M/Q/R/S qualifications retain their own source, platform and
@@ -47,9 +49,9 @@ operation scopes; [STATUS](STATUS.md) records the results.
 The [21-type matrix](REDSHIFT_TYPES.md#current-evidence-by-operation) separates
 native read, direct prepared bind, generated CREATE, APPEND and metadata.
 [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md) is the finite remaining-work checklist.
-The merged baseline's generated vendor ingestion does not establish direct
-parameter support in the candidate; all-HLL reads and scalar HLL cardinality
-outputs do not satisfy mixed HLL result rows. Unknown interval public constraints
+Direct SUPER/spatial parameters and mixed HLL rows have their own installed
+evidence (V/H); generated vendor ingestion and scalar cardinality controls
+alone do not establish those operations. Unknown interval public constraints
 remain honestly unknown despite internal target qualification.
 
 ## Delivery order
@@ -70,7 +72,7 @@ This roadmap grants no additional paid attempt or publication authority.
 
 ## Delivered foundations
 
-The [private libpq dependency](private-libpq.md) supplies local B1 Redshift
+The [private libpq dependency](private-libpq.md) supplies merged B1 Redshift
 linkage and mixed HLL result dispatch. The installed C and Python campaign passed on macOS arm64
 (see case H in the operation matrix). The [PR #32 checks](https://github.com/vahid110/arrow-adbc/pull/32/checks) record
 portable build and installation results. B6 requires seven C distributions and five

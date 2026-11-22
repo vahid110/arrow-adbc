@@ -39,7 +39,7 @@ quoted `"char"`, and nested SUPER values are not additional SQL column types.
 
 `C` = implemented, but the selected retained evidence does not qualify this
 operation for this family. It is an **evidence gap**, not a finding that code fails.
-`L/M/Q/R/S/T/V/H` = bounded installed live evidence at the exact source listed below;
+`L/M/Q/R/S/T/V/H/SC` = bounded installed live evidence at the exact source listed below;
 none means every value, API, platform or final candidate was tested. `P` limits
 that evidence to Python through the installed C driver; standalone C is separate.
 `U` = explicitly unsupported operation. The installed mixed HLL read campaign is recorded under `H`. Direct SUPER/spatial binds have selected C/Python evidence (`V`); both
@@ -51,12 +51,12 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 
 | Canonical SQL type and aliases (21) | Native read | Direct bind | Create | Append | Metadata | Arrow representation |
 |---|---|---|---|---|---|---|
-| SMALLINT / INT2 | C | C | C | C | C identity | int16 |
-| INTEGER / INT / INT4 | C | C | C | C | C identity | int32 |
+| SMALLINT / INT2 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int16 |
+| INTEGER / INT / INT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int32 |
 | BIGINT / INT8 | L | L | L | L | L bounded schema | int64 |
 | DECIMAL / NUMERIC | Q | C | Q-P | Q-P | Q query p/s; unknown expressions exact text | decimal128 or exact text |
-| REAL / FLOAT4 | C | C | C | C | C identity | float32 |
-| DOUBLE PRECISION / FLOAT8 / FLOAT | C | C | C | C | C identity | float64 |
+| REAL / FLOAT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float32 |
+| DOUBLE PRECISION / FLOAT8 / FLOAT | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | R | C | R-P | R-P | R widths/identity | utf8, padding retained |
 | VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | Q,R | C | R-P | R-P | R widths/identity | utf8/large_utf8 |
 | DATE | Q | C | Q-P | Q-P | Q query identity; C remaining APIs | date32 |
@@ -66,7 +66,7 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 | TIMESTAMPTZ / TIMESTAMP WITH TIME ZONE | Q | C | Q-P | Q-P | Q query; unknown precision retained | timestamp(us, UTC) or native-count extension |
 | INTERVAL YEAR TO MONTH | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | month_day_nano_interval(months,0,0) |
 | INTERVAL DAY TO SECOND | Q,S,T | C | S,T | S,T | S,T public unknowns; internal target tuples | duration(us) plus family |
-| BOOLEAN / BOOL | C | C | C | C | C identity | bool |
+| BOOLEAN / BOOL | SC | SC array/stream | SC | SC | SC canonical identity/APIs | bool |
 | HLLSKETCH | M-P,Q-P all-HLL; H mixed rows | M-P,Q-P text subset | M-P,Q-P | C | M-P,Q-P query extension | large_utf8 serialized sketch |
 | SUPER | Q,V; historical C Arrow rerun open | V selected C/Python array/stream | M-P,Q-P JSON subset | M-P,Q-P JSON subset | Q native output schema | large_utf8 native JSON wire |
 | VARBYTE / VARBINARY / BINARY VARYING | M,Q,R | R | R | R | R widths/identity | binary/large_binary |
@@ -118,12 +118,27 @@ Evidence keys (precise retained paths/operations are indexed in
   empty schema matched its own description and controls with the same predicate.
   See the [qualification evidence in PR #32](https://github.com/vahid110/arrow-adbc/pull/32).
 
+- **SC:** macOS arm64, retained installed driver source `38dc469cb`, integration
+  baseline `dae9d97c2`; the relevant driver sources are unchanged between them.
+  Issue #33 operation `134d349d3d3747db8d92a36553ec94c9` passed four recipe groups
+  in each of standalone C and Python: native reads, array parameters/ingest,
+  stream parameters/ingest and metadata. Fixtures cover SMALLINT/INTEGER extrema,
+  ordinary REAL/DOUBLE values including signed zero, true/false, NULL and empty
+  results. Generated CREATE then APPEND round-trips all six fixture rows.
+  Metadata covers bound/unbound ExecuteSchema and parameter schema,
+  GetTableSchema, and GetObjects column names/ordinals/canonical families;
+  OID-only parameters retain unknown modifiers. This qualifies canonical
+  spellings, not every alias, floating extreme/NaN/Infinity, invalid-value
+  retention, every metadata attribute or the final rebuilt release candidate.
+  The first readback attempt failed with SQLSTATE 42601; quoting projection
+  identifiers resolved the fixture failures. Original failures are retained.
+
 Public interval constraints remaining unknown are an intentional truthful
 representation, not missing proof of a guessed qualifier. S/T target decoding is
 internal ingestion evidence only. Opaque bytes never qualify semantic reads.
 All receipts retain their original failures, source and platform scope; actual
-billing is unreconciled. PR29 is merged with applicable CI green; candidate
-validation after new changes remains a separate gate.
+billing is unreconciled. PR #32 is merged with applicable CI green; exact final-candidate validation
+remains a separate gate.
 
 ## Source audit and gaps
 

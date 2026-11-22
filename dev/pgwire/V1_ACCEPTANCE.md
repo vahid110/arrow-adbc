@@ -17,14 +17,14 @@
   under the License.
 -->
 
-# V1 acceptance: merged baseline and local candidate
+# V1 acceptance: current evidence and remaining gates
 
-Audit baseline: `fca2eab2e05e1a63cfbd9adecc802c53334bdbd0`, tree
-`0fa498a6e88c30eb1758195c614755a9942c51af`, 2026-10-28.
+Current merged baseline: `dae9d97c29cc24f573527885c9a4400f3affb23d`
+(PR #32). Evidence reconciled 2026-11-22; historical sources remain identified.
 The [21-type operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation)
 is the coverage ledger. This is a finite remaining-work list, not release approval.
 Earlier successful suites stay qualified only for their recorded source and scope.
-Local candidate `aed6ced40fb058f56dc8b097937776c05cbe9496` has independent
+PR #30 integrated `aed6ced40fb058f56dc8b097937776c05cbe9496`, with independent
 source review, 35 passing serial local validation steps and passing Meson targets;
 V adds 15 selected installed cases each in standalone C and Python, with
 independently reviewed results and full teardown. This does not close every gate below.
@@ -36,11 +36,11 @@ There is no ship-with-these-operations-missing alternative in this plan.
 
 | Gate / priority / class | User impact and existing evidence | Smallest remaining work and completion criterion | Owner / phase |
 |---|---|---|---|
-| B1 / P0 / functional limitation | Earlier M/Q runs recorded a mixed-column rejection. The issue #31 candidate passed installed mixed reads in standalone C and Python in both temporal modes (case H). | Implement and qualify mixed HLL rows without user casts, silent coercion, duplicate execution or arbitrary SQL rewriting. Exercise HLL+scalar+vendor, NULL, empty/schema-only and multiple batches through installed C/Python. A partial HLL+integer-only mode is insufficient: mixed consumption must cover the released type contract, both temporal modes and execute effectful SQL once. This mandatory gate cannot close through documentation. | Packaging CI and integration |
-| B2 / P0 / mandatory operation qualification | The candidate implements direct SUPER/GEOMETRY/GEOGRAPHY parameters. V passed selected C/Python array/stream, NULL/empty, repeated-placeholder, adjacent-parameter and exactly-once effects cases, including malformed-first rejection with retained rows. Merged PR29 rejects these direct families. | Retain V as bounded direct-bind proof; mismatched prepared-type installed cases remain. Generated-ingest success alone does not qualify direct binding. | Selected proof complete; remaining type-mismatch qualification |
+| B1 / P0 / functional limitation | Earlier M/Q runs recorded a mixed-column rejection. The issue #31 candidate passed installed mixed reads in standalone C and Python in both temporal modes (case H). | Implement and qualify mixed HLL rows without user casts, silent coercion, duplicate execution or arbitrary SQL rewriting. Exercise HLL+scalar+vendor, NULL, empty/schema-only and multiple batches through installed C/Python. A partial HLL+integer-only mode is insufficient: mixed consumption must cover the released type contract, both temporal modes and execute effectful SQL once. This mandatory gate cannot close through documentation. | Complete: PR #32 merged after exact-head independent review and applicable green CI |
+| B2 / P0 / mandatory operation qualification | PR #30 implements direct SUPER/GEOMETRY/GEOGRAPHY parameters. V passed selected C/Python array/stream, NULL/empty, repeated-placeholder, adjacent-parameter and exactly-once effects cases, including malformed-first rejection with retained rows. Historical PR29 rejected these direct families. | Retain V as bounded direct-bind proof; mismatched prepared-type installed cases remain. Generated-ingest success alone does not qualify direct binding. | Selected proof complete; remaining type-mismatch qualification |
 | B3 / P1 / finite contract and material limit decisions | Local code now accepts SUPER JSON input <=16MiB/depth1000 with strict UTF8/duplicate validation; native output uses received field length and checked append, preserving only observable JSON/wire NULL. Spatial read/write raw EWKB limits both equal1,048,447 with byte-bounded iterative collection frames. HLL retains its1,000,000-byte known-format serialized cap. Stored object and serialized wire sizes are distinct. | Source review, serial local validation and Meson targets passed. V adds selected installed large/deep SUPER, spatial fixtures and native SUPER output beyond16MiB. Broader maximum-value coverage and finite sparse-to-dense HLL transition fixtures remain; the sparse/dense scalar cardinality controls do not prove the transition boundary. Selected cases do not prove every maximum. No mandatory operation or material value restriction is waived. | Installed qualification; HLL transitions separate |
-| B4 / P1 / installed evidence gaps | Matrix C cells have code but no matching installed proof; M/Q/R prove only selected operations. C Arrow SUPER remains 22/23. The stale public SUPER rejection assertion was repaired locally in coordinator commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and independent review; native installed execution is still pending. | Execute the repaired public SUPER test against installed Redshift artifacts and run the corrected C Arrow fixture. Fill required C/Python direct-bind/create/append gaps, especially primitive scalars, C decimal/temporal/character writes, HLL/spatial APPEND and direct interval binds. Cover the finite family cases below and check safe failure/retained rows. Every required cell must point to exact passing installed output within the reviewed finite B3 contract. | Test implementation, serial installed build, consolidated live campaign |
-| B5 / P1 / metadata evidence gap | Query schema evidence does not establish ExecuteSchema, parameter schema, GetTableSchema and GetObjects for every family/alias. Interval public qualifier/precision remains unknown even when ingestion target decoding knows an observed tuple. | One fixed all-type catalog fixture: compare identity/storage and available p/s/width/qualifier across these APIs, bound/unbound query, empty results and computed expressions. Assert unknowns stay unknown and OID-only parameters never invent modifiers. Add/fix only observed contract discrepancies; do not expose target guesses as public truth. | Metadata tests/source fixes, then installed qualification |
+| B4 / P1 / installed evidence gaps | SC closes selected installed read/direct/create/append/metadata gaps for five scalar families in both C and Python. Remaining matrix C cells lack matching installed proof; M/Q/R retain their selected scopes. C Arrow SUPER remains 22/23. The stale public SUPER rejection assertion was repaired locally in coordinator commit `58fb0528aab53e154673101ca55fdd846715cf32`, with offline validation and independent review; native installed execution is still pending. | Execute the repaired public SUPER test against installed Redshift artifacts and run the corrected C Arrow fixture. Fill required C/Python direct-bind/create/append gaps, including remaining scalar boundary/rejection cases, C decimal/temporal/character writes, HLL/spatial APPEND and direct interval binds. Cover the finite family cases below and check safe failure/retained rows. Every required cell must point to exact passing installed output within the reviewed finite B3 contract. | Test implementation, serial installed build, consolidated live campaign |
+| B5 / P1 / metadata evidence gap | SC covers selected APIs for five canonical scalar families. It does not establish ExecuteSchema, parameter schema, GetTableSchema and GetObjects for every family/alias or attribute. Interval public qualifier/precision remains unknown even when ingestion target decoding knows an observed tuple. | One fixed all-type catalog fixture: compare identity/storage and available p/s/width/qualifier across these APIs, bound/unbound query, empty results and computed expressions. Assert unknowns stay unknown and OID-only parameters never invent modifiers. Add/fix only observed contract discrepancies; do not expose target guesses as public truth. | Metadata tests/source fixes, then installed qualification |
 | B6 / P1 / release candidate delivery | Older merges/CI and macOS live cases do not validate new candidate bytes, packaging or every supported platform. | Independent review of exact final head/tree; one serial rebuilt installed validation; green applicable PR gates, exact-candidate Native Daily, release dry run, seven archive/five wheel checksums/install/import/manifest checks and documented examples. Merge scoped PRs and issue a reviewed readiness report. Publication needs a separate human decision. | Coordinator integration/release readiness |
 
 B1 and B2 have separate installed C/Python evidence in cases H and V.
@@ -143,3 +143,19 @@ PR29 review head 9ac6f35148dd473da09ad37729b10b20081e0014 has the identical merg
 tree, with applicable CI recorded in T's `runs.json`; this closes that task's
 review/merge gates, not the future release candidate's B6 gates. Actual billing
 remains unreconciled and is not represented as a verified USD amount.
+
+SC evidence is retained under `~/.local/state/adbc-redshift/issue33/`:
+`attempt-134d349d3d3747db8d92a36553ec94c9/result.json` records four passing
+recipe groups per language, both child exits zero and verified SQL session/schema
+absence. The attempt's `original-binding.json` and `tested-source-snapshot.json`
+preserve the exact tested fixtures, helpers, documentation and installed artifacts;
+`independent-live-evidence-review.json` records the independent result review.
+Full teardown verified all seven owned cloud resource classes absent; original
+failed attempts and their closure records remain preserved.
+The installed driver SHA256 is
+`1ea57fbd518723404295bcb00b822b43d3e37adc5926d52ec0dbe100d911836d`,
+source `38dc469cb534a92aa194b45e0e568c8946e04d2c`. Relevant driver sources match
+merged baseline `dae9d97c2`; build-recipe changes and final candidate rebuilding
+remain B6 work. Four earlier attempts retain their credential/runner/fixture
+failures and individual teardown records. SC does not rerun the historical
+corrected C Arrow SUPER fixture or close all B4/B5 cases.
