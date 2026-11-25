@@ -231,6 +231,57 @@ TEST(RedshiftScalarTest, NullIngestParametersUseActualTargetOidInsteadOfTextFall
   }
 }
 
+TEST(RedshiftScalarTest, ParameterValidationStatusIsScopedToSelectedScalarWriter) {
+  for (bool redshift : {false, true})
+    for (bool marked : {false, true}) {
+      std::shared_ptr<PostgresTypeResolver> resolver;
+      const auto profile =
+          redshift ? BackendProfile::Redshift() : BackendProfile::PostgreSQL();
+      ASSERT_EQ(testing::ScalarResolver(profile, &resolver), 0);
+      nanoarrow::UniqueSchema schema;
+      nanoarrow::UniqueArray array;
+      ASSERT_EQ(testing::ScalarSchema(schema.get(), NANOARROW_TYPE_DOUBLE,
+                                      marked ? "REAL" : nullptr),
+                0);
+      ASSERT_EQ(testing::ScalarBatch<double>(schema.get(), array.get(), {1.1}, nullptr),
+                0);
+      nanoarrow::UniqueArrayStream stream;
+      adbc::driver::MakeArrayStream(schema.get(), array.get(), stream.get());
+      BindStream bind;
+      bind.SetBind(stream.get());
+      ASSERT_TRUE(bind.Begin([] { return adbc::driver::Status::Ok(); }).ok());
+      PostgresType field;
+      ASSERT_EQ(resolver->Find(testing::kScalarOids[3], &field, nullptr), 0);
+      PostgresType targets(PostgresTypeId::kRecord);
+      targets.AppendChild("amount", field.WithFieldDescriptor(-1, profile));
+      ASSERT_TRUE(bind.SetParamTypes(nullptr, *resolver, false, &targets).ok());
+      EXPECT_EQ(bind.scalar_fields[0], redshift || marked);
+      EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr),
+                redshift || marked ? ADBC_STATUS_INVALID_ARGUMENT : ADBC_STATUS_OK);
+    }
+}
+
+TEST(RedshiftScalarTest, ParameterIncompatibleScalarTargetIsInvalidAtConstruction) {
+  std::shared_ptr<PostgresTypeResolver> resolver;
+  ASSERT_EQ(testing::ScalarResolver(BackendProfile::Redshift(), &resolver), 0);
+  nanoarrow::UniqueSchema schema;
+  ASSERT_EQ(
+      testing::ScalarSchema(schema.get(), NANOARROW_TYPE_DOUBLE, "DOUBLE PRECISION"), 0);
+  nanoarrow::UniqueArrayStream stream;
+  nanoarrow::EmptyArrayStream(schema.get()).ToArrayStream(stream.get());
+  BindStream bind;
+  bind.SetBind(stream.get());
+  ASSERT_TRUE(bind.Begin([] { return adbc::driver::Status::Ok(); }).ok());
+  PostgresType field;
+  ASSERT_EQ(resolver->Find(testing::kScalarOids[0], &field, nullptr), 0);
+  PostgresType targets(PostgresTypeId::kRecord);
+  targets.AppendChild("amount",
+                      field.WithFieldDescriptor(-1, BackendProfile::Redshift()));
+  EXPECT_EQ(bind.SetParamTypes(nullptr, *resolver, false, &targets).ToAdbc(nullptr),
+            ADBC_STATUS_INVALID_ARGUMENT);
+  EXPECT_EQ(bind.bind_field_writers[0], nullptr);
+}
+
 TEST(RedshiftScalarTest, CanonicalDescriptorIdentityLeavesUnknownQualifiersUnknown) {
   for (bool redshift : {false, true}) {
     const auto profile =

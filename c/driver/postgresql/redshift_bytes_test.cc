@@ -213,6 +213,7 @@ TEST(RedshiftBytesTest, OrdinaryPostgresWriterErrorsRemainInternal) {
   BindStream bind;
   ArrowBufferInit(&bind.param_buffer.value);
   bind.bytes_fields = {false};
+  bind.scalar_fields = {false};
   bind.interval_fields = {false};
   bind.json_parse_fields = {false};
   bind.encoded_fields = {RedshiftEncodedKind::kNone};
