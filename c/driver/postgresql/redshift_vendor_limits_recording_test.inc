@@ -77,6 +77,7 @@ TEST(RedshiftVendorLimitsRecordingTest, ByteFlushRevisitsRowsAcrossInputBoundari
         bind.param_values.resize(2);
         bind.timetz_fields.assign(2, false);
         bind.bytes_fields.assign(2, false);
+        bind.scalar_fields.assign(2, false);
         bind.interval_fields.assign(2, false);
         bind.json_parse_fields.assign(2, true);
         bind.encoded_fields.assign(2, RedshiftEncodedKind::kNone);
