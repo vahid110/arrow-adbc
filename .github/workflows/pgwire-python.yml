@@ -40,6 +40,8 @@ on:
       - "ci/scripts/test_pgwire_prepared_boundary_cases.py"
       - "ci/scripts/pgwire_hll_transition_cases.py"
       - "ci/scripts/test_pgwire_hll_transition_cases.py"
+      - "ci/scripts/pgwire_scalar_boundary_cases.py"
+      - "ci/scripts/test_pgwire_scalar_boundary_cases.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -76,6 +78,8 @@ on:
       - "ci/scripts/test_pgwire_prepared_boundary_cases.py"
       - "ci/scripts/pgwire_hll_transition_cases.py"
       - "ci/scripts/test_pgwire_hll_transition_cases.py"
+      - "ci/scripts/pgwire_scalar_boundary_cases.py"
+      - "ci/scripts/test_pgwire_scalar_boundary_cases.py"
       - "ci/scripts/pgwire_decimal_public_test.py"
       - "ci/scripts/pgwire_scalar_public_test.py"
       - "ci/scripts/pgwire_bytes_public_test.py"
@@ -236,6 +240,9 @@ jobs:
 
       - name: Check finite HLL transition fixture offline
         run: python -B ci/scripts/test_pgwire_hll_transition_cases.py
+
+      - name: Test scalar boundary qualification helper
+        run: python -B ci/scripts/test_pgwire_scalar_boundary_cases.py
 
       - name: Installed Python semantic public APIs (PostgreSQL plumbing)
         run: |
