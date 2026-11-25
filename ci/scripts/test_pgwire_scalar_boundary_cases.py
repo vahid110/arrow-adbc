@@ -106,7 +106,19 @@ class Statement:
     def set_options(self, **options):
         self._fault(52)
         assert options["adbc.ingest.target_db_schema"] == self.session.schema
-        self.route = options["adbc.ingest.mode"]
+        # Independently enforce the public ADBC option protocol. Raw convenience
+        # names belong to dbapi.adbc_ingest, not AdbcStatement.set_options.
+        modes = {
+            "adbc.ingest.mode.create": "create",
+            "adbc.ingest.mode.append": "append",
+        }
+        mode = options["adbc.ingest.mode"]
+        if mode not in modes:
+            raise adm.ProgrammingError(
+                "INVALID_ARGUMENT: invalid ingest mode",
+                status_code=adm.AdbcStatusCode.INVALID_ARGUMENT,
+            )
+        self.route = modes[mode]
 
     def prepare(self):
         self._fault(53)
@@ -168,6 +180,48 @@ class ScalarBoundaryTest(unittest.TestCase):
                 if index >= 3:
                     self.assertIsNone(batches[-1].schema.field(0).metadata)
             self.assertEqual(session.events[-1], "query")
+
+    def test_raw_ingest_modes_reproduce_set_option_failure_before_any_bind(self):
+        class RawModeStatement(Statement):
+            def set_options(self, **options):
+                options["adbc.ingest.mode"] = options["adbc.ingest.mode"].rsplit(
+                    ".", 1
+                )[-1]
+                return super().set_options(**options)
+
+        # Execute the actual helper; replace only the option value at its API
+        # boundary. Both CREATE and APPEND counterexamples fail before bind/SQL.
+        for route in ("create", "append"):
+            for stream in (False, True):
+                session = Session()
+                with patch.object(cases.adm, "AdbcStatement", RawModeStatement):
+                    with self.assertRaises(cases.UnsafeBoundary) as caught:
+                        cases._write(
+                            session,
+                            stream,
+                            route,
+                            "scalar_ingest_0",
+                            cases.source_batch(route),
+                        )
+                self.assertEqual(caught.exception.facts, cases.Facts(52, 5, None))
+                self.assertEqual(caught.exception.operation, route)
+                self.assertEqual(session.closed, 1)
+                self.assertEqual(session.writes, [])
+                self.assertEqual(session.operations, ["write"])
+                self.assertEqual(session.events, ["close"])
+
+        # The full public group must stop at its first CREATE option failure,
+        # retain the already completed direct route and issue no follow-up SQL.
+        session = Session()
+        with patch.object(cases.adm, "AdbcStatement", RawModeStatement):
+            with self.assertRaises(cases.UnsafeBoundary) as caught:
+                cases.run(session, False)
+        self.assertEqual(caught.exception.operation, "create")
+        self.assertEqual(caught.exception.facts, cases.Facts(52, 5, None))
+        self.assertEqual(len(session.writes), 1)
+        self.assertEqual(len(session.operations), 6)
+        self.assertEqual(session.events[-1], "close")
+        self.assertFalse(hasattr(session, "scalar_receipt"))
 
     def test_source_literal_bits_null_and_unsigned_not_wrapped(self):
         for route in ("direct", "create", "append"):

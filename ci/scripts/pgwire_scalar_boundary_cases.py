@@ -300,7 +300,11 @@ def _write(session, stream, route, table, batch, rejection=None):
                 **{
                     "adbc.ingest.target_table": table,
                     "adbc.ingest.target_db_schema": session.schema,
-                    "adbc.ingest.mode": route,
+                    "adbc.ingest.mode": (
+                        adm.INGEST_OPTION_MODE_CREATE
+                        if route == "create"
+                        else adm.INGEST_OPTION_MODE_APPEND
+                    ),
                 }
             )
         phase = 55
