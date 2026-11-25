@@ -100,6 +100,7 @@ struct BindStream {
   bool generated_super_ingest = false;
   std::vector<bool> json_parse_fields;
   std::vector<bool> bytes_fields;
+  std::vector<bool> scalar_fields;
   std::vector<bool> interval_fields;
   bool has_super_fields = false;
   bool has_encoded_fields = false;
@@ -218,6 +219,7 @@ struct BindStream {
     timetz_fields.resize(bind_schema->n_children, false);
     json_parse_fields.assign(bind_schema->n_children, false);
     bytes_fields.assign(bind_schema->n_children, false);
+    scalar_fields.assign(bind_schema->n_children, false);
     interval_fields.assign(bind_schema->n_children, false);
     has_super_fields = false;
     has_encoded_fields = false;
@@ -340,6 +342,9 @@ struct BindStream {
         writer_target = &ingest_targets->child(i);
       }
       if (!ingest_targets && (encoded.enabled() || super.enabled)) writer_target = &type;
+      scalar_fields[i] =
+          scalar.enabled() || (type_resolver.is_redshift() && writer_target &&
+                               writer_target->scalar_kind() != RedshiftScalarKind::kNone);
       bytes_fields[i] =
           bytes.enabled() || (type_resolver.is_redshift() && writer_target &&
                               writer_target->bytes_kind() != RedshiftBytesKind::kNone);
@@ -356,8 +361,8 @@ struct BindStream {
       // Byte-family compatibility is checked before a writer can be constructed.
       if (writer_code == ENOTSUP && interval_fields[i])
         return Status::NotImplemented(na_error.message);
-      if (writer_code == EINVAL &&
-          (bytes_fields[i] || interval_fields[i] || encoded.enabled()))
+      if (writer_code == EINVAL && (scalar_fields[i] || bytes_fields[i] ||
+                                    interval_fields[i] || encoded.enabled()))
         return Status::InvalidArgument(na_error.message);
       UNWRAP_NANOARROW(na_error, Internal, writer_code);
 
@@ -566,9 +571,9 @@ struct BindStream {
         bind_field_writers[column]->Write(&param_buffer.value, field_row, &na_error);
     // These schema-selected writers validate application payloads before writing.
     // Keep allocator/other failures and non-validating writers on the Internal path.
-    if (code == EINVAL &&
-        (bytes_fields[column] || interval_fields[column] || json_parse_fields[column] ||
-         encoded_fields[column] != RedshiftEncodedKind::kNone)) {
+    if (code == EINVAL && (scalar_fields[column] || bytes_fields[column] ||
+                           interval_fields[column] || json_parse_fields[column] ||
+                           encoded_fields[column] != RedshiftEncodedKind::kNone)) {
       return Status::InvalidArgument(na_error.message);
     }
     UNWRAP_NANOARROW(na_error, Internal, code);

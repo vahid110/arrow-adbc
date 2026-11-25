@@ -19,10 +19,23 @@
 
 # Status
 
-Merged baseline: PR #44, `0209d9dc4e9d5799df0e32de62662277fcfe6d1c`
-(2026-11-22), following independent exact-head review and applicable green CI.
+Merged baseline: PR #46, `45d7a71f43251d705d524575261f695a15744ee9`
+(2026-11-25), following independent exact-head review and applicable green CI.
 PR #30 delivered direct SUPER/spatial parameters; PR #32 delivered mixed HLL
 results. **The all-21-type first-release milestone remains open.**
+
+Issue #47 adds SB: four passing installed C/Python array/stream groups with
+12 positive direct/CREATE/APPEND route checks and 36 first-invalid APPEND
+rejections followed by identity and complete retained-row checks. Signed integer
+endpoints, uint64 high-bit rejection and selected REAL/DOUBLE extrema, subnormals,
+signed zero, NaN/infinities and exact narrowing passed. Scalar validation now
+returns INVALID_ARGUMENT instead of INTERNAL; unrelated failures and ordinary
+PostgreSQL behavior are preserved. Both children exited zero; SQL schemas and
+runtime sessions are absent. Full cloud teardown verified all seven owned resource
+classes absent, with no cleanup issues.
+The earlier Python option-value failure is preserved with its verified teardown;
+the reusable helper now uses ADBC mode constants. Broader B3/B4/B5/B6 gates remain
+open. Finish this focused PR, then pause; no successor starts automatically.
 
 Issue #45 adds HT: six passing installed HLL groups, standalone C/Python
 native discovery and array/stream rebinding. Each observed the adjacent sparse
@@ -33,7 +46,6 @@ Both child exits were zero and SQL schema/session absence passed. Full teardown
 verified all seven owned cloud resource classes absent without cleanup issues.
 The original unsupported HLL-to-VARCHAR cast failure remains separate; its owned
 cloud resources were fully removed. Case HT records the exact scope and artifacts.
-After the focused HLL PR passes review/CI and merges, pause at the user's request.
 
 Issue #41 adds four passing installed direct-interval groups (DI): standalone
 C/Python array and stream bindings for YEAR TO MONTH and DAY TO SECOND(6).

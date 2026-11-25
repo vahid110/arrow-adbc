@@ -51,12 +51,12 @@ full ExecuteSchema/parameter/GetTableSchema/GetObjects parity remains gate B5.
 
 | Canonical SQL type and aliases (21) | Native read | Direct bind | Create | Append | Metadata | Arrow representation |
 |---|---|---|---|---|---|---|
-| SMALLINT / INT2 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int16 |
-| INTEGER / INT / INT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | int32 |
-| BIGINT / INT8 | L | L | L | L | L bounded schema | int64 |
+| SMALLINT / INT2 | SC, SB | SC, SB array/stream | SC, SB | SC, SB | SC canonical identity/APIs | int16 |
+| INTEGER / INT / INT4 | SC, SB | SC, SB array/stream | SC, SB | SC, SB | SC canonical identity/APIs | int32 |
+| BIGINT / INT8 | L, SB | SB C/Python array/stream | SB | SB | L bounded schema; SB full/empty result | int64 |
 | DECIMAL / NUMERIC | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query p/s; unknown expressions exact text | decimal128 or exact text |
-| REAL / FLOAT4 | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float32 |
-| DOUBLE PRECISION / FLOAT8 / FLOAT | SC | SC array/stream | SC | SC | SC canonical identity/APIs | float64 |
+| REAL / FLOAT4 | SC, SB | SC, SB array/stream | SC, SB | SC, SB | SC canonical identity/APIs | float32 |
+| DOUBLE PRECISION / FLOAT8 / FLOAT | SC, SB | SC, SB array/stream | SC, SB | SC, SB | SC canonical identity/APIs | float64 |
 | CHAR / CHARACTER / NCHAR / BPCHAR | R | TW C/Python array/stream | TW C; R-P | TW C; R-P | R widths/identity | utf8, padding retained |
 | VARCHAR / CHARACTER VARYING / NVARCHAR / TEXT | Q,R | TW C/Python array/stream | TW C; R-P | TW C; R-P | R widths/identity | utf8/large_utf8 |
 | DATE | Q | TW C/Python array/stream | TW C; Q-P | TW C; Q-P | Q query identity; C remaining APIs | date32 |
@@ -238,6 +238,29 @@ remains a separate gate.
   Its two SQL schemas remained until namespace deletion, with no runtime sessions;
   all seven owned cloud resource classes were subsequently verified absent without
   cleanup issues. That failure and its cleanup evidence remain unchanged.
+
+
+- **SB:** macOS arm64, qualification source
+  `d5f299f8541190b03305c64373ae5ec3706e7cc3`, freshly rebuilt runtime source
+  `565c22946561146e8c8514f890550feaa33c0b31`. The installed driver and wheel library
+  share SHA256 `9cde583ff28fdb5a74a371c2800641c76550f4dd1ddbc2a219a034d847a08b3e`.
+  Issue #47 operation `be4a6ea25f5543f7a804caea3785ae8c` passed four groups:
+  C/Python array/stream, each checking direct/CREATE/APPEND with eight-column,
+  twelve-row mixed/NULL fixtures and full/empty schemas. APPEND retained 24 rows.
+  Signed SMALLINT/INTEGER/BIGINT endpoints, uint64 signed-max, REAL/DOUBLE finite
+  extrema/subnormals, signed zero, NaN/infinities and exact float32 narrowing passed.
+  Nine first-invalid APPEND controls per group rejected with INVALID_ARGUMENT and
+  no SQLSTATE: SMALLINT/INTEGER under/overflow, two uint64 high-bit values, and
+  float32 inexact/overflow/underflow conversions. Identity and all retained rows
+  were checked after each. Direct SQL uses offered parameter types and server
+  conversion; it is not the oracle for local destination-narrowing rejection.
+  NaNs use numeric semantics, not payload-bit promises. Both children exited zero,
+  SQL schemas/sessions are absent, and full cloud teardown verified all seven
+  owned resource classes absent, with no cleanup issues.
+  The prior `f20a80f233584ec7943b77ec0cd10fa7` C pass/Python option-setup failure and
+  verified full teardown remain separate. The corrected public helper, nine
+  offline tests and CI wiring are committed; 139 tested input snapshots are retained.
+  This finite scope does not qualify every alias, all B4 families, B5 or B6.
 
 ## Source audit and gaps
 
@@ -556,8 +579,11 @@ fields before appending. Integer/float reads retain their native fixed widths.
 The existing whole-stream INSERT transaction owner and cleanup uncertainty signal
 remain shared with C3; caller-owned work stays caller-owned. Runtime value errors
 may follow DDL, so no stronger table-replacement atomicity is promised. Native
-Redshift range, subnormal retention and alias/protocol qualification remain open;
-local PostgreSQL/codec/installed-consumer tests are separate evidence.
+SB qualifies selected installed integer ranges and floating extrema/subnormals;
+alias/protocol completeness and other family boundaries remain open. Selected
+scalar writer EINVAL failures report INVALID_ARGUMENT, with no fabricated SQLSTATE;
+unrelated non-EINVAL failures retain their status. Local PostgreSQL/codec tests
+remain separate evidence.
 
 ## Temporal core contract (Task010e1)
 

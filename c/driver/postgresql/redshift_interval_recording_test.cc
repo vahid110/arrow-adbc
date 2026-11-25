@@ -37,6 +37,7 @@
 #include "redshift_bytes_test_fixture.h"
 #include "redshift_interval_write_test_fixture.h"
 #include "redshift_numeric_test_fixture.h"
+#include "redshift_scalar_test_fixture.h"
 #include "redshift_super_allocation_test.h"
 #include "redshift_super_prepared.h"
 #include "redshift_super_test_fixture.h"
@@ -2697,6 +2698,56 @@ TEST_F(IntervalPublicRecordingTest,
     }
 }
 
+TEST_F(IntervalPublicRecordingTest, ScalarInvalidValuesRejectBeforeDispatchAndRecover) {
+  for (bool stream : {false, true})
+    for (bool floating : {false, true})
+      for (bool invalid : {true, false}) {
+        nanoarrow::UniqueSchema schema;
+        nanoarrow::UniqueArray array;
+        ASSERT_EQ(
+            testing::ScalarSchema(
+                schema.get(), floating ? NANOARROW_TYPE_DOUBLE : NANOARROW_TYPE_UINT64,
+                floating ? "REAL" : "BIGINT"),
+            0);
+        if (floating) {
+          ASSERT_EQ(testing::ScalarBatch<double>(schema.get(), array.get(),
+                                                 {invalid ? 1.1 : 1.25}, nullptr),
+                    0);
+        } else {
+          ASSERT_EQ(testing::ScalarBatch<uint64_t>(schema.get(), array.get(),
+                                                   {invalid ? UINT64_MAX : 42}, nullptr),
+                    0);
+        }
+        ASSERT_EQ(driver.StatementSetSqlQuery(&statement, "INSERT INTO owned VALUES ($1)",
+                                              &error),
+                  ADBC_STATUS_OK);
+        if (stream) {
+          nanoarrow::UniqueArrayStream input;
+          adbc::driver::MakeArrayStream(schema.get(), array.get(), input.get());
+          ASSERT_EQ(driver.StatementBindStream(&statement, input.get(), &error),
+                    ADBC_STATUS_OK);
+        } else {
+          ASSERT_EQ(driver.StatementBind(&statement, array.get(), schema.get(), &error),
+                    ADBC_STATUS_OK);
+        }
+        recording.executions.clear();
+        EXPECT_EQ(driver.StatementExecuteQuery(&statement, nullptr, nullptr, &error),
+                  invalid ? ADBC_STATUS_INVALID_ARGUMENT : ADBC_STATUS_OK)
+            << Message();
+        EXPECT_EQ(recording.executions.size(), invalid ? 0U : 1U);
+        if (invalid) {
+          EXPECT_STREQ(
+              Message(),
+              floating
+                  ? "[Redshift] Invalid scalar write: inexact float32 narrowing"
+                  : "[Redshift] Invalid scalar write: unsigned integer exceeds target");
+          EXPECT_EQ(std::string(error.sqlstate, sizeof(error.sqlstate)),
+                    std::string(5, 0));
+          if (error.release) error.release(&error);
+        }
+      }
+}
+
 class ErrnoFieldWriter : public PostgresCopyFieldWriter {
  public:
   explicit ErrnoFieldWriter(int code) : code_(code) {}
@@ -2711,11 +2762,12 @@ class ErrnoFieldWriter : public PostgresCopyFieldWriter {
 TEST(IntervalParameterStatusTest,
      VendorInvalidArgumentDoesNotRemapOtherFailuresOrFields) {
   for (int code : {0, EINVAL, ENOMEM, EIO, EOVERFLOW})
-    for (int family = 0; family < 6; ++family) {
+    for (int family = 0; family < 7; ++family) {
       BindStream bind;
       ArrowBufferInit(&bind.param_buffer.value);
       bind.json_parse_fields = {family == 1, true};
       bind.bytes_fields = {false, false};
+      bind.scalar_fields = {family == 6, false};
       bind.interval_fields = {family == 5, false};
       bind.encoded_fields = {family == 2   ? RedshiftEncodedKind::kGeometry
                              : family == 3 ? RedshiftEncodedKind::kGeography
