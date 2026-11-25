@@ -37,7 +37,7 @@ selected B3 cases do not establish all maxima, HLL transitions or B5 metadata.
 
 ## Current baseline
 
-Merged PR #44 is `0209d9dc4e9d5799df0e32de62662277fcfe6d1c`.
+Merged PR #46 is `45d7a71f43251d705d524575261f695a15744ee9`.
 SC records eight passing scalar groups; VA records 21 vendor groups.
 Issue #37 adds VR: eight passing groups with fresh installed C/Python artifacts,
 covering remaining selected SUPER APPEND/HLL direct routes, the repaired public
@@ -51,10 +51,13 @@ Issue #42 adds VB: four passing installed vendor mismatch groups, reusable
 Python regression tests and CI wiring. Issue #45 adds HT: six passing installed
 C/Python HLL discovery/array/stream groups around one observed adjacent crossing,
 with reusable public tests and native cardinality controls. SQL cleanup and full
-cloud teardown are verified. Broader maxima, scalar rejection boundaries,
-consolidated metadata and final candidate delivery remain open. Finish this
-focused PR, then pause;
-no successor package starts without resumption.
+cloud teardown are verified. Issue #47 adds SB: four installed C/Python groups,
+12 positive direct/CREATE/APPEND route checks and 36 first-invalid scalar APPEND
+rejections with retained rows. Scalar EINVAL now maps to INVALID_ARGUMENT;
+SQL cleanup passed and full cloud teardown verified all seven owned resource
+classes absent, with no cleanup issues. Broader maxima, remaining family boundaries, consolidated metadata and final candidate
+delivery remain open. Finish this focused PR, then pause; no successor package
+starts without resumption.
 Task010t's 234 installed edge cases,
 independent review, applicable green CI and full resource closure are complete.
 Its original C-stream cleanup timeout remains separate from successful residual

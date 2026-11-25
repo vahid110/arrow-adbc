@@ -19,8 +19,8 @@
 
 # V1 acceptance: current evidence and remaining gates
 
-Current merged baseline: `0209d9dc4e9d5799df0e32de62662277fcfe6d1c`
-(PR #44). Evidence reconciled 2026-11-22; historical sources remain identified.
+Current merged baseline: `45d7a71f43251d705d524575261f695a15744ee9`
+(PR #46). Evidence reconciled 2026-11-25; historical sources remain identified.
 The [21-type operation matrix](REDSHIFT_TYPES.md#current-evidence-by-operation)
 is the coverage ledger. This is a finite remaining-work list, not release approval.
 Earlier successful suites stay qualified only for their recorded source and scope.
@@ -39,7 +39,7 @@ There is no ship-with-these-operations-missing alternative in this plan.
 | B1 / P0 / functional limitation | Earlier M/Q runs recorded a mixed-column rejection. The issue #31 candidate passed installed mixed reads in standalone C and Python in both temporal modes (case H). | Implement and qualify mixed HLL rows without user casts, silent coercion, duplicate execution or arbitrary SQL rewriting. Exercise HLL+scalar+vendor, NULL, empty/schema-only and multiple batches through installed C/Python. A partial HLL+integer-only mode is insufficient: mixed consumption must cover the released type contract, both temporal modes and execute effectful SQL once. This mandatory gate cannot close through documentation. | Complete: PR #32 merged after exact-head independent review and applicable green CI |
 | B2 / P0 / mandatory operation qualification | PR #30 implements direct SUPER/GEOMETRY/GEOGRAPHY parameters. V passed selected C/Python array/stream, NULL/empty, repeated-placeholder, adjacent-parameter and exactly-once effects cases, including malformed-first rejection with retained rows. Historical PR29 rejected these direct families. | V retains positive direct-bind proof. VB adds installed metadata contradictions and incompatible SQL targets; offline recorder tests separately inject descriptor drift. Generated-ingest success alone does not qualify direct binding. | Qualified within V/VB scopes; final candidate delivery remains B6 |
 | B3 / P1 / finite contract and material limit decisions | Local code now accepts SUPER JSON input <=16MiB/depth1000 with strict UTF8/duplicate validation; native output uses received field length and checked append, preserving only observable JSON/wire NULL. Spatial read/write raw EWKB limits both equal1,048,447 with byte-bounded iterative collection frames. HLL retains its1,000,000-byte known-format serialized cap. Stored object and serialized wire sizes are distinct. | Source review, serial local validation and Meson targets passed. V adds selected installed large/deep SUPER, spatial fixtures and native SUPER output beyond16MiB. HT passes six installed C/Python discovery/array/stream groups around the observed sparse prefix 3072/dense prefix 3073 pair, with native byte roundtrips and independent prefix/union cardinality controls; SQL cleanup and full cloud teardown are verified. This proves one finite adjacent crossing, not a universal or first threshold, independent raw-wire decoding, or every maximum. Broader maximum-value coverage remains. No mandatory operation or material value restriction is waived. | Remaining maximum-value qualification; finite HT scope passed |
-| B4 / P1 / installed evidence gaps | SC closes selected installed read/direct/create/append/metadata gaps for five scalar families in both C and Python. Remaining matrix C cells lack matching installed proof; M/Q/R retain their selected scopes. VA separately passes the corrected C Arrow SUPER fixture; the original Q 22/23 remains preserved. VR passes the repaired public SUPER native-read/IPC method and an all-mode TEMP/permanent-shadow regression through fresh installed artifacts. | VA/VR close selected vendor APPEND and direct HLL routes plus public SUPER execution. TW fills selected direct decimal/temporal/CHAR/VARCHAR bindings in both languages and C CREATE/APPEND. DI fills selected direct interval binds with first-invalid conversion/retention controls. Fill remaining scalar boundary/rejection cases. Cover the finite family cases below and check safe failure/retained rows. Every required cell must point to exact passing installed output within the reviewed finite B3 contract. | Test implementation, serial installed build, consolidated live campaign |
+| B4 / P1 / installed evidence gaps | SC closes selected installed read/direct/create/append/metadata gaps for five scalar families in both C and Python. Remaining matrix C cells lack matching installed proof; M/Q/R retain their selected scopes. VA separately passes the corrected C Arrow SUPER fixture; the original Q 22/23 remains preserved. VR passes the repaired public SUPER native-read/IPC method and an all-mode TEMP/permanent-shadow regression through fresh installed artifacts. | VA/VR close selected vendor APPEND and direct HLL routes plus public SUPER execution. TW fills selected direct decimal/temporal/CHAR/VARCHAR bindings in both languages and C CREATE/APPEND. DI fills selected direct interval binds with first-invalid conversion/retention controls. SB fills selected signed integer/uint64 and REAL/DOUBLE boundaries, with target-aware APPEND rejection/retained-row checks. Complete remaining family boundary cases. Cover the finite family cases below and check safe failure/retained rows. Every required cell must point to exact passing installed output within the reviewed finite B3 contract. | Test implementation, serial installed build, consolidated live campaign |
 | B5 / P1 / metadata evidence gap | SC covers selected APIs for five canonical scalar families; VA adds selected vendor metadata routes. It does not establish ExecuteSchema, parameter schema, GetTableSchema and GetObjects for every family/alias or attribute. Interval public qualifier/precision remains unknown even when ingestion target decoding knows an observed tuple. | One fixed all-type catalog fixture: compare identity/storage and available p/s/width/qualifier across these APIs, bound/unbound query, empty results and computed expressions. Assert unknowns stay unknown and OID-only parameters never invent modifiers. Add/fix only observed contract discrepancies; do not expose target guesses as public truth. | Metadata tests/source fixes, then installed qualification |
 | B6 / P1 / release candidate delivery | Older merges/CI and macOS live cases do not validate new candidate bytes, packaging or every supported platform. | Independent review of exact final head/tree; one serial rebuilt installed validation; green applicable PR gates, exact-candidate Native Daily, release dry run, seven archive/five wheel checksums/install/import/manifest checks and documented examples. Merge scoped PRs and issue a reviewed readiness report. Publication needs a separate human decision. | Coordinator integration/release readiness |
 
@@ -60,9 +60,9 @@ failure checks. This does not promise general streaming atomicity or atomic REPL
 
 | Family | Additional bounded cases to map to retained or new evidence |
 |---|---|
-| Integers/boolean | Min/max of each integer width, unsigned overflow; true/false/NULL; exact destination-family checks |
+| Integers/boolean | SB passes signed integer min/max, uint64 signed-max/high-bit rejection and exact target-width checks; retain SC true/false/NULL evidence |
 | Decimal | p1/18/19/20/38, s0/2/37; precision 19 signed 64-bit coefficient boundary, negative/zero, exact rescale/inexact reject, decimal256/marked text and unknown expression descriptor |
-| Float | +/-0, finite extrema/subnormal where retained, NaN/+/-Infinity; numeric semantics without NaN-payload promises |
+| Float | SB passes selected +/-0, finite extrema/subnormal, NaN/+/-Infinity and exact/inexact/overflow/underflow float32 conversion; numeric semantics without NaN-payload promises |
 | Character/VARBYTE | Alias/default identity, padding/UTF8/quotes/backslashes/NUL/empty, stored widths and first invalid; retained 16,000,000-byte VARCHAR/16MiB VARBYTE reads and four-route VARBYTE writes reused |
 | DATE/time/timestamps/TIMETZ | BC/native epoch, microseconds, 24:00 policy, checked Arrow/lossless overflow, timezone offset/session restoration, known/unknown precision, explicit p0..5 CREATE restriction/native syntax, own-TEMP/case behavior and explicit infinity/sentinel disposition |
 | Intervals | Reuse S/T 13 qualifiers, precision 0..6, omitted-default tuples, selected signed extrema/inexact rejection and late stream failure. DI adds direct public prepared binding proof for both families in C/Python array/stream; do not infer a general text parser or contiguous native domain from samples |
@@ -235,3 +235,21 @@ and all seven owned cloud resource classes are verified absent with no cleanup
 issues. The original `0d8ad9248aa547909bd547970fba82c4` CAST/42846 failure and its
 separate full closure remain preserved. See HT in the operation matrix for the
 finite scope; broader B3/B4/B5/B6 gates remain open.
+
+
+SB evidence (issue #47) is retained under `~/.local/state/adbc-redshift/issue47/`:
+`attempt-be4a6ea25f5543f7a804caea3785ae8c/result.json` records four passing installed
+C/Python array/stream groups at qualification source
+`d5f299f8541190b03305c64373ae5ec3706e7cc3`. Fresh artifacts include the scalar
+INVALID_ARGUMENT correction. All 12 positive route checks and 36 expected
+first-invalid APPEND controls passed, including identity and unchanged full rows.
+Direct parameters use offered types and can undergo server conversion; only the
+generated APPEND controls claim resolved-target local validation. The committed
+public helper has nine offline regressions wired into CI. Both children exited
+zero, SQL schemas/sessions are absent, and 139 tested inputs are preserved.
+Full cloud teardown verified all seven owned resource classes absent, with no
+cleanup issues. The original `f20a80f233584ec7943b77ec0cd10fa7`
+run passed both C groups but failed Python option setup at phase 52/status 5;
+its remaining SQL schema disappeared with namespace deletion and all seven
+cloud resource classes were verified absent. The helper mode-constant correction
+does not relabel that failed run. SB does not close all B3/B4/B5/B6 gates.
