@@ -256,6 +256,9 @@ TEST(RedshiftScalarTest, ParameterValidationStatusIsScopedToSelectedScalarWriter
       targets.AppendChild("amount", field.WithFieldDescriptor(-1, profile));
       ASSERT_TRUE(bind.SetParamTypes(nullptr, *resolver, false, &targets).ok());
       EXPECT_EQ(bind.scalar_fields[0], redshift || marked);
+      ASSERT_TRUE(bind.EnsureNextRow().ok());
+      ASSERT_EQ(bind.array_view->length, 1);
+      ASSERT_EQ(bind.array_view->children[0]->length, 1);
       EXPECT_EQ(bind.WriteParameter(0, 0).ToAdbc(nullptr),
                 redshift || marked ? ADBC_STATUS_INVALID_ARGUMENT : ADBC_STATUS_OK);
     }
